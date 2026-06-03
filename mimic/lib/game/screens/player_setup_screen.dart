@@ -2,7 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/game_state.dart';
-import 'word_reveal_screen.dart';
+import 'package:mimic/game/game.dart';
 
 class PlayerSetupScreen extends ConsumerStatefulWidget {
   const PlayerSetupScreen({super.key});
@@ -57,11 +57,7 @@ class _PlayerSetupScreenState extends ConsumerState<PlayerSetupScreen> {
     }
     gameStateNotifier.assignMimic();
 
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => const WordRevealScreen(),
-      ),
-    );
+    Navigator.of(context).pushNamed(MimicGame.wordRevealRoute);
   }
 
   bool get _canStart => _players.where((p) => p.nameController.text.isNotEmpty).length >= 2;
@@ -113,9 +109,9 @@ class _PlayerSetupScreenState extends ConsumerState<PlayerSetupScreen> {
                           style: const TextStyle(color: Colors.white),
                           decoration: InputDecoration(
                             hintText: 'Player ${index + 1} name',
-                            hintStyle: TextStyle(color: Colors.white.withOpacity(0.3)),
+                            hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
                             filled: true,
-                            fillColor: Colors.white.withOpacity(0.05),
+                            fillColor: Colors.white.withValues(alpha: 0.05),
                             border: OutlineInputBorder(
                               borderRadius: BorderRadius.circular(12),
                               borderSide: const BorderSide(color: Color(0x337F77DD)),

@@ -1,6 +1,7 @@
 // lib/game/screens/home_screen.dart
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:mimic/game/game.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -9,7 +10,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late AnimationController _backgroundController;
   late AnimationController _glowController;
   late List<Particle> _particles;
@@ -85,12 +86,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                         shadows: [
                           Shadow(
                             blurRadius: 12 * glow,
-                            color: const Color(0xFF7F77DD).withOpacity(0.5 * glow),
+                            color: const Color(0xFF7F77DD).withValues(alpha: 0.5 * glow),
                             offset: const Offset(0, 0),
                           ),
                           Shadow(
                             blurRadius: 20 * glow,
-                            color: const Color(0xFF7F77DD).withOpacity(0.3 * glow),
+                            color: const Color(0xFF7F77DD).withValues(alpha: 0.3 * glow),
                             offset: const Offset(0, 0),
                           ),
                         ],
@@ -102,11 +103,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                 const SizedBox(height: 40),
                 ElevatedButton(
                   onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (context) => const PlayerSetupScreen(),
-                      ),
-                    );
+                    Navigator.of(context).pushNamed(MimicGame.playerSetupRoute);
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF7F77DD),
@@ -213,7 +210,7 @@ class ParticlePainter extends CustomPainter {
         position,
         updated.size,
         Paint()
-          ..color = Colors.white.withOpacity(updated.opacity)
+          ..color = Colors.white.withValues(alpha: updated.opacity)
           ..style = PaintingStyle.fill,
       );
     }
@@ -222,34 +219,5 @@ class ParticlePainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant ParticlePainter old) {
     return old.animationValue != animationValue;
-  }
-}
-
-class PlayerSetupScreen extends StatelessWidget {
-  const PlayerSetupScreen({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFF0F0F14),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text('Player Setup'),
-        titleTextStyle: const TextStyle(
-          color: Color(0xFF7F77DD),
-          fontSize: 20,
-        ),
-        iconTheme: const IconThemeData(
-          color: Color(0xFF7F77DD),
-        ),
-      ),
-      body: const Center(
-        child: Text(
-          'Player Setup Screen',
-          style: TextStyle(color: Colors.white),
-        ),
-      ),
-    );
   }
 }

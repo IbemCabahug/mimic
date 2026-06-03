@@ -1,0 +1,252 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/theme/app_theme.dart';
+import '../crypto/vault_crypto.dart';
+import '../services/file_vault_service.dart';
+import '../services/notes_service.dart';
+import '../services/audio_vault_service.dart';
+import '../widgets/vault_scaffold.dart';
+
+class VaultHomeScreen extends ConsumerStatefulWidget {
+  const VaultHomeScreen({super.key});
+
+  @override
+  ConsumerState<VaultHomeScreen> createState() => _VaultHomeScreenState();
+}
+
+class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _fadeController;
+  int _photoCount = 0;
+  int _noteCount = 0;
+  int _audioCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _fadeController = AnimationController(
+      duration: const Duration(milliseconds: 600),
+      vsync: this,
+    )..forward();
+    _loadCounts();
+  }
+
+  @override
+  void dispose() {
+    _fadeController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadCounts() async {
+    try {
+      final photos = await ref.read(fileVaultServiceProvider).getAllPhotos();
+      final notes = await ref.read(notesServiceProvider).getAllNotes();
+      final audio = await ref.read(audioVaultServiceProvider).getAllAudio();
+      if (mounted) {
+        setState(() {
+          _photoCount = photos.length;
+          _noteCount = notes.length;
+          _audioCount = audio.length;
+        });
+      }
+    } catch (_) {
+      // Silently handle - counts stay at 0
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final crypto = ref.watch(vaultCryptoProvider);
+    if (!crypto.isUnlocked) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Navigator.of(context).pushReplacementNamed('/vault-pin');
+      });
+      return const Scaffold(
+        body: Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    return VaultScaffold(
+      title: null,
+      showBackButton: false,
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.settings_outlined, color: VaultColors.accent),
+          onPressed: () async {
+            await Navigator.of(context).pushNamed('/vault-settings');
+            // Reload counts when returning from settings (data might be cleared)
+            _loadCounts();
+          },
+          tooltip: 'Settings',
+        ),
+      ],
+      body: Stack(
+        children: [
+          // Decorative background elements
+          Positioned(
+            right: -40,
+            bottom: -40,
+            child: Icon(
+              Icons.lock_outline,
+              size: 200,
+              color: VaultColors.accent.withValues(alpha: 0.04),
+            ),
+          ),
+          Positioned(
+            left: -30,
+            top: 100,
+            child: Icon(
+              Icons.lock,
+              size: 140,
+              color: VaultColors.accent.withValues(alpha: 0.03),
+            ),
+          ),
+          SafeArea(
+            child: FadeTransition(
+              opacity: _fadeController,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Title
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+                    child: Text(
+                      'My Vault',
+                      style: Theme.of(context).textTheme.headlineLarge?.copyWith(
+                        color: VaultColors.textPrimary,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 32,
+                      ),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                    child: Text(
+                      'Your encrypted files are safe here',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                        color: VaultColors.textSecondary,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 32),
+                  // Section grid
+                  Expanded(
+                    child: GridView.count(
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      crossAxisCount: 2,
+                      crossAxisSpacing: 16,
+                      mainAxisSpacing: 16,
+                      children: [
+                        _VaultSectionCard(
+                          title: 'Photos',
+                          icon: Icons.photo_outlined,
+                          color: const Color(0xFF534AB7),
+                          count: _photoCount,
+                          onTap: () async {
+                            await Navigator.of(context).pushNamed('/vault-photos');
+                            _loadCounts();
+                          },
+                        ),
+                        _VaultSectionCard(
+                          title: 'Notes',
+                          icon: Icons.note_outlined,
+                          color: const Color(0xFF1D9E75),
+                          count: _noteCount,
+                          onTap: () async {
+                            await Navigator.of(context).pushNamed('/vault-notes');
+                            _loadCounts();
+                          },
+                        ),
+                        _VaultSectionCard(
+                          title: 'Audio',
+                          icon: Icons.audio_file_outlined,
+                          color: const Color(0xFFD85A30),
+                          count: _audioCount,
+                          onTap: () async {
+                            await Navigator.of(context).pushNamed('/vault-audio');
+                            _loadCounts();
+                          },
+                        ),
+                        _VaultSectionCard(
+                          title: 'Documents',
+                          icon: Icons.folder_outlined,
+                          color: const Color(0xFF378ADD),
+                          count: 0,
+                          onTap: () async {
+                            await Navigator.of(context).pushNamed('/vault-documents');
+                            _loadCounts();
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _VaultSectionCard extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final Color color;
+  final int count;
+  final VoidCallback onTap;
+
+  const _VaultSectionCard({
+    required this.title,
+    required this.icon,
+    required this.color,
+    required this.count,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return PressableCard(
+      onTap: onTap,
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            width: 56,
+            height: 56,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              icon,
+              size: 28,
+              color: color,
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w600,
+              color: VaultColors.textPrimary,
+              fontFamily: 'Inter',
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '$count item${count != 1 ? 's' : ''}',
+            style: const TextStyle(
+              fontSize: 13,
+              color: VaultColors.textTertiary,
+              fontFamily: 'Inter',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

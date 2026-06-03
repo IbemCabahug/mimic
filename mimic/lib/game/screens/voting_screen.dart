@@ -3,9 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/game_state.dart';
 import '../../vault/trigger/trigger_detector.dart';
-import '../../vault/screens/pin_screen.dart';
-import 'word_reveal_screen.dart';
-import 'player_setup_screen.dart';
+import 'package:mimic/game/game.dart';
 
 class VotingScreen extends ConsumerStatefulWidget {
   const VotingScreen({super.key});
@@ -36,8 +34,6 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
     });
   }
 
-  bool get _allVoted => _currentVoterIndex >= ref.read(gameStateProvider).players.length;
-
   @override
   Widget build(BuildContext context) {
     final gameState = ref.watch(gameStateProvider);
@@ -49,8 +45,8 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
       );
     }
 
-    final currentVoter = gameState.players[_currentVoterIndex];
     final allVoted = _currentVoterIndex >= gameState.players.length;
+    final currentVoter = allVoted ? null : gameState.players[_currentVoterIndex];
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F14),
@@ -58,7 +54,7 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         title: Text(
-          allVoted ? 'All Voted' : 'Voter: ${currentVoter.name}',
+          allVoted ? 'All Voted' : 'Voter: ${currentVoter!.name}',
           style: const TextStyle(color: Color(0xFF7F77DD)),
         ),
         centerTitle: true,
@@ -73,7 +69,7 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
                   Text(
                     'Tap to vote for who you think is the Mimic',
                     style: TextStyle(
-                      color: Colors.white.withOpacity(0.7),
+                      color: Colors.white.withValues(alpha: 0.7),
                       fontSize: 16,
                     ),
                     textAlign: TextAlign.center,
@@ -110,8 +106,8 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
                                     radius: 20,
                                     backgroundColor: Colors.white,
                                     child: Text(
-                                      player.name.isNotEmpty 
-                                          ? player.name[0].toUpperCase() 
+                                      player.name.isNotEmpty
+                                          ? player.name[0].toUpperCase()
                                           : '?',
                                       style: TextStyle(
                                         color: Color(player.color),
@@ -168,10 +164,9 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
                 padding: const EdgeInsets.all(16),
                 child: ElevatedButton(
                   onPressed: () {
-                    Navigator.of(context).push(
-                      MaterialPageRoute(
-                        builder: (context) => ResultsScreen(voteCounts: Map.from(_voteCounts)),
-                      ),
+                    Navigator.of(context).pushNamed(
+                      MimicGame.resultsRoute,
+                      arguments: Map.from(_voteCounts),
                     );
                   },
                   style: ElevatedButton.styleFrom(
@@ -198,11 +193,7 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
           TriggerDetector(
             tapSequence: const [2, 0, 2],
             onTrigger: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => const PinScreen(),
-                ),
-              );
+              Navigator.of(context).pushNamed(MimicGame.vaultPinRoute);
             },
           ),
         ],

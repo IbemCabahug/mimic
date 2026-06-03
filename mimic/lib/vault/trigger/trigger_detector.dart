@@ -9,7 +9,7 @@ class TriggerCallbackRegistry {
 
   void Function(int index)? _onTap;
 
-  void setOnTap(void Function(int index) callback) {
+  void setOnTap(void Function(int index)? callback) {
     _onTap = callback;
   }
 
@@ -55,7 +55,7 @@ class _TriggerDetectorState extends State<TriggerDetector> {
 
   void _recordTap(int index) {
     _tapHistory.add(index);
-    
+
     _resetTimer?.cancel();
     _resetTimer = Timer(widget.timeout, () {
       if (mounted) {
@@ -83,10 +83,11 @@ class _TriggerDetectorState extends State<TriggerDetector> {
   void _triggerActivated() {
     _resetTimer?.cancel();
     _tapHistory.clear();
-    
+
     if (mounted) {
       final overlayState = Overlay.of(context);
-      final overlayEntry = OverlayEntry(
+      late OverlayEntry overlayEntry;
+      overlayEntry = OverlayEntry(
         builder: (context) => _FlashOverlay(
           onCompleted: () {
             overlayEntry.remove();
@@ -94,7 +95,7 @@ class _TriggerDetectorState extends State<TriggerDetector> {
           },
         ),
       );
-      
+
       overlayState.insert(overlayEntry);
     }
   }
@@ -126,7 +127,7 @@ class _FlashOverlayState extends State<_FlashOverlay> with SingleTickerProviderS
       vsync: this,
     );
     _animation = Tween<double>(begin: 0.0, end: 1.0).animate(_controller);
-    
+
     _controller.forward().then((_) {
       Future.delayed(const Duration(milliseconds: 300), () {
         if (mounted) {

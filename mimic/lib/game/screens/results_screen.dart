@@ -5,15 +5,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/game_state.dart';
 import '../../vault/trigger/trigger_detector.dart';
 import '../../vault/screens/pin_screen.dart';
-import 'word_reveal_screen.dart';
-import 'player_setup_screen.dart';
+import 'package:mimic/game/game.dart';
 
 class ResultsScreen extends ConsumerStatefulWidget {
-  final Map<String, int> voteCounts;
+  final Map<String, int>? voteCounts;
 
   const ResultsScreen({
     super.key,
-    required this.voteCounts,
+    this.voteCounts,
   });
 
   @override
@@ -24,6 +23,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with SingleTicker
   late AnimationController _revealController;
   late Animation<double> _scaleAnimation;
   bool _mimicRevealed = false;
+  bool _mimicWasCaught = false;
   int _triggerTapCount = 0;
 
   @override
@@ -38,6 +38,9 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with SingleTicker
     );
     
     TriggerCallbackRegistry().setOnTap(_recordScoreTap);
+
+    // Start the reveal animation once in initState, not in build
+    _startReveal();
   }
 
   @override
@@ -58,11 +61,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with SingleTicker
 
   void _triggerVault() {
     _triggerTapCount = 0;
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => const PinScreen(),
-      ),
-    );
+    Navigator.of(context).pushNamed(MimicGame.vaultPinRoute);
   }
 
   void _initializeScores() {
@@ -70,15 +69,19 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with SingleTicker
     final gameState = ref.read(gameStateProvider);
     final mimicId = gameState.mimicId;
 
+    final args = ModalRoute.of(context)?.settings.arguments as Map<String, int>?;
+    final voteCounts = widget.voteCounts ?? args ?? {};
+
     // Find player with most votes
-    final maxVotes = widget.voteCounts.values.isNotEmpty 
-        ? widget.voteCounts.values.reduce((a, b) => a > b ? a : b) 
+    final maxVotes = voteCounts.values.isNotEmpty 
+        ? voteCounts.values.reduce((a, b) => a > b ? a : b) 
         : 0;
     final topVotedId = maxVotes > 0
-        ? widget.voteCounts.entries.firstWhere((e) => e.value == maxVotes).key
+        ? voteCounts.entries.firstWhere((e) => e.value == maxVotes).key
         : '';
 
     final mimicWasCaught = topVotedId.isNotEmpty && topVotedId == mimicId;
+    _mimicWasCaught = mimicWasCaught;
 
     if (mimicWasCaught) {
       // Non-Mimic players get +2 points
@@ -110,20 +113,14 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with SingleTicker
   void _playAgain() {
     final gameStateNotifier = ref.read(gameStateProvider.notifier);
     gameStateNotifier.nextRound();
-    
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => const WordRevealScreen(),
-      ),
-    );
+
+    Navigator.of(context).pushNamed(MimicGame.wordRevealRoute);
   }
 
   void _newGame() {
     ref.read(gameStateProvider.notifier).resetGame();
-    Navigator.of(context).pushAndRemoveUntil(
-      MaterialPageRoute(
-        builder: (context) => const PlayerSetupScreen(),
-      ),
+    Navigator.of(context).pushNamedAndRemoveUntil(
+      MimicGame.playerSetupRoute,
       (route) => false,
     );
   }
@@ -131,10 +128,6 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with SingleTicker
   @override
   Widget build(BuildContext context) {
     final gameState = ref.watch(gameStateProvider);
-
-    if (!_mimicRevealed) {
-      _startReveal();
-    }
 
     final mimicPlayer = gameState.players.isNotEmpty
         ? gameState.players.firstWhere(
@@ -144,7 +137,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with SingleTicker
         : Player(id: 'unknown', name: 'Unknown', color: 0xFFFFFFFF);
 
     final sortedScores = gameState.scores.entries.toList()
-      ..sort((a, b) => (b.value as int).compareTo(a.value as int));
+      ..sort((a, b) => b.value.compareTo(a.value));
 
     return Scaffold(
       backgroundColor: const Color(0xFF0F0F14),
@@ -204,9 +197,13 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with SingleTicker
                 const SizedBox(height: 40),
                 if (_mimicRevealed)
                   Text(
-                    'The group correctly identified the Mimic!',
-                    style: const TextStyle(
-                      color: Color(0xFF1D9E75),
+                    _mimicWasCaught
+                        ? 'The group correctly identified the Mimic!'
+                        : 'The Mimic escaped undetected!',
+                    style: TextStyle(
+                      color: _mimicWasCaught
+                          ? const Color(0xFF1D9E75)
+                          : const Color(0xFFD85A30),
                       fontSize: 16,
                     ),
                   ),
