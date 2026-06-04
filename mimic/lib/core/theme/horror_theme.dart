@@ -62,7 +62,7 @@ class HorrorTheme {
           letterSpacing: 1.5,
         ),
       ),
-      cardTheme: const CardTheme(
+      cardTheme: const CardThemeData(
         color: HorrorColors.cardSurface,
         elevation: 4,
         shape: RoundedRectangleBorder(
@@ -128,7 +128,7 @@ class HorrorTheme {
           borderSide: const BorderSide(color: HorrorColors.crimson, width: 1.0),
         ),
       ),
-      dialogTheme: DialogTheme(
+      dialogTheme: DialogThemeData(
         backgroundColor: HorrorColors.deepSurface,
         elevation: 10,
         shape: RoundedRectangleBorder(

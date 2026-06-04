@@ -67,7 +67,7 @@ class ModeSelectScreen extends ConsumerWidget {
                     mode: GameMode.nightmare,
                     title: 'NIGHTMARE',
                     subtitle: "There are two. They don't know each other.",
-                    icon: Icons.skull_outlined,
+                    icon: Icons.dangerous_outlined,
                     isSelected: selectedMode == GameMode.nightmare,
                     onTap: () => notifier.setGameMode(GameMode.nightmare),
                   ),

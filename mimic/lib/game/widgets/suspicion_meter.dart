@@ -79,7 +79,7 @@ class SuspicionMeter extends StatelessWidget {
             const SizedBox(width: 8),
             // The skull icon that changes state and glows red at 100%
             Icon(
-              isMax ? Icons.skull : Icons.skull_outlined,
+              isMax ? Icons.dangerous : Icons.dangerous_outlined,
               color: isMax ? HorrorColors.crimson : HorrorColors.ashGray,
               size: height + 4,
             ),

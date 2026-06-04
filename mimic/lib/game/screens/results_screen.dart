@@ -607,7 +607,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
                         ),
                         if (isMimic) ...[
                           const SizedBox(width: 8),
-                          const Icon(Icons.skull, color: HorrorColors.crimson, size: 16),
+                          const Icon(Icons.dangerous, color: HorrorColors.crimson, size: 16),
                         ],
                       ],
                     ),

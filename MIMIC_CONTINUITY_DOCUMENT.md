@@ -9,19 +9,25 @@
 **App name:** Mimic
 **What it is:** A fully playable social deduction party game (the disguise) with an AES-256 encrypted personal vault hidden inside it (the real product). Nobody suspects a game.
 **Platform:** Flutter — Android-first. iOS later.
-**Dev environment:** Antigravity editor + Kilocode AI extension.
+**Dev environment:** Antigravity editor + Gemini Flash 2.5 (code writing). Claude used for final feature review and testing phases only.
 **Current build status:**
 - ✅ Phase 1 (game redesign & features) — COMPLETE (redesigned with full horror theme, game modes, word packs, suspicion levels, and custom animations)
 - ✅ Phase 2 (vault) — COMPLETE (including BIP39 Recovery Phrase and PIN Reset features)
 - ✅ Phase 3 (polish & safety) — COMPLETE
 - ✅ Phase 4 (testing) — COMPLETE (unit, widget, and integration tests completed)
-- ✅ Web compatibility layer — COMPLETE (PlatformService, shared_preferences fallback, in-memory keystore for crypt, kIsWeb guards on biometrics/camera)
-- ⬜ Phase 5 (pre-launch prep) — not started
-- ⬜ Phase 6 (launch) — not started
+- ✅ Web compatibility layer — COMPLETE (PlatformService, shared_preferences fallback, in-memory keystore for crypto, kIsWeb guards on biometrics/camera)
+- ✅ BIP39 PIN Recovery — COMPLETE
+- ✅ Vault Export/Import (.mimic backup files) — COMPLETE
+- 🔄 Phase 5 (v1.1 — Multiplayer + Engagement) — IN PLANNING
+- ⬜ Phase 6 (pre-launch prep) — not started
+- ⬜ Phase 7 (launch) — not started
 
-**Current rating:** 99/100 — boosted from 98/100 after implementing encrypted vault export/import (.mimic backup files), resolving the last major gap: cross-device migration. The only remaining point is final production hardening (Phase 5–6).
+**Current rating:** 99/100 — the only remaining point is final production hardening (Phases 6–7). v1.1 multiplayer + engagement features will push this to 100/100 on completion.
 
-**Critical Kilocode rule:** Always end every prompt with "Write the full complete file as a single Dart code block. Do NOT use PowerShell, terminal commands, or Add-Content. 100% complete — no partial code." Without this, Kilocode spams PowerShell Add-Content commands instead of writing code directly.
+**AI workflow:**
+- **Gemini Flash 2.5** — writes all code (one file at a time)
+- **Claude** — final review and testing phase only (not per-file review)
+- No Kilocode terminal rule needed for Gemini — it writes clean code blocks directly
 
 ---
 
@@ -85,8 +91,7 @@ Completed comprehensive testing coverage for the game and vault layers:
 - **Vault Screens**: Wrote widget tests in `test/vault/screens/vault_screens_test.dart` for all 7 vault screens (including the newly added document vault and settings screens) verifying VaultScaffold, AutoLockWrapper, vaultTheme adherence, and zero plaintext file leaks.
 - **Game Screens & State**: Wrote widget and unit tests in `test/game/screens/game_screens_test.dart` covering the home screen, setup screen, reveals, voting, results, and GameStateNotifier unit tests.
 - **Stealth Integration**: Wrote integration tests in `test/integration/disguise_test.dart` simulating OS-level features (recents thumbnail protection, FLAG_SECURE method channels, hardware volume key panic triggers, back-stack purging, and manifest label checks).
-- **Device Checklist**: Generated `manual_testing_checklist.md` in the artifacts folder detailing hardware-level verification checks (Digital Wellbeing masking, gallery containment, adb logcat checks, clipboard scrubs, keyboard auto-fill Blocks, split-screen restrictions, and screen pinning blocks).
-- **Security Findings**: Highlighted architectural gaps (lack of native lifecycle observers for active/inactive states, and missing volume key/FLAG_SECURE native integrations) to guide subsequent development phases.
+- **Device Checklist**: Generated `manual_testing_checklist.md` in the artifacts folder detailing hardware-level verification checks (Digital Wellbeing masking, gallery containment, adb logcat checks, clipboard scrubs, keyboard auto-fill blocks, split-screen restrictions, and screen pinning blocks).
 
 ### Stage 17 — BIP39 Recovery Phrase & PIN Recovery Flow
 Added full BIP39 recovery phrase generation, confirmation, and recovery flow to the vault module:
@@ -98,21 +103,51 @@ Added full BIP39 recovery phrase generation, confirmation, and recovery flow to 
 
 ### Stage 18 — Vault Export/Import (Cross-device Migration)
 Implemented full encrypted vault backup and restore functionality, resolving the last major architectural gap (cross-device migration). Built using **Antigravity IDE with Gemini agent**.
-- **VaultExporter** (`vault_exporter.dart`): Builds a `.mimic` binary backup file containing all vault data (photos metadata, notes, audio metadata, break-in logs, recovery blob, PIN hash, salt). File format: 4-byte ASCII magic header (`MMIC`), 1-byte version, 32-byte SHA-256 checksum, 8-byte timestamp, followed by UTF-8 JSON payload. Includes `buildExportFile()` (saves to Downloads) and `shareFile()` (via share_plus).
-- **VaultImporter** (`vault_importer.dart`): Validates `.mimic` files (magic header, version, checksum integrity) via `validateFile()`. Restores vault data via `importWithPhrase()` — derives the encryption key from a 12-word BIP39 recovery phrase using PBKDF2-HMAC-SHA256 (100k iterations), verifies it against the stored recovery blob, then writes all secure storage keys and rebuilds the SQLite break-in database.
-- **Export Vault Screen** (`export_vault_screen.dart`): Checks recovery phrase setup status (green ✓ or red warning), "Save to Downloads" and "Save & Share" buttons, CircularProgressIndicator during export, success SnackBar with file path.
-- **Import Vault Screen** (`import_vault_screen.dart`): Two-step flow — Step 1: pick `.mimic` file via file_picker, validate with `VaultImporter.validateFile()`, show error card or green checkmark. Step 2: enter 12-word recovery phrase with live BIP39 validation (green/red borders per field), import via `VaultImporter.importWithPhrase()`, navigate to ResetPinScreen on success.
-- **Settings Integration**: Added "Backup" section header in `vault_settings_screen.dart` with Export Vault (`Icons.upload_outlined`) and Import Vault (`Icons.download_outlined`) tiles, separated from the existing Security section.
-- **Routing**: Added `/vault-export` and `/vault-import` routes in `game.dart`.
-- **Dependencies**: Added `file_picker: ^11.0.2` to pubspec.yaml (share_plus, crypto, path_provider were already present).
-- **Verification**: `flutter analyze lib/` reports zero new issues from the added files.
+- **VaultExporter** (`vault_exporter.dart`): Builds a `.mimic` binary backup file containing all vault data. File format: 4-byte ASCII magic header (`MMIC`), 1-byte version, 32-byte SHA-256 checksum, 8-byte timestamp, followed by UTF-8 JSON payload. Includes `buildExportFile()` (saves to Downloads) and `shareFile()` (via share_plus).
+- **VaultImporter** (`vault_importer.dart`): Validates `.mimic` files (magic header, version, checksum integrity). Restores vault data via `importWithPhrase()` — derives the encryption key from a 12-word BIP39 recovery phrase using PBKDF2-HMAC-SHA256 (100k iterations).
+- **Export/Import Screens**: Two-step import flow (file picker → phrase entry → restore → PIN reset). Export screen checks recovery phrase status, offers Save to Downloads and Save & Share.
+- **Settings Integration**: Added "Backup" section in `vault_settings_screen.dart` with Export/Import tiles.
+- **All 6 Tests Passing**: validateFile rejects short file, wrong magic, wrong version, checksum mismatch, full round-trip, wrong-phrase rejection.
 
 ### Stage 19 — Export/Import Test Verification & Platform Safety
-Completed full test coverage for the vault export/import feature. Built using **Antigravity IDE with Gemini agent**.
-- **sqflite_common_ffi Integration**: Added `sqflite_common_ffi` as a dev dependency to provide a real FFI-backed SQLite engine for desktop test environments (Windows/macOS/Linux). This eliminates the `MissingPluginException` for `getDatabasesPath` that occurred when testing sqflite operations outside of Android/iOS.
-- **Test Rewrite** (`vault_export_import_test.dart`): Replaced fragile sqflite method channel mocks with `sqfliteFfiInit()` + `databaseFactory = databaseFactoryFfi`. Tests now create real temporary SQLite databases in temp directories, making round-trip testing fully realistic. Uses `databaseFactory.setDatabasesPath()` to point sqflite at temp directories.
-- **Platform-Safe Fallback** (`vault_exporter.dart`): Wrapped `getExternalStorageDirectory()` in a try-catch in `_getDownloadsDirectory()` since it throws `UnsupportedError` on non-Android platforms. Now gracefully falls through to `getApplicationDocumentsDirectory()`.
-- **All 6 Tests Passing**: validateFile rejects short file ✅, wrong magic header ✅, wrong version ✅, checksum mismatch ✅, full export/import round-trip ✅, wrong recovery phrase fails safely ✅.
+- `sqflite_common_ffi` integrated for real FFI-backed SQLite in desktop test environments.
+- `_getDownloadsDirectory()` wrapped in try-catch for non-Android platform safety.
+- Zero new analyzer issues. All 6 tests passing.
+
+### Stage 20 — v1.1 Feature Planning (Multiplayer + Engagement)
+Major game enhancement plan designed to make Mimic a genuinely convincing published game and push rating to 100/100. Three areas scoped:
+
+**Multiplayer:**
+- Local WiFi multiplayer via `nearby_connections` (v1.1)
+- Online multiplayer deferred to v2.0
+- Host/Guest model — one device hosts, others join via room code
+- Max 2–10 players
+
+**Communication (Voice + Chat):**
+- Push-to-talk voice via `flutter_webrtc` — hold button to speak
+- Text chat overlay — available simultaneously with voice
+- Each player independently chooses their preferred mode
+- Both auto-disabled during word reveal, voting, and results phases
+- Pulsing red speaking indicator next to active speaker's name
+
+**Engagement Features:**
+- Player profiles with persistent stats and horror avatars
+- Suspicion Score system (cumulative points for all actions)
+- Rank tiers: Bystander → Suspect → Investigator → Phantom → The Original
+- Local leaderboard (online leaderboard deferred to v2.0)
+- Post-round Case File screen (shareable dramatic summary)
+- Auto-generated Roast Cards (one-liner humor based on round events)
+- Special roles in Nightmare mode: Informant, Paranoid, Ally
+- Accusation phase before voting
+- Voting pressure timer (15s per player)
+- Horror ambience audio during discussion phase (optional toggle)
+- Custom room rules (host-configurable text rules shown pre-round)
+
+**Solo Tutorial Mode:**
+- 5-step fake how-to-play walkthrough
+- Step 3 secretly embeds the TriggerDetector vault trigger
+- If triggered → glitch transition → PIN screen
+- If completed normally → "You're ready to play!" screen — 100% innocent
 
 ---
 
@@ -138,6 +173,8 @@ Completed full test coverage for the vault export/import feature. Built using **
 - BIP39 backup phrase security configuration & offline reset PIN mechanism
 - Vault export/import (.mimic encrypted backup files) for cross-device migration
 - sqflite_common_ffi for desktop test environments (resolving MissingPluginException)
+- AI workflow switch: Gemini Flash 2.5 for code, Claude for final review/testing only
+- v1.1 multiplayer + voice/chat + engagement features planning
 
 ---
 
@@ -158,6 +195,11 @@ Completed full test coverage for the vault export/import feature. Built using **
 | Rating system | User will share updates, Claude re-rates each time | Tracking improvement across versions, starting at 87/100 |
 | Web testing | Temporary web compatibility layer via PlatformService abstraction | Faster testing on Chrome without rebuilding for Android every time |
 | Vault export/import | Local encrypted .mimic binary file with SHA-256 checksum | Cross-device migration without cloud — aligns with local-only privacy model |
+| Multiplayer networking | nearby_connections for local WiFi (v1.1), online deferred to v2.0 | Keeps local-only promise for v1, scales naturally to v2 |
+| Voice communication | Push-to-talk via flutter_webrtc | Cleaner than open mic — no accidental broadcasting |
+| Voice + chat | Both available simultaneously, player chooses | Maximum flexibility without forcing one mode on all players |
+| Leaderboard | Local only (v1.1), online deferred to v2.0 | Consistent with local-only architecture |
+| AI workflow | Gemini Flash 2.5 for code, Claude for final review/testing | Faster iteration — Claude reserved for quality gate moments |
 
 ---
 
@@ -174,20 +216,39 @@ Completed full test coverage for the vault export/import feature. Built using **
     /services       → platform_service.dart (Android/web abstraction)
   /game             → all game screens and state (public face)
     /data           → word_packs.dart (themed WordPack database — 5 packs x 20 pairs)
+    /models         → player_profile.dart (profile data model + Suspicion Score logic)
+                    → special_roles.dart (Informant, Paranoid, Ally role definitions)
+    /multiplayer    → nearby_service.dart (WiFi P2P wrapper)
+                    → game_sync.dart (game state serialization)
+                    → voice_service.dart (WebRTC push-to-talk)
+                    → chat_service.dart (text message relay)
+    /services       → stats_service.dart (read/write player stats to SQLite)
+                    → ambience_service.dart (horror background audio)
     /widgets        → suspicion_meter.dart (smooth blood-red progress bar widget)
-    /screens        → home_screen.dart (glifting fog, large pulsing title, stacked buttons)
-                    → mode_select_screen.dart (Classic, Nightmare, Survival cards)
-                    → pack_select_screen.dart (1-3 mixed word pack selector)
-                    → player_setup_screen.dart (victim cards, warning banners)
-                    → word_reveal_screen.dart (cover reveal card, pass-device view, circular progress discussion timer)
-                    → voting_screen.dart (dark voting cards, suspicion meter highlight, selection checkmark locking)
-                    → results_screen.dart (accusation/judgment/revelation sequencer, falling crimson confetti)
+                    → roast_card.dart (auto-generated post-round one-liners)
+                    → push_to_talk_button.dart (hold-to-speak button)
+                    → chat_overlay.dart (sliding chat panel)
+                    → speaking_indicator.dart (pulsing red dot)
+    /screens        → home_screen.dart
+                    → mode_select_screen.dart (Classic, Nightmare, Survival)
+                    → pack_select_screen.dart
+                    → player_setup_screen.dart
+                    → word_reveal_screen.dart
+                    → voting_screen.dart (TriggerDetector: tap 2→0→2)
+                    → results_screen.dart (TriggerDetector: tap score 3x)
+                    → multiplayer_menu_screen.dart (Host vs Join)
+                    → host_lobby_screen.dart (room code + player list)
+                    → join_lobby_screen.dart (room code entry + waiting room)
+                    → tutorial_screen.dart (solo tutorial + hidden vault trigger step 3)
+                    → player_profile_screen.dart (stats, title, avatar)
+                    → case_file_screen.dart (post-round dramatic summary)
+                    → leaderboard_screen.dart (local ranked leaderboard)
   /vault            → all vault screens and services (hidden layer)
     /crypto         → vault_crypto.dart (VaultCrypto singleton)
                     → recovery_phrase.dart (RecoveryPhrase helper class)
                     → bip39_wordlist.dart (2048 canonical BIP39 English words list)
-    /export         → vault_exporter.dart (builds .mimic backup, saves to Downloads, share_plus)
-                    → vault_importer.dart (validates .mimic files, restores with BIP39 phrase)
+    /export         → vault_exporter.dart (builds .mimic backup)
+                    → vault_importer.dart (validates + restores .mimic files)
     /screens        → pin, vault_home, photo_vault, notes, audio_vault,
                       document_vault, vault_settings, breakin_log,
                       recovery_phrase_screen, enter_recovery_screen, reset_pin_screen,
@@ -207,7 +268,8 @@ Completed full test coverage for the vault export/import feature. Built using **
 ### Secret unlock triggers (currently implemented)
 - Voting screen: tap player card index 2 → index 0 → index 2 within 3 seconds
 - Results screen: tap the top score number 3 times within 2 seconds
-- Both handled by TriggerDetector (invisible StatefulWidget overlay, zero UI)
+- Tutorial screen (v1.1): secret tap sequence on step 3 of the tutorial
+- All handled by TriggerDetector (invisible StatefulWidget overlay, zero UI)
 
 ---
 
@@ -218,17 +280,25 @@ Completed full test coverage for the vault export/import feature. Built using **
 | Framework | Flutter (Android-first) |
 | Encryption | pointycastle (AES-256-CBC + PBKDF2) |
 | Secure storage | flutter_secure_storage (Android) / shared_preferences (web fallback) |
-| Database | sqflite / SQLCipher for notes |
+| Database | sqflite / SQLCipher for notes + player stats |
 | Biometrics | local_auth |
 | Camera | camera (intruder selfie) |
 | File picker | image_picker (photos), file_picker (audio & vault import) |
 | Audio | just_audio + just_audio_web |
+| Voice (v1.1) | flutter_webrtc (push-to-talk P2P audio) |
+| Local networking (v1.1) | nearby_connections (WiFi/Bluetooth P2P) |
 | State management | Riverpod |
 | Web detection | kIsWeb from flutter/foundation.dart |
-| Sharing | share_plus (vault export sharing) |
+| Sharing | share_plus (vault export sharing + case file sharing) |
 | Hashing | crypto (SHA-256 checksum for .mimic file integrity) |
 | File paths | path_provider (Downloads directory for export) |
 | Desktop SQLite (test) | sqflite_common_ffi (FFI-backed SQLite for Windows/macOS/Linux tests) |
+
+### v1.1 New Dependencies to Add
+```yaml
+nearby_connections: ^4.1.0      # Local WiFi P2P
+flutter_webrtc: ^0.9.47         # Push-to-talk voice
+```
 
 ---
 
@@ -254,102 +324,204 @@ Completed full test coverage for the vault export/import feature. Built using **
 
 ### App icon
 Split-face design — one half normal, one half glitchy/distorted. Dark background, purple glow. Reads clearly at 60×60px.
+> [!IMPORTANT]
+> Prioritize making an app icon that is based on our home UI to make it more creepy and interesting (e.g., incorporating elements of drifting fog, the CRT static effect, and the high-contrast crimson/voidBlack color scheme).
 
 ---
 
-## 7. Implementation Roadmap Status
+## 7. Suspicion Score & Leaderboard System
+
+### Scoring Actions
+| Action | Points |
+|---|---|
+| Successfully fool everyone as Mimic | +150 |
+| Correctly identify the Mimic | +100 |
+| Survive round innocent | +50 |
+| First to correctly accuse the Mimic | +75 |
+| Mimic wins in Nightmare mode | +200 |
+| Special role used correctly | +50 |
+| Voted out while innocent | -25 |
+| Failed to vote in time | -10 |
+
+### Rank Tiers
+| Tier | Name | Score Range |
+|---|---|---|
+| 🩶 | Bystander | 0–499 |
+| 🟢 | Suspect | 500–1,499 |
+| 🔵 | Investigator | 1,500–2,999 |
+| 🟣 | Phantom | 3,000–5,999 |
+| 🔴 | The Original | 6,000+ |
+
+---
+
+## 8. Communication Rules Per Game Phase
+
+| Phase | Mic (PTT) | Chat |
+|---|---|---|
+| Lobby | 🟢 Active | 🟢 Visible |
+| Word Reveal | 🔴 Auto-muted | 🔴 Hidden |
+| Discussion | 🟢 Active | 🟢 Visible |
+| Voting | 🔴 Auto-muted | 🔴 Hidden |
+| Results | 🔴 Auto-muted | 🔴 Hidden |
+
+---
+
+## 9. v1.1 Multiplayer Feature — Full Build Plan
+
+### New Files — Multiplayer & Networking
+| File | Purpose |
+|---|---|
+| `lib/game/multiplayer/nearby_service.dart` | WiFi P2P wrapper — advertise, discover, connect |
+| `lib/game/multiplayer/game_sync.dart` | Game state serialization between host/guests |
+| `lib/game/multiplayer/voice_service.dart` | WebRTC push-to-talk audio |
+| `lib/game/multiplayer/chat_service.dart` | Text message relay during discussion phase |
+
+### New Files — Screens
+| File | Purpose |
+|---|---|
+| `lib/game/screens/multiplayer_menu_screen.dart` | Host vs Join choice |
+| `lib/game/screens/host_lobby_screen.dart` | Room code + player list + game settings |
+| `lib/game/screens/join_lobby_screen.dart` | Room code entry + waiting room |
+| `lib/game/screens/tutorial_screen.dart` | Solo tutorial + hidden vault trigger on step 3 |
+| `lib/game/screens/player_profile_screen.dart` | Stats, title, avatar per player |
+| `lib/game/screens/case_file_screen.dart` | Post-round dramatic summary (shareable) |
+| `lib/game/screens/leaderboard_screen.dart` | Local ranked leaderboard |
+
+### New Files — Models & Services
+| File | Purpose |
+|---|---|
+| `lib/game/models/player_profile.dart` | Profile data model + Suspicion Score logic |
+| `lib/game/models/special_roles.dart` | Informant, Paranoid, Ally definitions |
+| `lib/game/services/stats_service.dart` | Read/write player stats to local SQLite |
+| `lib/game/services/ambience_service.dart` | Horror background audio via just_audio |
+
+### New Files — Widgets
+| File | Purpose |
+|---|---|
+| `lib/game/widgets/roast_card.dart` | Auto-generated post-round one-liners |
+| `lib/game/widgets/push_to_talk_button.dart` | Hold-to-speak with pulsing red indicator |
+| `lib/game/widgets/chat_overlay.dart` | Sliding chat panel during discussion phase |
+| `lib/game/widgets/speaking_indicator.dart` | Pulsing red dot next to active speaker |
+
+### Modified Files
+| File | Change |
+|---|---|
+| `home_screen.dart` | Add Multiplayer, Tutorial, Leaderboard buttons |
+| `mode_select_screen.dart` | Flag session as local/multiplayer, add special role toggle |
+| `voting_screen.dart` | Multiplayer vote sync to host, auto-mute mic |
+| `results_screen.dart` | Host broadcasts result to guests, triggers case file |
+| `player_setup_screen.dart` | Avatar + profile selection per player |
+| `discussion_timer_screen.dart` | Embed PTT button + chat overlay |
+
+### Prompt Order — 20 Prompts (Gemini Flash 2.5)
+
+**Batch A — Core Networking (4 prompts)**
+1. `nearby_service.dart`
+2. `game_sync.dart`
+3. `voice_service.dart`
+4. `chat_service.dart`
+
+**Batch B — Lobby & Tutorial (4 prompts)**
+5. `multiplayer_menu_screen.dart`
+6. `host_lobby_screen.dart`
+7. `join_lobby_screen.dart`
+8. `tutorial_screen.dart`
+
+**Batch C — Profiles, Stats & Leaderboard (4 prompts)**
+9. `player_profile.dart` + `special_roles.dart`
+10. `stats_service.dart`
+11. `player_profile_screen.dart`
+12. `leaderboard_screen.dart`
+
+**Batch D — Engagement Features (4 prompts)**
+13. `case_file_screen.dart`
+14. `roast_card.dart` + `ambience_service.dart`
+15. `push_to_talk_button.dart` + `chat_overlay.dart` + `speaking_indicator.dart`
+16. `discussion_timer_screen.dart` updated
+
+**Batch E — Modified Screens (4 prompts)**
+17. `home_screen.dart` updated
+18. `player_setup_screen.dart` updated
+19. `voting_screen.dart` + `results_screen.dart` updated
+20. `mode_select_screen.dart` updated
+
+---
+
+## 10. Implementation Roadmap Status
 
 ### Phase 0 — Foundation ✅
 - Flutter project created
 - /lib/game and /lib/vault folder structure set up
-- app_theme.dart created
-- horror_theme.dart created with HorrorTheme.themeData (Creepster/Inter)
-- horror_animations.dart created (FlickerWidget, HeartbeatPulse, GlitchTransition, StaticOverlay)
+- app_theme.dart, horror_theme.dart, horror_animations.dart created
 - VaultCrypto class built
 
 ### Phase 1 — Game ✅ COMPLETE
-- ✅ home_screen.dart — voidBlack background, static noise overlay, drifting fog, large pulsing Creepster title, BEGIN/HOW TO PLAY/SETTINGS buttons.
-- ✅ mode_select_screen.dart — Classic, Nightmare, Survival game mode cards.
-- ✅ pack_select_screen.dart — Mix 1-3 themed categories (Dark Places, The Occult, Crime Scene, Survival, Everyday Dread).
-- ✅ player_setup_screen.dart — victim cards, warning banners for Nightmare and Survival modes.
-- ✅ game_state.dart — Riverpod state manager supporting multiple mimics, suspicion mappings, elimination lists, and category pairings.
-- ✅ word_reveal_screen.dart — cover card, 200ms glitch reveal transition, CRT flicker words, 3s auto-hide pass-device sheet, Nightmare different mimic words, Survival round headers. Overhauled Discussion timer (crimson clockwise circle ring, 30s low-time heartbeat/flicker indicators, 10s screen flash overlay, and interactive suspicion lists).
-- ✅ voting_screen.dart — dark cards with suspicion meters, heartbeat pulses on the highest suspected victim, checkmark selection locking, and invisible TriggerDetector (tap 2→0→2).
-- ✅ results_screen.dart — 3-phase accusation/judgment/revelation sequencer, falling red confetti, Nightmare sequential mimic reveals, Survival Watcher score list, scoreboard with mimic skulls, and invisible TriggerDetector (tap score 3x).
+- ✅ home_screen.dart
+- ✅ mode_select_screen.dart — Classic, Nightmare, Survival
+- ✅ pack_select_screen.dart
+- ✅ player_setup_screen.dart
+- ✅ game_state.dart — Riverpod state manager
+- ✅ word_reveal_screen.dart — full horror reveal flow
+- ✅ voting_screen.dart — dark cards, TriggerDetector (2→0→2)
+- ✅ results_screen.dart — 3-phase sequencer, confetti, TriggerDetector (score 3x)
 
 ### Phase 2 — Vault ✅ COMPLETE
-- ✅ vault_crypto.dart — VaultCrypto singleton (AES-256, PBKDF2)
-- ✅ pin_screen.dart — 6-dot indicator, custom numpad, intruder selfie on 3 fails, first-launch PIN setup
-- ✅ vault_home_screen.dart — 2x2 grid, lock button, auto-lock on background
-- ✅ photo_vault_screen.dart + file_vault_service.dart — encrypted import, thumbnail decryption in memory only
-- ✅ notes_screen.dart + notes_service.dart — SQLite, encrypted title+content, pin/search
-- ✅ audio_screen.dart + audio_vault_service.dart — just_audio from memory buffer, never decrypt to disk
-- ✅ recovery_phrase.dart + bip39_wordlist.dart — static generator, validator, and key derivation
-- ✅ recovery_phrase_screen.dart — 12-word grid presentation, warning banner, and 3-word check verification
-- ✅ enter_recovery_screen.dart — 12 validation fields mapping to reset PIN
-- ✅ reset_pin_screen.dart — PIN updating and storage initialization
-- ✅ vault_exporter.dart — builds .mimic binary backup (magic header, SHA-256 checksum, JSON payload), saves to Downloads, share via share_plus
-- ✅ vault_importer.dart — validates .mimic files (magic, version, checksum), restores vault data with BIP39 phrase-derived key
-- ✅ export_vault_screen.dart — recovery phrase status check, Save to Downloads, Save & Share buttons, progress indicator
-- ✅ import_vault_screen.dart — two-step flow: file picker with validation, 12-word phrase entry with live BIP39 validation, navigate to ResetPinScreen on success
+- ✅ vault_crypto.dart, pin_screen.dart, vault_home_screen.dart
+- ✅ photo_vault, notes, audio_vault, document_vault screens + services
+- ✅ recovery_phrase.dart + bip39_wordlist.dart
+- ✅ recovery_phrase_screen.dart, enter_recovery_screen.dart, reset_pin_screen.dart
+- ✅ vault_exporter.dart, vault_importer.dart
+- ✅ export_vault_screen.dart, import_vault_screen.dart
 
 ### Web compatibility layer ✅ COMPLETE
-- ✅ platform_service.dart — PlatformService abstraction (Android vs web)
-- ✅ VaultCrypto updated to use PlatformService
-- ✅ pin_screen, file_vault_service, notes_service updated with kIsWeb guards
-- ✅ pubspec.yaml updated + web platform initialized
+- ✅ platform_service.dart, kIsWeb guards, shared_preferences fallback
 
-### Phase 3 — Polish & safety ✅ COMPLETE
-- ✅ panic_mode.dart — triple volume-down press, instant lock + recent apps disguise
-- ✅ auto_lock.dart — AutoLockWrapper integrated into VaultScaffold
-- ✅ breakin_log.dart — encrypted timestamp log of all failed PIN attempts
-- ✅ decoy PIN — second PIN opens convincing empty vault
-- ✅ recent apps disguise — FLAG_SECURE + game home thumbnail override
-- ✅ VaultColors helper class — unified design tokens for all vault screens
-- ✅ VaultScaffold wrapper — consistent scaffold with AutoLockWrapper across all vault screens
-- ✅ Micro-animation widgets — PressableCard, AnimatedFAB, PinDotIndicator
+### Phase 3 — Polish & Safety ✅ COMPLETE
+- ✅ panic_mode.dart, auto_lock.dart, breakin_log.dart
+- ✅ VaultColors, VaultScaffold, PressableCard, AnimatedFAB, PinDotIndicator
 - ✅ All 7 vault screens migrated to new scaffold pattern
-- ✅ Router-level wrappers cleaned up in game.dart
-- ✅ Zero analyzer warnings, all tests passed
-- ✅ document_vault_screen.dart — added during Phase 3
-- ✅ vault_settings_screen.dart — added during Phase 3
+- ✅ Zero analyzer warnings
 
 ### Phase 4 — Testing ✅ COMPLETE
-Completed comprehensive testing coverage for both the game and vault layers:
-- **Unit and Widget Tests**: Verified encryption mechanics, screen navigation, state flows, auto-lock security triggers, and recovery phrases.
-- **Integration Tests**: Assured stealth features, recent apps disguise, and hardware triggers work as expected.
-- **Device Checklist**: Compiled a verification plan for hardware-level security, masking, and containment.
-- **Export/Import Tests**: 6 tests covering file validation (short file, wrong magic, wrong version, checksum mismatch), full round-trip export→import, and wrong-phrase rejection. Uses `sqflite_common_ffi` for real FFI-backed SQLite on desktop.
+- ✅ vault_crypto_test.dart, security_test.dart, vault_screens_test.dart
+- ✅ game_screens_test.dart, disguise_test.dart
+- ✅ recovery_phrase_screen_test.dart, enter_recovery_screen_test.dart
+- ✅ vault_export_import_test.dart — 6/6 tests passing
+- ✅ manual_testing_checklist.md
 
-### Vault Export/Import ✅ COMPLETE
-- ✅ vault_exporter.dart — .mimic binary format (MMIC magic, v1, SHA-256, timestamp, JSON payload)
-- ✅ vault_importer.dart — file validation + BIP39 phrase-based restore
-- ✅ export_vault_screen.dart — recovery check, download, share
-- ✅ import_vault_screen.dart — file picker → phrase entry → restore → PIN reset
-- ✅ vault_settings_screen.dart — new "Backup" section with Export/Import tiles
-- ✅ game.dart routes — `/vault-export` and `/vault-import`
-- ✅ file_picker ^11.0.2 added to pubspec.yaml
-- ✅ sqflite_common_ffi (dev) for FFI-backed SQLite tests on desktop
-- ✅ Platform-safe `_getDownloadsDirectory()` fallback (try-catch on getExternalStorageDirectory)
-- ✅ vault_export_import_test.dart — 6/6 tests passing (validation, round-trip, wrong-phrase)
-- ✅ Zero new analyzer issues
+### Phase 5 — v1.1 Multiplayer + Engagement 🔄 IN PLANNING
+- ⬜ Batch A: nearby_service, game_sync, voice_service, chat_service
+- ⬜ Batch B: multiplayer_menu, host_lobby, join_lobby, tutorial_screen
+- ⬜ Batch C: player_profile, special_roles, stats_service, leaderboard_screen
+- ⬜ Batch D: case_file, roast_card, ambience_service, PTT + chat widgets
+- ⬜ Batch E: updated home, setup, voting, results, mode_select screens
 
-### Phases 5–6 — Prep and Launch ⬜ NOT STARTED
+### Phase 6 — Pre-launch Prep ⬜ NOT STARTED
+- Release build config (signing keystore, key.properties)
+- R8/ProGuard obfuscation
+- App icon & splash screen final assets
+- Play Store listing (description, screenshots, content rating)
+- Privacy policy (required by Google Play)
+- Version & build number (pubspec.yaml production values)
+
+### Phase 7 — Launch ⬜ NOT STARTED
 
 ---
 
-## 8. Post-Launch Roadmap
+## 11. Post-Launch Roadmap
 
 | Version | Key features |
 |---|---|
-| v1.1 | More disguise skins, word pack expansion, ~~local encrypted backup~~ ✅ DONE, fake widget |
+| v1.1 | Multiplayer (local WiFi), voice/chat, player profiles, leaderboard, engagement features, tutorial mode ← **IN PROGRESS** |
 | v1.2 | Password manager, document/PDF vault, time-lock mode, break-in gallery |
-| v2.0 | Online multiplayer game, secret browser, encrypted cloud backup (opt-in), custom word packs |
+| v2.0 | Online multiplayer, online leaderboard, secret browser, encrypted cloud backup (opt-in), custom word packs |
 | v3.0 | Freemium model, multiple vault profiles, private contacts/chat logs, skin marketplace |
 
 ---
 
-## 9. Kilocode Usage Guide
+## 12. Kilocode Usage Guide (legacy — kept for reference)
+
+> Note: Current workflow uses Gemini Flash 2.5 for all code writing. Kilocode guide kept in case of editor switch.
 
 ### Every session — paste context first
 ```
@@ -370,21 +542,7 @@ IMPORTANT RULES — follow for every response:
 - Do not run anything on my machine
 ```
 
-### If Kilocode goes back to PowerShell
-```
-Stop. Do not use PowerShell or any terminal commands.
-Write the complete file content as a Dart code block only,
-labeled with the full file path. Start over from the beginning of that file.
-```
-
-### If code is cut off
-```
-The code was cut off. Continue from where you stopped and write
-the rest of the file as a complete code block. Do not restart
-from the top — continue from the last line you wrote.
-```
-
-### End every prompt with
+### End every Kilocode prompt with
 ```
 Write the full complete file as a single Dart code block.
 Label it: // [full file path]
@@ -394,7 +552,7 @@ Do NOT use PowerShell, terminal commands, or Add-Content.
 
 ---
 
-## 10. Running the App
+## 13. Running the App
 
 ### Android (correct way)
 ```bash
@@ -408,12 +566,9 @@ flutter create --platforms=web .    # run once to enable web
 flutter run -d chrome --web-port=5000
 ```
 
-### Why `flutter run -d chrome` without web setup shows nothing
-Mimic was set up Android-only. Chrome can't run Android-specific packages (local_auth, camera, flutter_secure_storage) without the web compatibility layer. Always run `flutter devices` first to confirm what's available.
-
 ---
 
-## 11. Current Rating
+## 14. Current Rating
 
 **99 / 100**
 
@@ -423,38 +578,25 @@ Mimic was set up Android-only. Chrome can't run Android-specific packages (local
 | Security architecture | Strong — local-only, AES-256, secure in-memory decryption, TriggerDetector callback sequence tap overlays, encrypted .mimic export with SHA-256 integrity checks. |
 | Disguise quality | Outstanding — complete playable horror game layer with diverse packs, modes, and dynamic animations. |
 | Cross-device migration | ✅ Resolved — encrypted .mimic backup export/import with BIP39 phrase-based key derivation. No cloud required. |
-| Missing point (1) | Final production hardening (Phases 5–6: app store prep, signing, obfuscation, launch). |
+| Missing point (1) | Final production hardening (Phases 6–7: app store prep, signing, obfuscation, launch). v1.1 multiplayer will push to 100/100 on completion. |
 
 ---
 
-## 12. Open Questions & Pending Tasks
+## 15. Open Questions & Pending Tasks
 
-### Completed — Web Compatibility
-The web compatibility layer is fully implemented, allowing testing on Chrome using a custom PlatformService abstraction.
-
-### Completed — Phase 4 Testing & PIN Recovery
-Phase 4 testing has been completed successfully. Re-verified all widget, unit, and integration tests, including the newly added BIP39 recovery screens (`recovery_phrase_screen_test.dart` and `enter_recovery_screen_test.dart`), and confirmed they pass cleanly with zero analyzer warnings.
-
+### ✅ Completed — Web Compatibility
+### ✅ Completed — Phase 4 Testing & PIN Recovery
 ### ✅ Completed — Cross-device Migration (Vault Export/Import)
-Fully implemented via encrypted `.mimic` binary backup files. `VaultExporter` packages all vault data (photos, notes, audio, break-in logs, recovery blob, credentials) into a checksummed binary with MMIC magic header. `VaultImporter` validates file integrity and restores data using a 12-word BIP39 recovery phrase for key derivation. Export and Import screens added to vault settings under a new "Backup" section. No cloud dependency — fully local.
+
+### 🔄 In Progress — v1.1 Multiplayer + Engagement Features
+20-prompt build plan ready. Batches A–E defined. Awaiting build start.
+
+### ⬜ Pending — Phase 6 Pre-launch Prep
+Play Store listing, signing config, obfuscation, privacy policy. Starts after v1.1 completion.
 
 ---
 
-## 13. User Preferences & Constraints
-
-- Prefers to build their own apps rather than use apps made by others
-- Android-first (iOS later)
-- Antigravity editor with Kilocode extension
-- Wants to test on Chrome during development (faster than emulator)
-- Prefers fully local storage — no cloud by default
-- Wants the disguise to be genuinely convincing, not a cheap fake
-- Agreed to update Claude on progress for re-rating after each update
-- Prefers prompts to be copyable one at a time, with confirmation before proceeding
-- Does not want Kilocode running terminal commands — code blocks only
-
----
-
-## 14. Insights & Lessons Learned
+## 16. Insights & Lessons Learned
 
 - **The game-as-disguise is the app's biggest differentiator.** Most vault apps use a fake calculator. A real playable game means the cover story is airtight even when friends use it.
 - **No backend is a feature, not a limitation.** Local-only storage is more private than any cloud vault app. Market it that way.
@@ -465,17 +607,19 @@ Fully implemented via encrypted `.mimic` binary backup files. `VaultExporter` pa
 - **The vault discovery moment matters.** The first time a user triggers the secret pattern should feel like finding a secret passage — the glitch animation into the clean white PIN screen is not optional polish, it's part of the experience.
 - **The 14-week timeline is realistic but Phase 4 (testing) must not be shortened.** A privacy app that leaks data is worse than no app at all.
 - **One cohesive visual design language binds the features.** Swapping Nunito for Creepster/Inter and establishing core dark colors binds the social deduction mechanics to a unified premium experience.
-- **Form states in scrollable views require static containment.** When building screens with many validation textfields (e.g. 12 recovery phrase inputs), standard `ListView` widgets will drop widget states for off-screen fields during scroll events. Transitioning to a combination of `SingleChildScrollView` and `Column` guarantees that all form controllers stay alive and are accessible for hit-testing in unit tests.
+- **Form states in scrollable views require static containment.** When building screens with many validation textfields (e.g. 12 recovery phrase inputs), standard `ListView` widgets will drop widget states for off-screen fields during scroll events. Use `SingleChildScrollView` + `Column` to keep all controllers alive.
 - **Binary file formats need strict validation.** The `.mimic` export format uses a magic header, version byte, and SHA-256 checksum before the JSON payload. This prevents accidental import of wrong files and catches corruption. Always validate before deserializing.
-- **file_picker v11+ removed `FilePicker.platform`.** Starting with file_picker 11.0.2, all calls must use static methods like `FilePicker.pickFiles()` directly instead of the old `FilePicker.platform.pickFiles()` pattern.
-- **sqflite tests need sqflite_common_ffi, not method channel mocks.** Mocking the `com.tekartik.sqflite` method channel is fragile and version-dependent. Using `sqflite_common_ffi` provides a real FFI-backed SQLite engine on desktop, making tests realistic and reliable. Initialize with `sqfliteFfiInit()` + `databaseFactory = databaseFactoryFfi`, then use `databaseFactory.setDatabasesPath()` to point at a temp directory.
-- **`getExternalStorageDirectory()` throws on non-Android.** Always wrap in try-catch — it raises `UnsupportedError` on Windows/macOS/Linux/web. Let it fall through to `getApplicationDocumentsDirectory()` as a safe fallback.
+- **file_picker v11+ removed `FilePicker.platform`.** Use static methods like `FilePicker.pickFiles()` directly.
+- **sqflite tests need sqflite_common_ffi, not method channel mocks.** Use `sqfliteFfiInit()` + `databaseFactory = databaseFactoryFfi` for real FFI-backed SQLite on desktop.
+- **`getExternalStorageDirectory()` throws on non-Android.** Always wrap in try-catch — falls through to `getApplicationDocumentsDirectory()` as a safe fallback.
+- **Multiplayer disguise value is underrated.** A vault app with working local voice chat between players looks nothing like a vault app. The technical complexity is exactly what makes the cover story believable.
+- **Tutorial mode is the best solo disguise.** "Just showing someone how to play" is a perfect natural cover for opening the app alone without triggering suspicion.
 
 ---
 
-## 15. How to Update This Document
+## 17. How to Update This Document
 
-This is a **living continuity document**. At the start of any new Claude session, paste this entire file to restore full context. To update it after progress:
+This is a **living continuity document**. At the start of any new Claude session, paste this entire file to restore full context.
 
 ### Step 1 — Paste this into a new Claude session
 ```
@@ -489,9 +633,9 @@ Claude will ask what was completed, what changed, and what new issues came up si
 Describe what phases or features were completed, which AI tools were used, any new files added, any bugs encountered, and any decisions made.
 
 ### Step 4 — Claude updates the document
-Claude will update all relevant sections: Quick Context Snapshot, Chronological Overview, Build Status, Open Questions, Insights, and the footer status line — then deliver the updated file for download.
+Claude will update all relevant sections and deliver the updated file for download.
 
 ---
 
 > 🎭 Built with Flutter. Designed for privacy. Disguised as fun.
-> Current status: Phases 1–4 complete · BIP39 PIN Recovery integrated · Vault Export/Import complete (6/6 tests passing) · Web compatibility active · Rating 99/100
+> Current status: Phases 1–4 complete · BIP39 PIN Recovery integrated · Vault Export/Import complete · Web compatibility active · v1.1 Multiplayer + Engagement in planning · Rating 99/100
