@@ -8,11 +8,13 @@ class DocumentVaultScreen extends ConsumerStatefulWidget {
   const DocumentVaultScreen({super.key});
 
   @override
-  ConsumerState<DocumentVaultScreen> createState() => _DocumentVaultScreenState();
+  ConsumerState<DocumentVaultScreen> createState() => DocumentVaultScreenState();
 }
 
-class _DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
+class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
   List<DocumentMeta> _documents = [];
+  List<DocumentMeta> get documents => _documents;
+  set documents(List<DocumentMeta> value) => _documents = value;
   bool _isLoading = true;
 
   @override

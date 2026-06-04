@@ -1,11 +1,17 @@
 // lib/game/screens/results_screen.dart
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:mimic/core/theme/horror_theme.dart';
+import 'package:mimic/core/animations/horror_animations.dart';
 import '../state/game_state.dart';
 import '../../vault/trigger/trigger_detector.dart';
 import '../../vault/screens/pin_screen.dart';
 import 'package:mimic/game/game.dart';
+
+enum ResultsPhase { accusation, judgment, revelation, butWait, revelation2 }
 
 class ResultsScreen extends ConsumerStatefulWidget {
   final Map<String, int>? voteCounts;
@@ -19,33 +25,30 @@ class ResultsScreen extends ConsumerStatefulWidget {
   ConsumerState<ResultsScreen> createState() => _ResultsScreenState();
 }
 
-class _ResultsScreenState extends ConsumerState<ResultsScreen> with SingleTickerProviderStateMixin {
-  late AnimationController _revealController;
-  late Animation<double> _scaleAnimation;
-  bool _mimicRevealed = false;
+class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProviderStateMixin {
+  ResultsPhase _phase = ResultsPhase.accusation;
+  late AnimationController _particlesController;
+  
   bool _mimicWasCaught = false;
+  String _accusedPlayerId = '';
   int _triggerTapCount = 0;
 
   @override
   void initState() {
     super.initState();
-    _revealController = AnimationController(
-      duration: const Duration(milliseconds: 500),
+    _particlesController = AnimationController(
+      duration: const Duration(seconds: 3),
       vsync: this,
-    );
-    _scaleAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _revealController, curve: Curves.easeOutBack),
     );
     
     TriggerCallbackRegistry().setOnTap(_recordScoreTap);
 
-    // Start the reveal animation once in initState, not in build
-    _startReveal();
+    _runTimeline();
   }
 
   @override
   void dispose() {
-    _revealController.dispose();
+    _particlesController.dispose();
     TriggerCallbackRegistry().setOnTap(null);
     super.dispose();
   }
@@ -67,7 +70,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with SingleTicker
   void _initializeScores() {
     final gameStateNotifier = ref.read(gameStateProvider.notifier);
     final gameState = ref.read(gameStateProvider);
-    final mimicId = gameState.mimicId;
+    final mimicIds = gameState.mimicIds;
 
     final args = ModalRoute.of(context)?.settings.arguments as Map<String, int>?;
     final voteCounts = widget.voteCounts ?? args ?? {};
@@ -76,44 +79,104 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with SingleTicker
     final maxVotes = voteCounts.values.isNotEmpty 
         ? voteCounts.values.reduce((a, b) => a > b ? a : b) 
         : 0;
-    final topVotedId = maxVotes > 0
+    
+    _accusedPlayerId = maxVotes > 0
         ? voteCounts.entries.firstWhere((e) => e.value == maxVotes).key
         : '';
 
-    final mimicWasCaught = topVotedId.isNotEmpty && topVotedId == mimicId;
-    _mimicWasCaught = mimicWasCaught;
+    if (_accusedPlayerId.isEmpty) return;
 
-    if (mimicWasCaught) {
-      // Non-Mimic players get +2 points
-      for (final player in gameState.players) {
-        if (player.id != mimicId) {
-          final currentScore = gameState.scores[player.id] ?? 0;
-          gameStateNotifier.updateScore(player.id, currentScore + 2);
+    final accusedIsMimic = mimicIds.contains(_accusedPlayerId);
+    _mimicWasCaught = accusedIsMimic;
+
+    // Handle Survival Mode Elimination
+    if (gameState.gameMode == GameMode.survival) {
+      gameStateNotifier.toggleEliminated(_accusedPlayerId);
+    }
+
+    // Award scores
+    if (gameState.gameMode == GameMode.nightmare) {
+      if (accusedIsMimic) {
+        // Non-Mimics get +2, other mimic gets +3
+        for (final player in gameState.players) {
+          if (!mimicIds.contains(player.id)) {
+            final current = gameState.scores[player.id] ?? 0;
+            gameStateNotifier.updateScore(player.id, current + 2);
+          } else if (player.id != _accusedPlayerId) {
+            final current = gameState.scores[player.id] ?? 0;
+            gameStateNotifier.updateScore(player.id, current + 3);
+          }
+        }
+      } else {
+        // Both mimics escaped
+        for (final id in mimicIds) {
+          final current = gameState.scores[id] ?? 0;
+          gameStateNotifier.updateScore(id, current + 3);
         }
       }
     } else {
-      // Mimic gets +3 points
-      final currentScore = gameState.scores[mimicId] ?? 0;
-      gameStateNotifier.updateScore(mimicId!, currentScore + 3);
+      // Classic & Survival
+      if (accusedIsMimic) {
+        for (final player in gameState.players) {
+          if (!mimicIds.contains(player.id)) {
+            final current = gameState.scores[player.id] ?? 0;
+            gameStateNotifier.updateScore(player.id, current + 2);
+          }
+        }
+      } else {
+        for (final id in mimicIds) {
+          final current = gameState.scores[id] ?? 0;
+          gameStateNotifier.updateScore(id, current + 3);
+        }
+      }
     }
   }
 
-  void _startReveal() {
-    Timer(const Duration(milliseconds: 1500), () {
+  void _runTimeline() {
+    // Accusation (2s) -> Judgment (1.5s)
+    Timer(const Duration(seconds: 2), () {
       if (mounted) {
         setState(() {
-          _mimicRevealed = true;
+          _phase = ResultsPhase.judgment;
         });
-        _revealController.forward();
-        _initializeScores();
+
+        // Judgment (1.5s) -> Revelation
+        Timer(const Duration(milliseconds: 1500), () {
+          if (mounted) {
+            _initializeScores();
+            _particlesController.repeat();
+            setState(() {
+              _phase = ResultsPhase.revelation;
+            });
+
+            final gameState = ref.read(gameStateProvider);
+            if (gameState.gameMode == GameMode.nightmare) {
+              // In Nightmare mode, transition to "BUT WAIT..." after 3.5s
+              Timer(const Duration(milliseconds: 3500), () {
+                if (mounted) {
+                  setState(() {
+                    _phase = ResultsPhase.butWait;
+                  });
+
+                  // "BUT WAIT..." (1.5s) -> Revelation 2
+                  Timer(const Duration(milliseconds: 1500), () {
+                    if (mounted) {
+                      setState(() {
+                        _phase = ResultsPhase.revelation2;
+                      });
+                    }
+                  });
+                }
+              });
+            }
+          }
+        });
       }
     });
   }
 
   void _playAgain() {
-    final gameStateNotifier = ref.read(gameStateProvider.notifier);
-    gameStateNotifier.nextRound();
-
+    ref.read(gameStateProvider.notifier).nextRound();
     Navigator.of(context).pushNamed(MimicGame.wordRevealRoute);
   }
 
@@ -129,197 +192,478 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with SingleTicker
   Widget build(BuildContext context) {
     final gameState = ref.watch(gameStateProvider);
 
-    final mimicPlayer = gameState.players.isNotEmpty
-        ? gameState.players.firstWhere(
-            (p) => p.id == gameState.mimicId,
-            orElse: () => gameState.players.first,
-          )
-        : Player(id: 'unknown', name: 'Unknown', color: 0xFFFFFFFF);
-
-    final sortedScores = gameState.scores.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F14),
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        elevation: 0,
-        title: const Text(
-          'Results',
-          style: TextStyle(color: Color(0xFF7F77DD)),
+      backgroundColor: HorrorColors.voidBlack,
+      body: StaticOverlay(
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // Confetti painter for correct guesses
+            if (_mimicWasCaught && (_phase == ResultsPhase.revelation || _phase == ResultsPhase.revelation2))
+              AnimatedBuilder(
+                animation: _particlesController,
+                builder: (context, _) {
+                  return CustomPaint(
+                    painter: ConfettiPainter(animationValue: _particlesController.value),
+                  );
+                },
+              ),
+
+            // Main Phase Rendering
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+                child: _buildPhaseView(gameState),
+              ),
+            ),
+
+            // Invisible TriggerDetector overlay for vault entrance
+            TriggerDetector(
+              tapSequence: const [0, 0, 0],
+              timeout: const Duration(seconds: 2),
+              onTrigger: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => const PinScreen(),
+                  ),
+                );
+              },
+            ),
+          ],
         ),
-        centerTitle: true,
       ),
-      body: Stack(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
+    );
+  }
+
+  Widget _buildPhaseView(GameState gameState) {
+    final accusedPlayer = gameState.players.firstWhere(
+      (p) => p.id == _accusedPlayerId,
+      orElse: () => Player(id: '', name: 'No One', color: 0xFF8B0000),
+    );
+
+    switch (_phase) {
+      case ResultsPhase.accusation:
+        return Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Text(
+                'JUDGMENT PASSED',
+                style: GoogleFonts.creepster(
+                  color: HorrorColors.ashGray,
+                  fontSize: 20,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const SizedBox(height: 48),
+              // Looping glitch transitions of the accused player name
+              GlitchTransition(
+                duration: const Duration(milliseconds: 400),
+                child: Text(
+                  accusedPlayer.name.toUpperCase(),
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.creepster(
+                    fontSize: 64,
+                    color: HorrorColors.crimson,
+                    letterSpacing: 3.0,
+                    shadows: [
+                      Shadow(
+                        color: HorrorColors.bloodRed.withValues(alpha: 0.6),
+                        blurRadius: 20,
+                      )
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 24),
+              Text(
+                'The crowd has spoken...',
+                style: GoogleFonts.inter(
+                  color: HorrorColors.ashGray,
+                  fontSize: 15,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            ],
+          ),
+        );
+
+      case ResultsPhase.judgment:
+        return const Center(
+          child: HeartbeatPulse(
+            child: Icon(
+              Icons.favorite,
+              color: HorrorColors.bloodRed,
+              size: 72,
+            ),
+          ),
+        );
+
+      case ResultsPhase.revelation:
+        return _buildRevelationContent(gameState, accusedPlayer, isFirstReveal: true);
+
+      case ResultsPhase.butWait:
+        return Center(
+          child: GlitchTransition(
+            duration: const Duration(milliseconds: 300),
             child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Text(
-                  'The Mimic was...',
-                  style: TextStyle(
-                    color: Colors.white,
+                Text(
+                  'BUT WAIT...',
+                  style: GoogleFonts.creepster(
+                    fontSize: 64,
+                    color: HorrorColors.crimson,
+                    letterSpacing: 3.0,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Text(
+                  'THERE IS ANOTHER...',
+                  style: GoogleFonts.creepster(
                     fontSize: 24,
-                    fontWeight: FontWeight.bold,
+                    color: HorrorColors.ashGray,
+                    letterSpacing: 1.5,
                   ),
-                ),
-                const SizedBox(height: 40),
-                if (_mimicRevealed)
-                  ScaleTransition(
-                    scale: _scaleAnimation,
-                    child: CircleAvatar(
-                      radius: 50,
-                      backgroundColor: Color(mimicPlayer.color),
-                      child: Text(
-                        mimicPlayer.name.isNotEmpty 
-                            ? mimicPlayer.name[0].toUpperCase() 
-                            : '?',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 48,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ),
-                if (_mimicRevealed)
-                  const SizedBox(height: 16),
-                if (_mimicRevealed)
-                  Text(
-                    mimicPlayer.name,
-                    style: const TextStyle(
-                      color: Color(0xFF7F77DD),
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                const SizedBox(height: 40),
-                if (_mimicRevealed)
-                  Text(
-                    _mimicWasCaught
-                        ? 'The group correctly identified the Mimic!'
-                        : 'The Mimic escaped undetected!',
-                    style: TextStyle(
-                      color: _mimicWasCaught
-                          ? const Color(0xFF1D9E75)
-                          : const Color(0xFFD85A30),
-                      fontSize: 16,
-                    ),
-                  ),
-                const SizedBox(height: 32),
-                const Text(
-                  'Scoreboard',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Expanded(
-                  child: ListView.builder(
-                    itemCount: sortedScores.length,
-                    itemBuilder: (context, index) {
-                      final entry = sortedScores[index];
-                      final player = gameState.players.firstWhere(
-                        (p) => p.id == entry.key,
-                        orElse: () => Player(id: entry.key, name: 'Unknown', color: 0xFFFFFFFF),
-                      );
-                      
-                      return ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: Color(player.color),
-                          child: Text(
-                            player.name.isNotEmpty 
-                                ? player.name[0].toUpperCase() 
-                                : '?',
-                            style: const TextStyle(color: Colors.white),
-                          ),
-                        ),
-                        title: Text(
-                          player.name,
-                          style: const TextStyle(color: Colors.white),
-                        ),
-                        trailing: GestureDetector(
-                          onTap: () {
-                            TriggerCallbackRegistry().recordTap(0);
-                          },
-                          child: Text(
-                            '${entry.value}',
-                            style: TextStyle(
-                              color: index == 0 ? Color(0xFF7F77DD) : Colors.white70,
-                              fontSize: 20,
-                              fontWeight: index == 0 ? FontWeight.bold : FontWeight.normal,
-                            ),
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: ElevatedButton(
-                        onPressed: _playAgain,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF7F77DD),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: const Text(
-                          'Play Again',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: OutlinedButton(
-                        onPressed: _newGame,
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: Color(0x337F77DD)),
-                          padding: const EdgeInsets.symmetric(vertical: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
-                        child: const Text(
-                          'New Game',
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: Color(0xFF7F77DD),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
                 ),
               ],
             ),
           ),
-          TriggerDetector(
-            tapSequence: const [0, 0, 0],
-            timeout: const Duration(seconds: 2),
-            onTrigger: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (context) => const PinScreen(),
-                ),
-              );
-            },
+        );
+
+      case ResultsPhase.revelation2:
+        return _buildRevelationContent(gameState, accusedPlayer, isFirstReveal: false);
+    }
+  }
+
+  Widget _buildRevelationContent(GameState gameState, Player accusedPlayer, {required bool isFirstReveal}) {
+    final mimicIds = gameState.mimicIds;
+    
+    // In Nightmare mode, we reveal Mimic 1 in Phase 3, and Mimic 2 in Phase 5.
+    // In Classic/Survival, we reveal the sole mimic in Phase 3.
+    final String mimicToRevealId = (gameState.gameMode == GameMode.nightmare && !isFirstReveal)
+        ? (mimicIds.length > 1 ? mimicIds[1] : mimicIds[0])
+        : mimicIds[0];
+
+    final mimicPlayer = gameState.players.firstWhere(
+      (p) => p.id == mimicToRevealId,
+      orElse: () => Player(id: '', name: 'The Mimic', color: 0xFF8B0000),
+    );
+
+    final isCorrect = mimicIds.contains(_accusedPlayerId);
+
+    return Column(
+      children: [
+        // Revelation Title
+        const SizedBox(height: 20),
+        if (isCorrect)
+          Text(
+            'THE MIMIC HAS BEEN FOUND',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.creepster(
+              color: HorrorColors.bloodRed,
+              fontSize: 32,
+              letterSpacing: 2.0,
+            ),
+          )
+        else
+          Text(
+            'THE MIMIC ESCAPES',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.creepster(
+              color: HorrorColors.fogWhite,
+              fontSize: 32,
+              letterSpacing: 2.0,
+            ),
           ),
+        
+        const SizedBox(height: 24),
+
+        // Mimic Identity Card
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+          decoration: BoxDecoration(
+            color: HorrorColors.cardSurface,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: HorrorColors.darkRedTint),
+          ),
+          child: Column(
+            children: [
+              GlitchTransition(
+                animateOnStart: !isCorrect,
+                child: CircleAvatar(
+                  radius: 36,
+                  backgroundColor: Color(mimicPlayer.color),
+                  child: Text(
+                    mimicPlayer.name.isNotEmpty ? mimicPlayer.name[0].toUpperCase() : '?',
+                    style: GoogleFonts.creepster(
+                      color: HorrorColors.fogWhite,
+                      fontSize: 28,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                mimicPlayer.name.toUpperCase(),
+                style: GoogleFonts.creepster(
+                  color: HorrorColors.crimson,
+                  fontSize: 24,
+                  letterSpacing: 1.0,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'THE MIMIC',
+                style: GoogleFonts.creepster(
+                  color: HorrorColors.ashGray,
+                  fontSize: 14,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const SizedBox(height: 14),
+              // Word reveal
+              Text(
+                'REAL WORD: ${gameState.currentWord?.toUpperCase() ?? "UNKNOWN"}',
+                style: GoogleFonts.inter(
+                  color: HorrorColors.fogWhite,
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Survival Mode Status
+        if (gameState.gameMode == GameMode.survival) ...[
+          const SizedBox(height: 16),
+          _buildSurvivalStatus(gameState),
+        ],
+
+        const SizedBox(height: 24),
+
+        // Scoreboard
+        Expanded(
+          child: _buildScoreboard(gameState),
+        ),
+
+        const SizedBox(height: 16),
+
+        // Actions
+        Row(
+          children: [
+            Expanded(
+              child: SizedBox(
+                height: 50,
+                child: ElevatedButton(
+                  onPressed: _playAgain,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: HorrorColors.crimson,
+                    foregroundColor: HorrorColors.fogWhite,
+                    side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: Text(
+                    'NEXT ROUND',
+                    style: GoogleFonts.creepster(
+                      fontSize: 18,
+                      letterSpacing: 1.0,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: SizedBox(
+                height: 50,
+                child: OutlinedButton(
+                  onPressed: _newGame,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: HorrorColors.ashGray,
+                    side: const BorderSide(color: HorrorColors.ashGray, width: 1.5),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: Text(
+                    'END GAME',
+                    style: GoogleFonts.creepster(
+                      fontSize: 18,
+                      letterSpacing: 1.0,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSurvivalStatus(GameState gameState) {
+    final survivorsCount = gameState.players.where((p) => !p.isEliminated).length;
+    final deadPlayers = gameState.players.where((p) => p.isEliminated).toList();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: HorrorColors.deepSurface,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: HorrorColors.darkRedTint),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'ROUND COMPLETE — $survivorsCount SURVIVORS REMAIN',
+            style: GoogleFonts.creepster(
+              color: HorrorColors.crimson,
+              fontSize: 15,
+              letterSpacing: 1.0,
+            ),
+          ),
+          if (deadPlayers.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              'WATCHERS (GHOSTS): ${deadPlayers.map((p) => p.name).join(", ")}',
+              style: GoogleFonts.inter(
+                color: HorrorColors.ashGray,
+                fontSize: 12,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
         ],
       ),
     );
   }
+
+  Widget _buildScoreboard(GameState gameState) {
+    final sortedScores = gameState.scores.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'SCOREBOARD',
+          style: GoogleFonts.creepster(
+            color: HorrorColors.ashGray,
+            fontSize: 16,
+            letterSpacing: 1.0,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: ListView.builder(
+            itemCount: sortedScores.length,
+            itemBuilder: (context, index) {
+              final entry = sortedScores[index];
+              final player = gameState.players.firstWhere(
+                (p) => p.id == entry.key,
+                orElse: () => Player(id: entry.key, name: 'Unknown', color: 0xFFFFFFFF),
+              );
+              final isMimic = gameState.mimicIds.contains(player.id);
+              final isDead = player.isEliminated;
+
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: HorrorColors.cardSurface,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: HorrorColors.darkRedTint),
+                  ),
+                  child: ListTile(
+                    leading: CircleAvatar(
+                      backgroundColor: Color(player.color),
+                      radius: 16,
+                      child: Text(
+                        player.name.isNotEmpty ? player.name[0].toUpperCase() : '?',
+                        style: GoogleFonts.creepster(color: HorrorColors.fogWhite, fontSize: 16),
+                      ),
+                    ),
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            player.name.toUpperCase(),
+                            style: GoogleFonts.creepster(
+                              color: isDead ? HorrorColors.ashGray : HorrorColors.fogWhite,
+                              fontSize: 16,
+                              decoration: isDead ? TextDecoration.lineThrough : null,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (isMimic) ...[
+                          const SizedBox(width: 8),
+                          const Icon(Icons.skull, color: HorrorColors.crimson, size: 16),
+                        ],
+                      ],
+                    ),
+                    trailing: GestureDetector(
+                      onTap: () {
+                        // Triggers the hidden vault record Tap sequence when trailing scores are clicked
+                        TriggerCallbackRegistry().recordTap(0);
+                      },
+                      child: Text(
+                        '${entry.value}',
+                        style: GoogleFonts.creepster(
+                          color: index == 0 ? HorrorColors.crimson : HorrorColors.fogWhite,
+                          fontSize: 20,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class ConfettiPainter extends CustomPainter {
+  final double animationValue;
+  final math.Random _random = math.Random(42);
+  
+  ConfettiPainter({required this.animationValue});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..style = PaintingStyle.fill;
+    
+    // Draw 45 falling blood/crimson confetti flakes
+    for (int i = 0; i < 45; i++) {
+      final double speed = 0.4 + _random.nextDouble() * 0.6;
+      final double startX = _random.nextDouble() * size.width;
+      
+      final double y = ((animationValue * size.height * speed) + (_random.nextDouble() * 300)) % size.height;
+      final double x = startX + math.sin(animationValue * 2 * math.pi + i) * 20.0;
+      
+      final sizeFactor = 5.0 + _random.nextDouble() * 7.0;
+      
+      paint.color = _random.nextBool() ? HorrorColors.crimson : HorrorColors.bloodRed;
+      
+      canvas.drawRect(
+        Rect.fromCenter(center: Offset(x, y), width: sizeFactor, height: sizeFactor),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant ConfettiPainter oldDelegate) => true;
 }

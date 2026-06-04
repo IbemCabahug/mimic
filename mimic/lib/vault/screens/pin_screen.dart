@@ -10,6 +10,7 @@ import '../services/file_vault_service.dart';
 import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
 import '../security/breakin_log.dart';
+import 'enter_recovery_screen.dart';
 
 class PinScreen extends ConsumerStatefulWidget {
   const PinScreen({super.key});
@@ -25,12 +26,27 @@ class _PinScreenState extends ConsumerState<PinScreen> {
   String? _error;
   bool _isLoading = false;
   bool _biometricAvailable = false;
+  int _failedAttempts = 0;
 
   @override
   void initState() {
     super.initState();
     _crypto = ref.read(vaultCryptoProvider);
     _checkBiometricAvailability();
+    _loadWrongAttempts();
+  }
+
+  Future<void> _loadWrongAttempts() async {
+    if (kIsWeb) return;
+    try {
+      final stored = await ref.read(platformServiceProvider).secureRead('wrong_attempts');
+      final count = int.tryParse(stored ?? '') ?? 0;
+      if (mounted) {
+        setState(() {
+          _failedAttempts = count;
+        });
+      }
+    } catch (_) {}
   }
 
   Future<void> _checkBiometricAvailability() async {
@@ -95,7 +111,10 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           await ref.read(platformServiceProvider).secureWrite('wrong_attempts', '0');
         }
         if (localContext.mounted && mounted) {
-          setState(() => _error = null);
+          setState(() {
+            _error = null;
+            _failedAttempts = 0;
+          });
           
           // Initialize PanicMode shake detector and AutoLock inactivity timer
           PanicMode().init(localContext, ref);
@@ -110,8 +129,24 @@ class _PinScreenState extends ConsumerState<PinScreen> {
             final currentCount = (int.tryParse(stored ?? '') ?? 0) + 1;
             await ref.read(platformServiceProvider).secureWrite('wrong_attempts', currentCount.toString());
             await BreakInLogService.recordAttempt(currentCount, _crypto);
+            if (mounted) {
+              setState(() {
+                _failedAttempts = currentCount;
+              });
+            }
           } catch (ex) {
             debugPrint('Failed to save wrong attempts log: $ex');
+            if (mounted) {
+              setState(() {
+                _failedAttempts++;
+              });
+            }
+          }
+        } else {
+          if (mounted) {
+            setState(() {
+              _failedAttempts++;
+            });
           }
         }
         if (mounted) {
@@ -273,6 +308,23 @@ class _PinScreenState extends ConsumerState<PinScreen> {
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                     ),
             ),
+            if (_failedAttempts >= 3) ...[
+              const SizedBox(height: 12),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pushNamed('/vault-enter-recovery');
+                },
+                child: const Text(
+                  'Forgot PIN?',
+                  style: TextStyle(
+                    color: Color(0xFF7F77DD),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'Inter',
+                  ),
+                ),
+              ),
+            ],
             if (!kIsWeb) ...[
               const SizedBox(height: 32),
               OutlinedButton.icon(

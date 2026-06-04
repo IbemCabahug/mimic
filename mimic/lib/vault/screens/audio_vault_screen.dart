@@ -211,67 +211,70 @@ class _AudioVaultScreenState extends ConsumerState<AudioVaultScreen> {
                             ),
                           ],
                         ),
-                        child: ListTile(
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                          leading: Container(
-                            width: 48,
-                            height: 48,
-                            decoration: const BoxDecoration(
-                              color: VaultColors.accent,
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              isPlaying ? Icons.pause : Icons.play_arrow,
-                              color: Colors.white,
-                            ),
-                          ),
-                          title: Text(
-                            recording.title,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: VaultColors.textPrimary,
-                              fontFamily: 'Inter',
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          subtitle: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const SizedBox(height: 4),
-                              Text(
-                                _formatDuration(recording.durationMs),
-                                style: const TextStyle(
-                                  fontSize: 13,
-                                  color: VaultColors.textSecondary,
-                                  fontFamily: 'Inter',
-                                ),
+                        child: Material(
+                          color: Colors.transparent,
+                          child: ListTile(
+                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                            leading: Container(
+                              width: 48,
+                              height: 48,
+                              decoration: const BoxDecoration(
+                                color: VaultColors.accent,
+                                shape: BoxShape.circle,
                               ),
-                              const SizedBox(height: 4),
-                              Text(
-                                _formatDate(recording.createdAt),
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: VaultColors.textTertiary.withValues(alpha: 0.8),
-                                  fontFamily: 'Inter',
-                                ),
+                              child: Icon(
+                                isPlaying ? Icons.pause : Icons.play_arrow,
+                                color: Colors.white,
                               ),
-                              if (isPlaying) ...[
-                                const SizedBox(height: 8),
-                                ClipRRect(
-                                  borderRadius: BorderRadius.circular(4),
-                                  child: LinearProgressIndicator(
-                                    value: _playbackProgress,
-                                    backgroundColor: const Color(0xFFE0E0E0),
-                                    valueColor: const AlwaysStoppedAnimation<Color>(VaultColors.accent),
-                                    minHeight: 4,
+                            ),
+                            title: Text(
+                              recording.title,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                                color: VaultColors.textPrimary,
+                                fontFamily: 'Inter',
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const SizedBox(height: 4),
+                                Text(
+                                  _formatDuration(recording.durationMs),
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    color: VaultColors.textSecondary,
+                                    fontFamily: 'Inter',
                                   ),
                                 ),
+                                const SizedBox(height: 4),
+                                Text(
+                                  _formatDate(recording.createdAt),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: VaultColors.textTertiary.withValues(alpha: 0.8),
+                                    fontFamily: 'Inter',
+                                  ),
+                                ),
+                                if (isPlaying) ...[
+                                  const SizedBox(height: 8),
+                                  ClipRRect(
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: LinearProgressIndicator(
+                                      value: _playbackProgress,
+                                      backgroundColor: const Color(0xFFE0E0E0),
+                                      valueColor: const AlwaysStoppedAnimation<Color>(VaultColors.accent),
+                                      minHeight: 4,
+                                    ),
+                                  ),
+                                ],
                               ],
-                            ],
+                            ),
+                            onTap: () => _playRecording(recording),
                           ),
-                          onTap: () => _playRecording(recording),
                         ),
                       ),
                     );

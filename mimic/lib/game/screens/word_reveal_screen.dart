@@ -1,10 +1,17 @@
 // lib/game/screens/word_reveal_screen.dart
 import 'dart:async';
-import 'dart:math';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../state/game_state.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:mimic/core/theme/horror_theme.dart';
+import 'package:mimic/core/animations/horror_animations.dart';
+import 'package:mimic/game/data/word_packs.dart';
+import 'package:mimic/game/state/game_state.dart';
+import 'package:mimic/game/widgets/suspicion_meter.dart';
 import 'package:mimic/game/game.dart';
+
+enum RevealState { cover, revealed, pass }
 
 class WordRevealScreen extends ConsumerStatefulWidget {
   const WordRevealScreen({super.key});
@@ -15,133 +22,38 @@ class WordRevealScreen extends ConsumerStatefulWidget {
 
 class _WordRevealScreenState extends ConsumerState<WordRevealScreen> {
   int _currentIndex = 0;
-  bool _wordRevealed = false;
-  Timer? _revealTimer;
-  late String _selectedWord;
-  late String _mimicWord;
-  late String _category;
-
-  // Expanded word pool organized by categories
-  static const Map<String, List<Map<String, String>>> _wordCategories = {
-    '🌍 Places': [
-      {'real': 'Ocean', 'mimic': 'Lake'},
-      {'real': 'Mountain', 'mimic': 'Hill'},
-      {'real': 'Forest', 'mimic': 'Grove'},
-      {'real': 'Desert', 'mimic': 'Savanna'},
-      {'real': 'River', 'mimic': 'Stream'},
-      {'real': 'Castle', 'mimic': 'Mansion'},
-      {'real': 'Beach', 'mimic': 'Shore'},
-      {'real': 'Volcano', 'mimic': 'Geyser'},
-      {'real': 'Island', 'mimic': 'Peninsula'},
-      {'real': 'Cave', 'mimic': 'Tunnel'},
-    ],
-    '🍕 Food': [
-      {'real': 'Pizza', 'mimic': 'Calzone'},
-      {'real': 'Sushi', 'mimic': 'Sashimi'},
-      {'real': 'Burger', 'mimic': 'Sandwich'},
-      {'real': 'Pasta', 'mimic': 'Noodles'},
-      {'real': 'Cake', 'mimic': 'Pie'},
-      {'real': 'Taco', 'mimic': 'Burrito'},
-      {'real': 'Soup', 'mimic': 'Stew'},
-      {'real': 'Donut', 'mimic': 'Bagel'},
-      {'real': 'Pancake', 'mimic': 'Waffle'},
-      {'real': 'Ice Cream', 'mimic': 'Gelato'},
-    ],
-    '🎭 Actions': [
-      {'real': 'Dancing', 'mimic': 'Swaying'},
-      {'real': 'Swimming', 'mimic': 'Floating'},
-      {'real': 'Running', 'mimic': 'Jogging'},
-      {'real': 'Singing', 'mimic': 'Humming'},
-      {'real': 'Painting', 'mimic': 'Drawing'},
-      {'real': 'Flying', 'mimic': 'Gliding'},
-      {'real': 'Climbing', 'mimic': 'Hiking'},
-      {'real': 'Cooking', 'mimic': 'Baking'},
-      {'real': 'Sleeping', 'mimic': 'Napping'},
-      {'real': 'Jumping', 'mimic': 'Hopping'},
-    ],
-    '🐾 Animals': [
-      {'real': 'Lion', 'mimic': 'Tiger'},
-      {'real': 'Eagle', 'mimic': 'Hawk'},
-      {'real': 'Dolphin', 'mimic': 'Porpoise'},
-      {'real': 'Wolf', 'mimic': 'Fox'},
-      {'real': 'Bear', 'mimic': 'Panda'},
-      {'real': 'Horse', 'mimic': 'Donkey'},
-      {'real': 'Shark', 'mimic': 'Whale'},
-      {'real': 'Owl', 'mimic': 'Raven'},
-      {'real': 'Rabbit', 'mimic': 'Hare'},
-      {'real': 'Frog', 'mimic': 'Toad'},
-    ],
-    '🎬 Movies': [
-      {'real': 'Batman', 'mimic': 'Superman'},
-      {'real': 'Harry Potter', 'mimic': 'Lord of the Rings'},
-      {'real': 'Titanic', 'mimic': 'Poseidon'},
-      {'real': 'Star Wars', 'mimic': 'Star Trek'},
-      {'real': 'Frozen', 'mimic': 'Tangled'},
-      {'real': 'Avengers', 'mimic': 'Justice League'},
-      {'real': 'Toy Story', 'mimic': 'Monsters Inc'},
-      {'real': 'Matrix', 'mimic': 'Inception'},
-      {'real': 'Jaws', 'mimic': 'Piranha'},
-      {'real': 'Rocky', 'mimic': 'Rambo'},
-    ],
-    '🏢 Objects': [
-      {'real': 'Guitar', 'mimic': 'Ukulele'},
-      {'real': 'Bicycle', 'mimic': 'Scooter'},
-      {'real': 'Laptop', 'mimic': 'Tablet'},
-      {'real': 'Umbrella', 'mimic': 'Parasol'},
-      {'real': 'Mirror', 'mimic': 'Window'},
-      {'real': 'Piano', 'mimic': 'Organ'},
-      {'real': 'Candle', 'mimic': 'Lantern'},
-      {'real': 'Sword', 'mimic': 'Dagger'},
-      {'real': 'Crown', 'mimic': 'Tiara'},
-      {'real': 'Telescope', 'mimic': 'Binoculars'},
-    ],
-  };
-
-  @override
-  void initState() {
-    super.initState();
-    _pickRandomWord();
-  }
-
-  void _pickRandomWord() {
-    final random = Random();
-    final categories = _wordCategories.keys.toList();
-    _category = categories[random.nextInt(categories.length)];
-    final words = _wordCategories[_category]!;
-    final wordPair = words[random.nextInt(words.length)];
-    _selectedWord = wordPair['real']!;
-    _mimicWord = wordPair['mimic']!;
-
-    // Store the word in game state for reference
-    ref.read(gameStateProvider.notifier).setCurrentWord(_selectedWord);
-  }
+  RevealState _revealState = RevealState.cover;
+  Timer? _timer;
 
   @override
   void dispose() {
-    _revealTimer?.cancel();
+    _timer?.cancel();
     super.dispose();
   }
 
   void _revealWord() {
     setState(() {
-      _wordRevealed = true;
+      _revealState = RevealState.revealed;
     });
-    _revealTimer = Timer(const Duration(seconds: 3), () {
+
+    _timer?.cancel();
+    // 3-second auto-hide timer before showing the pass device screen
+    _timer = Timer(const Duration(seconds: 3), () {
       if (mounted) {
         setState(() {
-          _wordRevealed = false;
+          _revealState = RevealState.pass;
         });
       }
     });
   }
 
   void _nextPlayer() {
-    _revealTimer?.cancel();
+    _timer?.cancel();
     final gameState = ref.read(gameStateProvider);
     if (_currentIndex < gameState.players.length - 1) {
       setState(() {
         _currentIndex++;
-        _wordRevealed = false;
+        _revealState = RevealState.cover;
       });
     } else {
       Navigator.of(context).pushNamed(MimicGame.discussionRoute);
@@ -154,167 +66,249 @@ class _WordRevealScreenState extends ConsumerState<WordRevealScreen> {
 
     if (gameState.players.isEmpty) {
       return const Scaffold(
-        backgroundColor: Color(0xFF0F0F14),
-        body: Center(child: Text('No players', style: TextStyle(color: Colors.white))),
+        backgroundColor: HorrorColors.voidBlack,
+        body: Center(
+          child: Text('No players present.', style: TextStyle(color: HorrorColors.fogWhite)),
+        ),
       );
     }
 
     final currentPlayer = gameState.players[_currentIndex];
-    final isMimic = currentPlayer.id == gameState.mimicId;
-    final wordToShow = isMimic ? _mimicWord : _selectedWord;
-
-    final allPlayersViewed = _currentIndex >= gameState.players.length - 1 && !_wordRevealed;
+    // In Nightmare mode, there are 2 mimics. Check if player is one of them.
+    final isMimic = gameState.mimicIds.contains(currentPlayer.id);
+    
+    // Retrieve player's specific word dynamically from Riverpod state
+    final wordToShow = gameState.getWordForPlayer(currentPlayer.id);
+    final category = gameState.currentCategory;
+    final isLastPlayer = _currentIndex >= gameState.players.length - 1;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F14),
+      backgroundColor: HorrorColors.voidBlack,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         title: Text(
-          '${_currentIndex + 1}/${gameState.players.length}',
-          style: const TextStyle(color: Color(0xFF7F77DD)),
+          'VICTIM ${_currentIndex + 1} OF ${gameState.players.length}',
+          style: GoogleFonts.creepster(
+            color: HorrorColors.crimson,
+            fontSize: 20,
+            letterSpacing: 1.5,
+          ),
         ),
         centerTitle: true,
+        automaticallyImplyLeading: false,
       ),
-      body: Center(
+      body: StaticOverlay(
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Category badge
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-              decoration: BoxDecoration(
-                color: const Color(0xFF7F77DD).withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(20),
-              ),
-              child: Text(
-                _category,
-                style: const TextStyle(
-                  fontSize: 14,
-                  color: Color(0xFF7F77DD),
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-            const SizedBox(height: 24),
-            // Player avatar
-            CircleAvatar(
-              radius: 36,
-              backgroundColor: Color(currentPlayer.color),
-              child: Text(
-                currentPlayer.name.isNotEmpty
-                    ? currentPlayer.name[0].toUpperCase()
-                    : '?',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            const SizedBox(height: 12),
-            Text(
-              currentPlayer.name,
-              style: const TextStyle(
-                fontSize: 28,
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Pass the phone to this player',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.white.withValues(alpha: 0.4),
-              ),
-            ),
-            const SizedBox(height: 40),
-            if (_wordRevealed)
-              AnimatedOpacity(
-                opacity: _wordRevealed ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 300),
-                child: Column(
-                  children: [
-                    Text(
-                      wordToShow,
-                      style: const TextStyle(
-                        fontSize: 44,
-                        color: Color(0xFF7F77DD),
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      isMimic ? 'You are the Mimic!' : 'Remember your word!',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: isMimic
-                            ? const Color(0xFFD85A30)
-                            : const Color(0xFF1D9E75),
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              )
-            else
-              Text(
-                'Tap to reveal your word',
-                style: TextStyle(
-                  fontSize: 18,
-                  color: Colors.white.withValues(alpha: 0.5),
-                ),
-              ),
-            const SizedBox(height: 40),
-            if (!_wordRevealed)
-              ElevatedButton(
-                onPressed: _revealWord,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF7F77DD),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 32,
-                    vertical: 16,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: const Text(
-                  'Reveal',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              )
-            else
-              ElevatedButton(
-                onPressed: _nextPlayer,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF7F77DD),
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 32,
-                    vertical: 16,
-                  ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
+            // Survival Mode Round Indicator
+            if (gameState.gameMode == GameMode.survival)
+              Padding(
+                padding: const EdgeInsets.only(top: 8.0),
                 child: Text(
-                  allPlayersViewed ? 'Start Discussion' : 'Next Player',
-                  style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
+                  'ROUND ${gameState.currentRound + 1}',
+                  style: GoogleFonts.creepster(
+                    color: HorrorColors.crimson,
+                    fontSize: 22,
+                    letterSpacing: 2.0,
                   ),
                 ),
               ),
+            
+            Expanded(
+              child: _buildStateContent(
+                currentPlayer: currentPlayer,
+                wordToShow: wordToShow,
+                category: category,
+                isMimic: isMimic,
+                isLastPlayer: isLastPlayer,
+              ),
+            ),
           ],
         ),
       ),
     );
+  }
+
+  Widget _buildStateContent({
+    required Player currentPlayer,
+    required String wordToShow,
+    required String category,
+    required bool isMimic,
+    required bool isLastPlayer,
+  }) {
+    switch (_revealState) {
+      case RevealState.cover:
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: _revealWord,
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                CircleAvatar(
+                  radius: 40,
+                  backgroundColor: Color(currentPlayer.color),
+                  child: Text(
+                    currentPlayer.name.isNotEmpty ? currentPlayer.name[0].toUpperCase() : '?',
+                    style: GoogleFonts.creepster(
+                      color: HorrorColors.fogWhite,
+                      fontSize: 32,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  currentPlayer.name.toUpperCase(),
+                  style: GoogleFonts.creepster(
+                    fontSize: 40,
+                    color: HorrorColors.fogWhite,
+                    letterSpacing: 2.0,
+                  ),
+                ),
+                const SizedBox(height: 40),
+                HeartbeatPulse(
+                  child: Text(
+                    'TAP TO SEE YOUR FATE',
+                    style: GoogleFonts.creepster(
+                      fontSize: 22,
+                      color: HorrorColors.ashGray,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+
+      case RevealState.revealed:
+        return GlitchTransition(
+          duration: const Duration(milliseconds: 200),
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Category badge
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: HorrorColors.crimson.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: HorrorColors.crimson, width: 0.8),
+                  ),
+                  child: Text(
+                    category.toUpperCase(),
+                    style: GoogleFonts.creepster(
+                      fontSize: 14,
+                      color: HorrorColors.crimson,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 48),
+                FlickerWidget(
+                  child: Text(
+                    wordToShow.toUpperCase(),
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.creepster(
+                      fontSize: 56,
+                      color: isMimic ? HorrorColors.bloodRed : HorrorColors.crimson,
+                      letterSpacing: 3.0,
+                      shadows: [
+                        Shadow(
+                          color: HorrorColors.crimson.withValues(alpha: 0.5),
+                          blurRadius: 15,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                if (isMimic)
+                  Text(
+                    'YOU ARE THE MIMIC',
+                    style: GoogleFonts.creepster(
+                      fontSize: 20,
+                      color: HorrorColors.ashGray,
+                      letterSpacing: 1.5,
+                    ),
+                  )
+                else
+                  Text(
+                    'REMEMBER YOUR WORD',
+                    style: GoogleFonts.creepster(
+                      fontSize: 16,
+                      color: HorrorColors.ashGray,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        );
+
+      case RevealState.pass:
+        final nextPlayerName = _currentIndex < ref.read(gameStateProvider).players.length - 1
+            ? ref.read(gameStateProvider).players[_currentIndex + 1].name
+            : '';
+
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32.0),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  'PASS THE DEVICE',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.creepster(
+                    fontSize: 48,
+                    color: HorrorColors.ashGray,
+                    letterSpacing: 2.0,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  isLastPlayer
+                      ? 'Hand the device back to the group to begin discussion.'
+                      : 'Hand the device to $nextPlayerName and make sure they do not see the screen.',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.inter(
+                    fontSize: 15,
+                    color: HorrorColors.ashGray,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 48),
+                SizedBox(
+                  width: 220,
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: _nextPlayer,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: HorrorColors.crimson,
+                      foregroundColor: HorrorColors.fogWhite,
+                      side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                    ),
+                    child: Text(
+                      isLastPlayer ? 'START DISCUSSION' : 'PROCEED',
+                      style: GoogleFonts.creepster(
+                        fontSize: 20,
+                        letterSpacing: 1.5,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+    }
   }
 }
 
@@ -328,6 +322,7 @@ class DiscussionScreen extends ConsumerStatefulWidget {
 class _DiscussionScreenState extends ConsumerState<DiscussionScreen> {
   late Timer _timer;
   int _secondsRemaining = 90;
+  bool _screenFlash = false;
 
   @override
   void initState() {
@@ -337,6 +332,20 @@ class _DiscussionScreenState extends ConsumerState<DiscussionScreen> {
         setState(() {
           _secondsRemaining--;
         });
+        
+        // At 10 seconds: trigger a brief visual screen flash
+        if (_secondsRemaining == 10) {
+          setState(() {
+            _screenFlash = true;
+          });
+          Future.delayed(const Duration(milliseconds: 150), () {
+            if (mounted) {
+              setState(() {
+                _screenFlash = false;
+              });
+            }
+          });
+        }
       } else {
         timer.cancel();
         Navigator.of(context).pushNamed(MimicGame.votingRoute);
@@ -359,164 +368,225 @@ class _DiscussionScreenState extends ConsumerState<DiscussionScreen> {
   @override
   Widget build(BuildContext context) {
     final gameState = ref.watch(gameStateProvider);
+    final isLowTime = _secondsRemaining <= 30;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F14),
+      backgroundColor: HorrorColors.voidBlack,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text(
-          'Discussion',
-          style: TextStyle(
-            color: Color(0xFF7F77DD),
-            fontSize: 24,
-            fontWeight: FontWeight.bold,
-            fontFamily: 'Inter',
+        title: Text(
+          'DISCUSSION',
+          style: GoogleFonts.creepster(
+            color: HorrorColors.crimson,
+            fontSize: 26,
+            letterSpacing: 2.0,
           ),
         ),
         centerTitle: true,
+        automaticallyImplyLeading: false,
       ),
-      body: Column(
-        children: [
-          Expanded(
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
+      body: StaticOverlay(
+        child: FlickerWidget(
+          enabled: isLowTime, // Screen flickers when time is low
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // Roster & Timer Layout
+              Column(
                 children: [
-                  Stack(
-                    alignment: Alignment.center,
-                    children: [
-                      SizedBox(
-                        width: 200,
-                        height: 200,
-                        child: CircularProgressIndicator(
-                          value: _secondsRemaining / 90,
-                          strokeWidth: 8,
-                          backgroundColor: Colors.white12,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            _secondsRemaining > 30
-                                ? const Color(0xFF7F77DD)
-                                : Colors.redAccent,
-                          ),
+                  if (gameState.gameMode == GameMode.survival)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8.0),
+                      child: Text(
+                        'ROUND ${gameState.currentRound + 1}',
+                        style: GoogleFonts.creepster(
+                          color: HorrorColors.crimson,
+                          fontSize: 20,
+                          letterSpacing: 2.0,
                         ),
                       ),
-                      Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            _timeString,
-                            style: TextStyle(
-                              fontSize: 48,
-                              color: _secondsRemaining > 30
-                                  ? Colors.white
-                                  : Colors.redAccent,
-                              fontWeight: FontWeight.bold,
-                              fontFamily: 'Inter',
+                    ),
+
+                  const SizedBox(height: 16),
+                  
+                  // Circular Progress Indicator Timer
+                  Center(
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        SizedBox(
+                          width: 160,
+                          height: 160,
+                          child: CircularProgressIndicator(
+                            value: _secondsRemaining / 90.0,
+                            strokeWidth: 6,
+                            backgroundColor: HorrorColors.cardSurface,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              isLowTime ? HorrorColors.bloodRed : HorrorColors.crimson,
                             ),
                           ),
-                          const SizedBox(height: 4),
+                        ),
+                        // Low time heartbeat tension pulse
+                        HeartbeatPulse(
+                          enabled: isLowTime,
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                _timeString,
+                                style: GoogleFonts.creepster(
+                                  fontSize: 38,
+                                  color: isLowTime ? HorrorColors.bloodRed : HorrorColors.fogWhite,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'REMAINING',
+                                style: GoogleFonts.creepster(
+                                  fontSize: 10,
+                                  letterSpacing: 1.5,
+                                  color: HorrorColors.ashGray,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // Interactive Suspicion Roster
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
                           Text(
-                            'REMAINING',
-                            style: TextStyle(
-                              fontSize: 12,
-                              letterSpacing: 1.5,
-                              color: Colors.white.withValues(alpha: 0.4),
-                              fontWeight: FontWeight.w500,
-                              fontFamily: 'Inter',
+                            'TAP TO CAST SUSPICION (+10%)',
+                            style: GoogleFonts.creepster(
+                              color: HorrorColors.ashGray,
+                              fontSize: 14,
+                              letterSpacing: 1.0,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Expanded(
+                            child: ListView.builder(
+                              itemCount: gameState.players.length,
+                              itemBuilder: (context, index) {
+                                final player = gameState.players[index];
+                                final isDead = player.isEliminated;
+
+                                return Padding(
+                                  padding: const EdgeInsets.only(bottom: 8.0),
+                                  child: GestureDetector(
+                                    onTap: isDead
+                                        ? null
+                                        : () {
+                                            // Add +10% (0.10) suspicion on tap
+                                            ref.read(gameStateProvider.notifier).updateSuspicion(
+                                                  player.id,
+                                                  player.suspicion + 0.10,
+                                                );
+                                          },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                      decoration: BoxDecoration(
+                                        color: HorrorColors.cardSurface,
+                                        borderRadius: BorderRadius.circular(8),
+                                        border: Border.all(
+                                          color: isDead ? HorrorColors.darkRedTint : HorrorColors.darkRedTint,
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              Text(
+                                                player.name.toUpperCase(),
+                                                style: GoogleFonts.creepster(
+                                                  color: isDead ? HorrorColors.ashGray : HorrorColors.fogWhite,
+                                                  fontSize: 16,
+                                                  letterSpacing: 1.0,
+                                                  decoration: isDead ? TextDecoration.lineThrough : null,
+                                                ),
+                                              ),
+                                              if (isDead)
+                                                Text(
+                                                  'DEAD',
+                                                  style: GoogleFonts.creepster(
+                                                    color: HorrorColors.crimson,
+                                                    fontSize: 13,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 6),
+                                          SuspicionMeter(value: player.suspicion, height: 12),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
                             ),
                           ),
                         ],
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 48),
-                  ElevatedButton.icon(
-                    onPressed: () {
-                      _timer.cancel();
-                      Navigator.of(context).pushNamed(MimicGame.votingRoute);
-                    },
-                    icon: const Icon(Icons.check_circle_outline, size: 20),
-                    label: const Text(
-                      'Start Voting Now',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                        fontFamily: 'Inter',
-                      ),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF7F77DD),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      elevation: 4,
-                      shadowColor: const Color(0xFF7F77DD).withValues(alpha: 0.4),
                     ),
                   ),
-                ],
-              ),
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.03),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.05), width: 1),
-            ),
-            child: SafeArea(
-              top: false,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Active Players',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 15,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.5,
-                      fontFamily: 'Inter',
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: gameState.players.map((player) {
-                      return Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: Color(player.color).withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: Color(player.color).withValues(alpha: 0.3),
-                            width: 1,
+
+                  // Start Voting Now Button
+                  Padding(
+                    padding: const EdgeInsets.all(20.0),
+                    child: SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          _timer.cancel();
+                          Navigator.of(context).pushNamed(MimicGame.votingRoute);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: HorrorColors.crimson,
+                          foregroundColor: HorrorColors.fogWhite,
+                          side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
                           ),
                         ),
                         child: Text(
-                          player.name,
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            fontFamily: 'Inter',
-                          ),
+                          'START VOTING',
+                          style: GoogleFonts.creepster(
+                            fontSize: 20,
+                            letterSpacing: 1.5,
+                            fontWeight: FontWeight.bold,
                         ),
-                      );
-                    }).toList(),
+                      ),
+                    ),
+                  ),
                   ),
                 ],
               ),
-            ),
+
+              // Screen flash effect container overlay
+              if (_screenFlash)
+                Positioned.fill(
+                  child: Container(
+                    color: Colors.white,
+                  ),
+                ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

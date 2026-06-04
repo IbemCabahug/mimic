@@ -19,6 +19,23 @@ class VaultSettingsScreen extends ConsumerStatefulWidget {
 }
 
 class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
+  bool _hasRecoveryBlob = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkRecoveryBlob();
+  }
+
+  Future<void> _checkRecoveryBlob() async {
+    final platformService = ref.read(platformServiceProvider);
+    final blob = await platformService.secureRead('recovery_blob');
+    if (mounted) {
+      setState(() {
+        _hasRecoveryBlob = blob != null && blob.isNotEmpty;
+      });
+    }
+  }
 
   void _lockVault() {
     final crypto = ref.read(vaultCryptoProvider);
@@ -231,11 +248,45 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
             onTap: _showChangePinDialog,
           ),
           _buildSettingsTile(
+            icon: Icons.vpn_key_outlined,
+            title: 'Recovery Phrase',
+            subtitle: _hasRecoveryBlob
+                ? 'Recovery phrase is set up'
+                : 'Set up a 12-word backup to recover vault access',
+            onTap: () {
+              Navigator.of(context).pushNamed('/vault-recovery-phrase');
+            },
+            trailing: _hasRecoveryBlob
+                ? const Icon(Icons.check_circle, color: VaultColors.success, size: 20)
+                : null,
+          ),
+          _buildSettingsTile(
             icon: Icons.lock,
             title: 'Lock Vault',
             subtitle: 'Lock vault and return to PIN screen',
             onTap: _lockVault,
             iconColor: VaultColors.error,
+          ),
+
+          const SizedBox(height: 24),
+
+          // Backup Section
+          _buildSectionHeader('Backup'),
+          _buildSettingsTile(
+            icon: Icons.upload_outlined,
+            title: 'Export Vault',
+            subtitle: 'Save an encrypted backup of your vault',
+            onTap: () {
+              Navigator.of(context).pushNamed('/vault-export');
+            },
+          ),
+          _buildSettingsTile(
+            icon: Icons.download_outlined,
+            title: 'Import Vault',
+            subtitle: 'Restore vault from a .mimic backup file',
+            onTap: () {
+              Navigator.of(context).pushNamed('/vault-import');
+            },
           ),
 
           const SizedBox(height: 24),
@@ -291,6 +342,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     required String subtitle,
     required VoidCallback onTap,
     Color iconColor = VaultColors.accent,
+    Widget? trailing,
   }) {
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 4),
@@ -305,36 +357,39 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           ),
         ],
       ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        leading: Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: iconColor.withValues(alpha: 0.1),
-            shape: BoxShape.circle,
+      child: Material(
+        color: Colors.transparent,
+        child: ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          leading: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: iconColor, size: 22),
           ),
-          child: Icon(icon, color: iconColor, size: 22),
-        ),
-        title: Text(
-          title,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            color: VaultColors.textPrimary,
-            fontFamily: 'Inter',
+          title: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: VaultColors.textPrimary,
+              fontFamily: 'Inter',
+            ),
           ),
-        ),
-        subtitle: Text(
-          subtitle,
-          style: const TextStyle(
-            fontSize: 12,
-            color: VaultColors.textSecondary,
-            fontFamily: 'Inter',
+          subtitle: Text(
+            subtitle,
+            style: const TextStyle(
+              fontSize: 12,
+              color: VaultColors.textSecondary,
+              fontFamily: 'Inter',
+            ),
           ),
+          trailing: trailing ?? const Icon(Icons.chevron_right, color: VaultColors.textTertiary, size: 20),
+          onTap: onTap,
         ),
-        trailing: const Icon(Icons.chevron_right, color: VaultColors.textTertiary, size: 20),
-        onTap: onTap,
       ),
     );
   }

@@ -106,38 +106,44 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ListTile(
-              leading: Container(
-                width: 40,
-                height: 40,
-                decoration: const BoxDecoration(
-                  color: VaultColors.accent,
-                  shape: BoxShape.circle,
+            Material(
+              color: Colors.transparent,
+              child: ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: const BoxDecoration(
+                    color: VaultColors.accent,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.photo_library, color: Colors.white),
                 ),
-                child: const Icon(Icons.photo_library, color: Colors.white),
+                title: const Text('Choose from Gallery', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _importFromGallery();
+                },
               ),
-              title: const Text('Choose from Gallery', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
-              onTap: () {
-                Navigator.of(context).pop();
-                _importFromGallery();
-              },
             ),
             const SizedBox(height: 8),
-            ListTile(
-              leading: Container(
-                width: 40,
-                height: 40,
-                decoration: const BoxDecoration(
-                  color: VaultColors.accent,
-                  shape: BoxShape.circle,
+            Material(
+              color: Colors.transparent,
+              child: ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: const BoxDecoration(
+                    color: VaultColors.accent,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.camera_alt, color: Colors.white),
                 ),
-                child: const Icon(Icons.camera_alt, color: Colors.white),
+                title: const Text('Take a Photo', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _captureFromCamera();
+                },
               ),
-              title: const Text('Take a Photo', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
-              onTap: () {
-                Navigator.of(context).pop();
-                _captureFromCamera();
-              },
             ),
           ],
         ),
