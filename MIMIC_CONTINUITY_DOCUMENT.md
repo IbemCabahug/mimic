@@ -107,6 +107,13 @@ Implemented full encrypted vault backup and restore functionality, resolving the
 - **Dependencies**: Added `file_picker: ^11.0.2` to pubspec.yaml (share_plus, crypto, path_provider were already present).
 - **Verification**: `flutter analyze lib/` reports zero new issues from the added files.
 
+### Stage 19 — Export/Import Test Verification & Platform Safety
+Completed full test coverage for the vault export/import feature. Built using **Antigravity IDE with Gemini agent**.
+- **sqflite_common_ffi Integration**: Added `sqflite_common_ffi` as a dev dependency to provide a real FFI-backed SQLite engine for desktop test environments (Windows/macOS/Linux). This eliminates the `MissingPluginException` for `getDatabasesPath` that occurred when testing sqflite operations outside of Android/iOS.
+- **Test Rewrite** (`vault_export_import_test.dart`): Replaced fragile sqflite method channel mocks with `sqfliteFfiInit()` + `databaseFactory = databaseFactoryFfi`. Tests now create real temporary SQLite databases in temp directories, making round-trip testing fully realistic. Uses `databaseFactory.setDatabasesPath()` to point sqflite at temp directories.
+- **Platform-Safe Fallback** (`vault_exporter.dart`): Wrapped `getExternalStorageDirectory()` in a try-catch in `_getDownloadsDirectory()` since it throws `UnsupportedError` on non-Android platforms. Now gracefully falls through to `getApplicationDocumentsDirectory()`.
+- **All 6 Tests Passing**: validateFile rejects short file ✅, wrong magic header ✅, wrong version ✅, checksum mismatch ✅, full export/import round-trip ✅, wrong recovery phrase fails safely ✅.
+
 ---
 
 ## 2. Key Topics Discussed
@@ -130,6 +137,7 @@ Implemented full encrypted vault backup and restore functionality, resolving the
 - Game layer premium horror/thriller visual overhaul
 - BIP39 backup phrase security configuration & offline reset PIN mechanism
 - Vault export/import (.mimic encrypted backup files) for cross-device migration
+- sqflite_common_ffi for desktop test environments (resolving MissingPluginException)
 
 ---
 
@@ -220,6 +228,7 @@ Implemented full encrypted vault backup and restore functionality, resolving the
 | Sharing | share_plus (vault export sharing) |
 | Hashing | crypto (SHA-256 checksum for .mimic file integrity) |
 | File paths | path_provider (Downloads directory for export) |
+| Desktop SQLite (test) | sqflite_common_ffi (FFI-backed SQLite for Windows/macOS/Linux tests) |
 
 ---
 
@@ -310,6 +319,7 @@ Completed comprehensive testing coverage for both the game and vault layers:
 - **Unit and Widget Tests**: Verified encryption mechanics, screen navigation, state flows, auto-lock security triggers, and recovery phrases.
 - **Integration Tests**: Assured stealth features, recent apps disguise, and hardware triggers work as expected.
 - **Device Checklist**: Compiled a verification plan for hardware-level security, masking, and containment.
+- **Export/Import Tests**: 6 tests covering file validation (short file, wrong magic, wrong version, checksum mismatch), full round-trip export→import, and wrong-phrase rejection. Uses `sqflite_common_ffi` for real FFI-backed SQLite on desktop.
 
 ### Vault Export/Import ✅ COMPLETE
 - ✅ vault_exporter.dart — .mimic binary format (MMIC magic, v1, SHA-256, timestamp, JSON payload)
@@ -319,6 +329,9 @@ Completed comprehensive testing coverage for both the game and vault layers:
 - ✅ vault_settings_screen.dart — new "Backup" section with Export/Import tiles
 - ✅ game.dart routes — `/vault-export` and `/vault-import`
 - ✅ file_picker ^11.0.2 added to pubspec.yaml
+- ✅ sqflite_common_ffi (dev) for FFI-backed SQLite tests on desktop
+- ✅ Platform-safe `_getDownloadsDirectory()` fallback (try-catch on getExternalStorageDirectory)
+- ✅ vault_export_import_test.dart — 6/6 tests passing (validation, round-trip, wrong-phrase)
 - ✅ Zero new analyzer issues
 
 ### Phases 5–6 — Prep and Launch ⬜ NOT STARTED
@@ -455,6 +468,8 @@ Fully implemented via encrypted `.mimic` binary backup files. `VaultExporter` pa
 - **Form states in scrollable views require static containment.** When building screens with many validation textfields (e.g. 12 recovery phrase inputs), standard `ListView` widgets will drop widget states for off-screen fields during scroll events. Transitioning to a combination of `SingleChildScrollView` and `Column` guarantees that all form controllers stay alive and are accessible for hit-testing in unit tests.
 - **Binary file formats need strict validation.** The `.mimic` export format uses a magic header, version byte, and SHA-256 checksum before the JSON payload. This prevents accidental import of wrong files and catches corruption. Always validate before deserializing.
 - **file_picker v11+ removed `FilePicker.platform`.** Starting with file_picker 11.0.2, all calls must use static methods like `FilePicker.pickFiles()` directly instead of the old `FilePicker.platform.pickFiles()` pattern.
+- **sqflite tests need sqflite_common_ffi, not method channel mocks.** Mocking the `com.tekartik.sqflite` method channel is fragile and version-dependent. Using `sqflite_common_ffi` provides a real FFI-backed SQLite engine on desktop, making tests realistic and reliable. Initialize with `sqfliteFfiInit()` + `databaseFactory = databaseFactoryFfi`, then use `databaseFactory.setDatabasesPath()` to point at a temp directory.
+- **`getExternalStorageDirectory()` throws on non-Android.** Always wrap in try-catch — it raises `UnsupportedError` on Windows/macOS/Linux/web. Let it fall through to `getApplicationDocumentsDirectory()` as a safe fallback.
 
 ---
 
@@ -479,4 +494,4 @@ Claude will update all relevant sections: Quick Context Snapshot, Chronological 
 ---
 
 > 🎭 Built with Flutter. Designed for privacy. Disguised as fun.
-> Current status: Phases 1–4 complete · BIP39 PIN Recovery integrated · Vault Export/Import complete · Web compatibility active · Rating 99/100
+> Current status: Phases 1–4 complete · BIP39 PIN Recovery integrated · Vault Export/Import complete (6/6 tests passing) · Web compatibility active · Rating 99/100
