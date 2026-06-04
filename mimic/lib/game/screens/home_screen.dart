@@ -1,20 +1,23 @@
 // lib/game/screens/home_screen.dart
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/core/animations/horror_animations.dart';
 import 'package:mimic/game/game.dart';
+import 'package:mimic/multiplayer/network/network_service.dart';
 
-class HomeScreen extends StatefulWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
+class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStateMixin {
   late AnimationController _fogController;
+  late AnimationController _pulseController;
   late List<FogWisp> _wisps;
 
   @override
@@ -25,6 +28,12 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       duration: const Duration(seconds: 30),
       vsync: this,
     )..repeat();
+
+    // Pulsing animation for the "Session active" multiplayer indicator
+    _pulseController = AnimationController(
+      duration: const Duration(milliseconds: 1200),
+      vsync: this,
+    )..repeat(reverse: true);
 
     // Define 4 distinct, organic-looking fog wisps drifting at different speeds/depths
     _wisps = [
@@ -70,6 +79,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   @override
   void dispose() {
     _fogController.dispose();
+    _pulseController.dispose();
     super.dispose();
   }
 
@@ -150,6 +160,71 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                               Navigator.of(context).pushNamed(MimicGame.modeSelectRoute);
                             },
                             isPrimary: true,
+                          ),
+                          const SizedBox(height: 16),
+                          _buildMultiplayerCard(),
+                          const SizedBox(height: 16),
+                          _buildButton(
+                            label: 'TUTORIAL',
+                            onPressed: () {
+                              Navigator.of(context).pushNamed(MimicGame.tutorialRoute);
+                            },
+                            isPrimary: false,
+                            borderColor: HorrorColors.crimson,
+                            textColor: HorrorColors.fogWhite,
+                          ),
+                          const SizedBox(height: 16),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SizedBox(
+                                width: 102,
+                                height: 52,
+                                child: OutlinedButton(
+                                  onPressed: () {
+                                    Navigator.of(context).pushNamed(MimicGame.profileRoute);
+                                  },
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: HorrorColors.crimson,
+                                    side: const BorderSide(color: HorrorColors.crimson, width: 1.5),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    'PROFILE',
+                                    style: GoogleFonts.creepster(
+                                      fontSize: 14,
+                                      letterSpacing: 1.0,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              SizedBox(
+                                width: 102,
+                                height: 52,
+                                child: OutlinedButton(
+                                  onPressed: () {
+                                    Navigator.of(context).pushNamed(MimicGame.leaderboardRoute);
+                                  },
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: HorrorColors.crimson,
+                                    side: const BorderSide(color: HorrorColors.crimson, width: 1.5),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    'RANKS',
+                                    style: GoogleFonts.creepster(
+                                      fontSize: 14,
+                                      letterSpacing: 1.0,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
                           const SizedBox(height: 16),
                           _buildButton(
@@ -238,6 +313,132 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       child: isPrimary
           ? ElevatedButton(onPressed: onPressed, style: style, child: buttonChild)
           : OutlinedButton(onPressed: onPressed, style: style, child: buttonChild),
+    );
+  }
+
+  /// Enhanced multiplayer card with icon, subtitle, NEW badge, and session indicator.
+  Widget _buildMultiplayerCard() {
+    final networkService = ref.watch(networkServiceProvider);
+    final isSessionActive = networkService.role != NetworkRole.none;
+
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        // Main button card
+        SizedBox(
+          width: 220,
+          height: 72,
+          child: OutlinedButton(
+            onPressed: () {
+              Navigator.of(context).pushNamed(MimicGame.multiplayerRoute);
+            },
+            style: OutlinedButton.styleFrom(
+              foregroundColor: HorrorColors.fogWhite,
+              side: const BorderSide(color: HorrorColors.crimson, width: 1.5),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+            ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.sports_esports, size: 16, color: HorrorColors.crimson),
+                      const SizedBox(width: 6),
+                      Text(
+                        'MULTIPLAYER',
+                        style: GoogleFonts.creepster(
+                          fontSize: 18,
+                          letterSpacing: 1.5,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 4),
+Text(
+                   'Play with friends on the same network',
+                   style: GoogleFonts.inter(
+                    fontSize: 10,
+                    color: HorrorColors.ashGray,
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        // "NEW" badge — top-right
+        // TODO: remove NEW badge after v1.1 launch
+        Positioned(
+          top: -6,
+          right: -6,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: HorrorColors.crimson,
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              'NEW',
+              style: GoogleFonts.inter(
+                fontSize: 9,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        ),
+
+        // Session active pulsing indicator
+        if (isSessionActive)
+          Positioned(
+            bottom: -10,
+            left: 0,
+            right: 0,
+            child: FadeTransition(
+              opacity: _pulseController,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: HorrorColors.crimson,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: HorrorColors.crimson.withValues(alpha: 0.6),
+                          blurRadius: 6,
+                          spreadRadius: 1,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Session active',
+                    style: GoogleFonts.inter(
+                      fontSize: 10,
+                      color: HorrorColors.crimson,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+      ],
     );
   }
 

@@ -10,7 +10,6 @@ import '../services/file_vault_service.dart';
 import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
 import '../security/breakin_log.dart';
-import 'enter_recovery_screen.dart';
 
 class PinScreen extends ConsumerStatefulWidget {
   const PinScreen({super.key});

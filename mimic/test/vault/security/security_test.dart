@@ -6,8 +6,6 @@
 // All platform services and crypto are faked in-memory — no disk, no
 // flutter_secure_storage plugin, no camera, no sensors_plus, no sqflite.
 
-import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';

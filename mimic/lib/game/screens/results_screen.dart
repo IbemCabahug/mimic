@@ -10,6 +10,8 @@ import '../state/game_state.dart';
 import '../../vault/trigger/trigger_detector.dart';
 import '../../vault/screens/pin_screen.dart';
 import 'package:mimic/game/game.dart';
+import 'package:mimic/multiplayer/network/network_service.dart';
+import 'package:mimic/multiplayer/state/game_state_sync_notifier.dart';
 
 enum ResultsPhase { accusation, judgment, revelation, butWait, revelation2 }
 
@@ -33,6 +35,11 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
   String _accusedPlayerId = '';
   int _triggerTapCount = 0;
 
+  // Multiplayer variables
+  StreamSubscription<Map<String, dynamic>>? _messageSub;
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnimation;
+
   @override
   void initState() {
     super.initState();
@@ -41,6 +48,28 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
       vsync: this,
     );
     
+    // Pulsing animation for waiting state in multiplayer
+    _pulseController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    );
+    _pulseAnimation = Tween<double>(begin: 0.3, end: 1.0).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
+    _pulseController.repeat(reverse: true);
+
+    // Listen to network stream in multiplayer mode
+    final networkService = ref.read(networkServiceProvider);
+    if (networkService.isConnected) {
+      _messageSub = networkService.messageStream.listen((message) {
+        if (!mounted) return;
+        final type = message['type'] as String?;
+        if (type == 'nextRound') {
+          Navigator.of(context).pushNamed(MimicGame.wordRevealRoute);
+        }
+      });
+    }
+    
     TriggerCallbackRegistry().setOnTap(_recordScoreTap);
 
     _runTimeline();
@@ -48,6 +77,8 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
 
   @override
   void dispose() {
+    _messageSub?.cancel();
+    _pulseController.dispose();
     _particlesController.dispose();
     TriggerCallbackRegistry().setOnTap(null);
     super.dispose();
@@ -176,16 +207,30 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
   }
 
   void _playAgain() {
-    ref.read(gameStateProvider.notifier).nextRound();
-    Navigator.of(context).pushNamed(MimicGame.wordRevealRoute);
+    final networkService = ref.read(networkServiceProvider);
+    if (networkService.isConnected) {
+      if (networkService.role == NetworkRole.host) {
+        ref.read(gameStateSyncProvider.notifier).startNextRound();
+        Navigator.of(context).pushNamed(MimicGame.wordRevealRoute);
+      }
+    } else {
+      ref.read(gameStateProvider.notifier).nextRound();
+      Navigator.of(context).pushNamed(MimicGame.wordRevealRoute);
+    }
   }
 
   void _newGame() {
-    ref.read(gameStateProvider.notifier).resetGame();
-    Navigator.of(context).pushNamedAndRemoveUntil(
-      MimicGame.playerSetupRoute,
-      (route) => false,
-    );
+    final networkService = ref.read(networkServiceProvider);
+    if (networkService.isConnected) {
+      networkService.disconnect();
+      Navigator.of(context).popUntil((route) => route.isFirst);
+    } else {
+      ref.read(gameStateProvider.notifier).resetGame();
+      Navigator.of(context).pushNamedAndRemoveUntil(
+        MimicGame.playerSetupRoute,
+        (route) => false,
+      );
+    }
   }
 
   @override
@@ -338,7 +383,10 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
 
   Widget _buildRevelationContent(GameState gameState, Player accusedPlayer, {required bool isFirstReveal}) {
     final mimicIds = gameState.mimicIds;
-    
+
+    // Guard: state may be cleared (e.g. resetGame) before navigation completes.
+    if (mimicIds.isEmpty) return const SizedBox.shrink();
+
     // In Nightmare mode, we reveal Mimic 1 in Phase 3, and Mimic 2 in Phase 5.
     // In Classic/Survival, we reveal the sole mimic in Phase 3.
     final String mimicToRevealId = (gameState.gameMode == GameMode.nightmare && !isFirstReveal)
@@ -456,24 +504,50 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
             Expanded(
               child: SizedBox(
                 height: 50,
-                child: ElevatedButton(
-                  onPressed: _playAgain,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: HorrorColors.crimson,
-                    foregroundColor: HorrorColors.fogWhite,
-                    side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  child: Text(
-                    'NEXT ROUND',
-                    style: GoogleFonts.creepster(
-                      fontSize: 18,
-                      letterSpacing: 1.0,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+                child: Consumer(
+                  builder: (context, ref, _) {
+                    final networkService = ref.watch(networkServiceProvider);
+                    if (networkService.isConnected && networkService.role != NetworkRole.host) {
+                      return Container(
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: HorrorColors.cardSurface,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: HorrorColors.darkRedTint),
+                        ),
+                        child: FadeTransition(
+                          opacity: _pulseAnimation,
+                          child: Text(
+                            'WAITING FOR HOST...',
+                            style: GoogleFonts.creepster(
+                              color: HorrorColors.ashGray,
+                              fontSize: 14,
+                              letterSpacing: 1.0,
+                            ),
+                          ),
+                        ),
+                      );
+                    }
+                    return ElevatedButton(
+                      onPressed: _playAgain,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: HorrorColors.crimson,
+                        foregroundColor: HorrorColors.fogWhite,
+                        side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      child: Text(
+                        'NEXT ROUND',
+                        style: GoogleFonts.creepster(
+                          fontSize: 18,
+                          letterSpacing: 1.0,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ),
             ),
@@ -481,23 +555,28 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
             Expanded(
               child: SizedBox(
                 height: 50,
-                child: OutlinedButton(
-                  onPressed: _newGame,
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: HorrorColors.ashGray,
-                    side: const BorderSide(color: HorrorColors.ashGray, width: 1.5),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                  ),
-                  child: Text(
-                    'END GAME',
-                    style: GoogleFonts.creepster(
-                      fontSize: 18,
-                      letterSpacing: 1.0,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
+                child: Consumer(
+                  builder: (context, ref, _) {
+                    final isConnected = ref.watch(networkServiceProvider).isConnected;
+                    return OutlinedButton(
+                      onPressed: _newGame,
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: HorrorColors.ashGray,
+                        side: const BorderSide(color: HorrorColors.ashGray, width: 1.5),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                      ),
+                      child: Text(
+                        isConnected ? 'LEAVE GAME' : 'END GAME',
+                        style: GoogleFonts.creepster(
+                          fontSize: 18,
+                          letterSpacing: 1.0,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    );
+                  },
                 ),
               ),
             ),

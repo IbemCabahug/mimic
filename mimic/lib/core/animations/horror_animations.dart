@@ -24,17 +24,14 @@ class FlickerWidget extends StatefulWidget {
   final Widget child;
   final bool enabled;
 
-  const FlickerWidget({
-    Key? key,
-    required this.child,
-    this.enabled = true,
-  }) : super(key: key);
+  const FlickerWidget({super.key, required this.child, this.enabled = true});
 
   @override
   State<FlickerWidget> createState() => _FlickerWidgetState();
 }
 
-class _FlickerWidgetState extends State<FlickerWidget> with SingleTickerProviderStateMixin {
+class _FlickerWidgetState extends State<FlickerWidget>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _animation;
 
@@ -74,10 +71,7 @@ class _FlickerWidgetState extends State<FlickerWidget> with SingleTickerProvider
   @override
   Widget build(BuildContext context) {
     if (!widget.enabled) return widget.child;
-    return FadeTransition(
-      opacity: _animation,
-      child: widget.child,
-    );
+    return FadeTransition(opacity: _animation, child: widget.child);
   }
 }
 
@@ -89,50 +83,57 @@ class HeartbeatPulse extends StatefulWidget {
   final Duration duration;
 
   const HeartbeatPulse({
-    Key? key,
+    super.key,
     required this.child,
     this.enabled = true,
     this.duration = const Duration(milliseconds: 1400),
-  }) : super(key: key);
+  });
 
   @override
   State<HeartbeatPulse> createState() => _HeartbeatPulseState();
 }
 
-class _HeartbeatPulseState extends State<HeartbeatPulse> with SingleTickerProviderStateMixin {
+class _HeartbeatPulseState extends State<HeartbeatPulse>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _scaleAnimation;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: widget.duration,
-    );
+    _controller = AnimationController(vsync: this, duration: widget.duration);
 
     // Creates a double-beat heartbeat cycle: peak, decay, peak, base, pause
     _scaleAnimation = TweenSequence<double>([
       TweenSequenceItem(
-        tween: Tween<double>(begin: 1.0, end: 1.04).chain(CurveTween(curve: Curves.easeOut)),
+        tween: Tween<double>(
+          begin: 1.0,
+          end: 1.04,
+        ).chain(CurveTween(curve: Curves.easeOut)),
         weight: 12,
       ),
       TweenSequenceItem(
-        tween: Tween<double>(begin: 1.04, end: 1.01).chain(CurveTween(curve: Curves.easeInOut)),
+        tween: Tween<double>(
+          begin: 1.04,
+          end: 1.01,
+        ).chain(CurveTween(curve: Curves.easeInOut)),
         weight: 12,
       ),
       TweenSequenceItem(
-        tween: Tween<double>(begin: 1.01, end: 1.04).chain(CurveTween(curve: Curves.easeOut)),
+        tween: Tween<double>(
+          begin: 1.01,
+          end: 1.04,
+        ).chain(CurveTween(curve: Curves.easeOut)),
         weight: 12,
       ),
       TweenSequenceItem(
-        tween: Tween<double>(begin: 1.04, end: 1.0).chain(CurveTween(curve: Curves.easeIn)),
+        tween: Tween<double>(
+          begin: 1.04,
+          end: 1.0,
+        ).chain(CurveTween(curve: Curves.easeIn)),
         weight: 14,
       ),
-      TweenSequenceItem(
-        tween: ConstantTween<double>(1.0),
-        weight: 50,
-      ),
+      TweenSequenceItem(tween: ConstantTween<double>(1.0), weight: 50),
     ]).animate(_controller);
 
     if (widget.enabled) {
@@ -161,10 +162,7 @@ class _HeartbeatPulseState extends State<HeartbeatPulse> with SingleTickerProvid
 
   @override
   Widget build(BuildContext context) {
-    return ScaleTransition(
-      scale: _scaleAnimation,
-      child: widget.child,
-    );
+    return ScaleTransition(scale: _scaleAnimation, child: widget.child);
   }
 }
 
@@ -176,14 +174,17 @@ class GlitchTransition extends StatefulWidget {
   final bool animateOnStart;
 
   const GlitchTransition({
-    Key? key,
+    super.key,
     required this.child,
     this.duration = const Duration(milliseconds: 500),
     this.animateOnStart = true,
-  }) : super(key: key);
+  });
 
   /// Helper route builder that leverages this glitch style on navigation transitions.
-  static Route<T> pageRoute<T>(Widget destination, {Duration duration = const Duration(milliseconds: 400)}) {
+  static Route<T> pageRoute<T>(
+    Widget destination, {
+    Duration duration = const Duration(milliseconds: 400),
+  }) {
     return PageRouteBuilder<T>(
       pageBuilder: (context, animation, secondaryAnimation) => destination,
       transitionDuration: duration,
@@ -213,16 +214,14 @@ class GlitchTransition extends StatefulWidget {
   State<GlitchTransition> createState() => _GlitchTransitionState();
 }
 
-class _GlitchTransitionState extends State<GlitchTransition> with SingleTickerProviderStateMixin {
+class _GlitchTransitionState extends State<GlitchTransition>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
 
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(
-      vsync: this,
-      duration: widget.duration,
-    );
+    _controller = AnimationController(vsync: this, duration: widget.duration);
     if (widget.animateOnStart) {
       _controller.forward();
     }
@@ -257,11 +256,7 @@ class _GlitchTransitionLayout extends StatelessWidget {
   final double progress;
   final math.Random _random = math.Random();
 
-  _GlitchTransitionLayout({
-    Key? key,
-    required this.child,
-    required this.progress,
-  }) : super(key: key);
+  _GlitchTransitionLayout({required this.child, required this.progress});
 
   @override
   Widget build(BuildContext context) {
@@ -290,10 +285,7 @@ class _GlitchTransitionLayout extends StatelessWidget {
 
     return Transform.translate(
       offset: Offset(dx, 0),
-      child: Opacity(
-        opacity: opacity.clamp(0.0, 1.0),
-        child: child,
-      ),
+      child: Opacity(opacity: opacity.clamp(0.0, 1.0), child: child),
     );
   }
 }
@@ -304,17 +296,14 @@ class StaticOverlay extends StatefulWidget {
   final Widget? child;
   final double opacity;
 
-  const StaticOverlay({
-    Key? key,
-    this.child,
-    this.opacity = 0.03,
-  }) : super(key: key);
+  const StaticOverlay({super.key, this.child, this.opacity = 0.03});
 
   @override
   State<StaticOverlay> createState() => _StaticOverlayState();
 }
 
-class _StaticOverlayState extends State<StaticOverlay> with SingleTickerProviderStateMixin {
+class _StaticOverlayState extends State<StaticOverlay>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
 
   @override
@@ -379,7 +368,9 @@ class _StaticNoisePainter extends CustomPainter {
     if (_cachedPoints == null || _lastSize != size) {
       _lastSize = size;
       // Pre-generate slightly larger noise region to support dynamic translation offset
-      final int pointCount = ((size.width + 100) * (size.height + 100) / 1000).clamp(500, 3000).toInt();
+      final int pointCount = ((size.width + 100) * (size.height + 100) / 1000)
+          .clamp(500, 3000)
+          .toInt();
       _cachedPoints = List.generate(pointCount, (index) {
         return Offset(
           _random.nextDouble() * (size.width + 100),
@@ -400,5 +391,6 @@ class _StaticNoisePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _StaticNoisePainter oldDelegate) =>
-      oldDelegate.animationValue != animationValue || oldDelegate.opacity != opacity;
+      oldDelegate.animationValue != animationValue ||
+      oldDelegate.opacity != opacity;
 }

@@ -1,12 +1,10 @@
 // lib/game/screens/word_reveal_screen.dart
 import 'dart:async';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/core/animations/horror_animations.dart';
-import 'package:mimic/game/data/word_packs.dart';
 import 'package:mimic/game/state/game_state.dart';
 import 'package:mimic/game/widgets/suspicion_meter.dart';
 import 'package:mimic/game/game.dart';

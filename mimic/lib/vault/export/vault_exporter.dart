@@ -151,7 +151,7 @@ class VaultExporter {
 
     // ── 3. Encode JSON payload ───────────────────────────────────────
     final jsonString = jsonEncode(payload);
-    final Uint8List jsonBytes = utf8.encode(jsonString) as Uint8List;
+    final Uint8List jsonBytes = Uint8List.fromList(utf8.encode(jsonString));
 
     // ── 4. Compute SHA-256 checksum over the JSON payload bytes ──────
     final Digest checksum = sha256.convert(jsonBytes);

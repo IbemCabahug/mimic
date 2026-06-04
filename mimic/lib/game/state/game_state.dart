@@ -365,6 +365,101 @@ class GameStateNotifier extends StateNotifier<GameState> {
       selectedPacks: state.selectedPacks,
     );
   }
+
+  void addPlayerWithId(String id, String name, int color) {
+    if (state.players.length >= 8) return;
+    if (state.players.any((p) => p.id == id)) return;
+    
+    final newPlayer = Player(
+      id: id,
+      name: name,
+      color: color,
+    );
+    
+    state = state.copyWith(
+      players: [...state.players, newPlayer],
+      scores: {...state.scores, newPlayer.id: 0},
+      suspicionScores: {...state.suspicionScores, newPlayer.id: 0},
+    );
+  }
+
+  void initializeMultiplayerPlayers(List<Player> players) {
+    state = state.copyWith(
+      players: players,
+      scores: {
+        for (var p in players) p.id: 0,
+      },
+      suspicionScores: {
+        for (var p in players) p.id: 0,
+      },
+    );
+  }
+
+  void remapPlayerId(String oldId, String newId) {
+    if (oldId == newId || oldId.isEmpty) return;
+
+    final updatedPlayers = state.players.map((p) {
+      if (p.id == oldId) {
+        return Player(
+          id: newId,
+          name: p.name,
+          color: p.color,
+          isAlive: p.isAlive,
+          isGhost: p.isGhost,
+          suspicion: p.suspicion,
+        );
+      }
+      return p;
+    }).toList();
+
+    final updatedMimicIds = state.mimicIds.map((id) => id == oldId ? newId : id).toList();
+    final updatedEliminated = state.eliminatedPlayers.map((id) => id == oldId ? newId : id).toList();
+    final updatedGhost = state.ghostPlayers.map((id) => id == oldId ? newId : id).toList();
+
+    final updatedScores = Map<String, int>.from(state.scores);
+    if (updatedScores.containsKey(oldId)) {
+      final val = updatedScores.remove(oldId)!;
+      updatedScores[newId] = val;
+    }
+
+    final updatedSuspicion = Map<String, int>.from(state.suspicionScores);
+    if (updatedSuspicion.containsKey(oldId)) {
+      final val = updatedSuspicion.remove(oldId)!;
+      updatedSuspicion[newId] = val;
+    }
+
+    state = state.copyWith(
+      players: updatedPlayers,
+      mimicIds: updatedMimicIds,
+      eliminatedPlayers: updatedEliminated,
+      ghostPlayers: updatedGhost,
+      scores: updatedScores,
+      suspicionScores: updatedSuspicion,
+    );
+  }
+
+  void applyRemoteState(GameState remoteState) {
+    state = remoteState;
+  }
+
+  void updateGuestRoleAndWord({
+    required bool isMimic,
+    required String word,
+    required String playerId,
+  }) {
+    final wordPair = isMimic
+        ? WordPair(realWord: '', mimicWord: word)
+        : WordPair(realWord: word, mimicWord: '');
+
+    state = state.copyWith(
+      mimicIds: isMimic ? [playerId] : const [],
+      currentWordPair: wordPair,
+    );
+  }
+
+  void castVote(String voterId, String targetId) {
+    // Satisfy network sync requirements. Logic placeholder.
+  }
 }
 
 final gameStateProvider = StateNotifierProvider<GameStateNotifier, GameState>((ref) {

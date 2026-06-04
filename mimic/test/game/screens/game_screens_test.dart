@@ -9,25 +9,26 @@
 // 5. ResultsScreen
 // 6. GameStateNotifier
 
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:mimic/game/game.dart';
 import 'package:mimic/game/screens/home_screen.dart';
+import 'package:mimic/game/screens/mode_select_screen.dart';
+import 'package:mimic/game/screens/pack_select_screen.dart';
 import 'package:mimic/game/screens/player_setup_screen.dart';
 import 'package:mimic/game/screens/word_reveal_screen.dart';
 import 'package:mimic/game/screens/voting_screen.dart';
 import 'package:mimic/game/screens/results_screen.dart';
 import 'package:mimic/game/state/game_state.dart';
 import 'package:mimic/vault/trigger/trigger_detector.dart';
+import 'package:mimic/core/theme/horror_theme.dart';
+import 'package:mimic/game/data/word_packs.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helper / Utility Functions
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Build a standard MaterialApp containing Riverpod overrides and routing tables for game screens.
 Widget buildGameTestApp({
   required Widget home,
   required ProviderContainer container,
@@ -35,27 +36,33 @@ Widget buildGameTestApp({
   return UncontrolledProviderScope(
     container: container,
     child: MaterialApp(
-      theme: gameTheme,
+      theme: HorrorTheme.themeData,
       home: home,
       routes: {
-        '/': (_) => const HomeScreen(),
+        '/mode-select': (_) => const ModeSelectScreen(),
+        '/pack-select': (_) => const PackSelectScreen(),
         '/player-setup': (_) => const PlayerSetupScreen(),
         '/word-reveal': (_) => const WordRevealScreen(),
         '/discussion': (_) => const DiscussionScreen(),
         '/voting': (_) => const VotingScreen(),
-        '/results': (_) => const ResultsScreen(),
+        '/results': (_) => const Scaffold(body: Text('RESULTS_SCREEN')),
         '/vault-pin': (_) => const Scaffold(body: Text('VAULT_PIN_SCREEN')),
       },
     ),
   );
 }
 
+/// Pump a few frames to let initial build complete without waiting on looping animations.
+Future<void> pumpScreen(WidgetTester tester) async {
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 300));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Tests Main Entry
-// ═══════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
 
 void main() {
-  // Reset singleton callback registry before tests
   setUp(() {
     TriggerCallbackRegistry().setOnTap(null);
   });
@@ -64,32 +71,29 @@ void main() {
   // 1 · HomeScreen Tests
   // ═══════════════════════════════════════════════════════════════════════
   group('1 · HomeScreen', () {
-    testWidgets('Renders MIMIC logo, Play button, and Particle animation CustomPaint', (WidgetTester tester) async {
+    testWidgets('Renders MIMIC logo, Play button, and Particle animation CustomPaint',
+        (WidgetTester tester) async {
       final container = ProviderContainer();
       await tester.pumpWidget(buildGameTestApp(home: const HomeScreen(), container: container));
-      await tester.pumpAndSettle();
+      await pumpScreen(tester);
 
-      // Verify the MIMIC logo text renders
       expect(find.text('MIMIC'), findsOneWidget);
 
-      // Verify the particle animation widget is present (represented by CustomPaint using ParticlePainter)
       expect(
         find.byWidgetPredicate(
-          (widget) => widget is CustomPaint && widget.painter is ParticlePainter,
+          (widget) => widget is CustomPaint && widget.painter is FogPainter,
         ),
         findsOneWidget,
-        reason: 'Particle animation CustomPaint must be present on HomeScreen',
+        reason: 'FogPainter CustomPaint must be present on HomeScreen',
       );
 
-      // Verify Play button is present and navigates to PlayerSetupScreen on click
-      final playButton = find.widgetWithText(ElevatedButton, 'Play');
-      expect(playButton, findsOneWidget);
+      final beginButton = find.widgetWithText(ElevatedButton, 'BEGIN');
+      expect(beginButton, findsOneWidget);
 
-      await tester.tap(playButton);
-      await tester.pumpAndSettle();
+      await tester.tap(beginButton);
+      await pumpScreen(tester);
 
-      // Assert we navigated to PlayerSetupScreen
-      expect(find.text('Player Setup'), findsOneWidget);
+      expect(find.byType(ModeSelectScreen), findsOneWidget);
     });
   });
 
@@ -97,55 +101,45 @@ void main() {
   // 2 · PlayerSetupScreen Tests
   // ═══════════════════════════════════════════════════════════════════════
   group('2 · PlayerSetupScreen', () {
-    testWidgets('Adds player textfields, enforces play capacity limits, and navigates', (WidgetTester tester) async {
+    testWidgets('Adds player textfields, enforces play capacity limits, and navigates',
+        (WidgetTester tester) async {
       final container = ProviderContainer();
       await tester.pumpWidget(buildGameTestApp(home: const PlayerSetupScreen(), container: container));
-      await tester.pumpAndSettle();
+      await pumpScreen(tester);
 
-      // Initially, 2 blank fields are rendered.
       expect(find.byType(TextField), findsNWidgets(2));
 
-      // Start Game should be disabled because names are empty
-      final startGameFinder = find.widgetWithText(ElevatedButton, 'Start Game');
+      final startGameFinder = find.widgetWithText(ElevatedButton, 'START GAME');
       expect(startGameFinder, findsOneWidget);
       ElevatedButton startGameButton = tester.widget<ElevatedButton>(startGameFinder);
       expect(startGameButton.onPressed, isNull,
-          reason: 'Start Game must be disabled with less than 2 named players');
+          reason: 'START GAME must be disabled with less than 2 named players');
 
-      // Tap 'Add Player' button
-      final addPlayerButton = find.widgetWithText(OutlinedButton, 'Add Player');
+      final addPlayerButton = find.widgetWithText(OutlinedButton, 'ADD PLAYER');
       expect(addPlayerButton, findsOneWidget);
       await tester.tap(addPlayerButton);
-      await tester.pumpAndSettle();
+      await pumpScreen(tester);
 
-      // Third TextField entry should be added
       expect(find.byType(TextField), findsNWidgets(3));
 
-      // Populate names for the first two players to satisfy start conditions (2+ named players)
       await tester.enterText(find.byType(TextField).at(0), 'Alice');
       await tester.enterText(find.byType(TextField).at(1), 'Bob');
-      await tester.pumpAndSettle();
+      await pumpScreen(tester);
 
-      // Start Game should now be enabled
       startGameButton = tester.widget<ElevatedButton>(startGameFinder);
       expect(startGameButton.onPressed, isNotNull,
-          reason: 'Start Game must be enabled when 2+ named players are populated');
+          reason: 'START GAME must be enabled when 2+ named players are populated');
 
-      // Tap Start Game
       await tester.tap(startGameFinder);
-      await tester.pumpAndSettle();
+      await pumpScreen(tester);
 
-      // Verify we navigated to WordRevealScreen
-      expect(find.text('Alice'), findsOneWidget);
-      expect(find.text('Pass the phone to this player'), findsOneWidget);
+      // Navigates to PackSelectScreen (mimic assigned there, not here)
+      expect(find.byType(PackSelectScreen), findsOneWidget);
 
-      // Verify player records were successfully populated in Riverpod state container
       final state = container.read(gameStateProvider);
       expect(state.players.length, 2);
       expect(state.players[0].name, 'Alice');
       expect(state.players[1].name, 'Bob');
-      expect(state.mimicId, isNotNull,
-          reason: 'StateNotifier must automatically assign a player as the Mimic');
     });
   });
 
@@ -153,62 +147,64 @@ void main() {
   // 3 · WordRevealScreen Tests
   // ═══════════════════════════════════════════════════════════════════════
   group('3 · WordRevealScreen', () {
-    testWidgets('Each player views word privately, shows Mimic role, and navigates to discussion', (WidgetTester tester) async {
+    testWidgets('Each player views word privately, shows Mimic role, and navigates to discussion',
+        (WidgetTester tester) async {
       final container = ProviderContainer();
       final notifier = container.read(gameStateProvider.notifier);
 
-      // Seed 2 players
       notifier.addPlayer('Alice', 0xFF7F77DD);
       notifier.addPlayer('Bob', 0xFF1D9E75);
 
       final state = container.read(gameStateProvider);
       final aliceId = state.players[0].id;
-      final bobId = state.players[1].id;
 
-      // Force Alice to be the Mimic for testing predictability
       notifier.state = state.copyWith(
-        mimicId: aliceId,
-        currentWord: 'Guitar',
+        mimicIds: [aliceId],
+        currentWordPair: const WordPair(realWord: 'Guitar', mimicWord: 'Piano'),
       );
 
       await tester.pumpWidget(buildGameTestApp(home: const WordRevealScreen(), container: container));
-      await tester.pumpAndSettle();
+      await pumpScreen(tester);
 
-      // 1. Alice (Mimic) views word
-      expect(find.text('Alice'), findsOneWidget);
-      expect(find.text('Tap to reveal your word'), findsOneWidget);
+      // Alice cover screen
+      expect(find.text('ALICE'), findsOneWidget);
+      expect(find.text('TAP TO SEE YOUR FATE'), findsOneWidget);
 
-      // Tap Reveal
-      await tester.tap(find.widgetWithText(ElevatedButton, 'Reveal'));
-      await tester.pumpAndSettle();
+      // Tap to reveal
+      await tester.tap(find.byType(GestureDetector).first);
+      await pumpScreen(tester);
 
-      // Alice should see her decoy Mimic word and role banner
-      expect(find.text('You are the Mimic!'), findsOneWidget);
+      expect(find.text('YOU ARE THE MIMIC'), findsOneWidget);
 
-      // Tap Next Player
-      await tester.tap(find.widgetWithText(ElevatedButton, 'Next Player'));
-      await tester.pumpAndSettle();
+      // Wait for auto-advance timer (3s)
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pump(const Duration(milliseconds: 100));
 
-      // 2. Bob (Real Player) views word
-      expect(find.text('Bob'), findsOneWidget);
+      // Pass screen — tap PROCEED to go to Bob
+      expect(find.widgetWithText(ElevatedButton, 'PROCEED'), findsOneWidget);
+      await tester.tap(find.widgetWithText(ElevatedButton, 'PROCEED'));
+      await pumpScreen(tester);
 
-      // Tap Reveal
-      await tester.tap(find.widgetWithText(ElevatedButton, 'Reveal'));
-      await tester.pumpAndSettle();
+      // Bob cover screen
+      expect(find.text('BOB'), findsOneWidget);
 
-      // Bob should see the real word message
-      expect(find.text('Remember your word!'), findsOneWidget);
+      await tester.tap(find.byType(GestureDetector).first);
+      await pumpScreen(tester);
 
-      // Since Bob is the final player, 'Start Discussion' button appears
-      final startDiscButton = find.widgetWithText(ElevatedButton, 'Start Discussion');
+      expect(find.text('REMEMBER YOUR WORD'), findsOneWidget);
+
+      // Wait for auto-advance timer (3s)
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // Bob is last player — START DISCUSSION appears
+      final startDiscButton = find.widgetWithText(ElevatedButton, 'START DISCUSSION');
       expect(startDiscButton, findsOneWidget);
 
-      // Tap Start Discussion
       await tester.tap(startDiscButton);
-      await tester.pumpAndSettle();
+      await pumpScreen(tester);
 
-      // Verify navigation to DiscussionScreen
-      expect(find.text('Discussion'), findsOneWidget);
+      expect(find.text('DISCUSSION'), findsOneWidget);
     });
   });
 
@@ -216,7 +212,8 @@ void main() {
   // 4 · VotingScreen Tests
   // ═══════════════════════════════════════════════════════════════════════
   group('4 · VotingScreen', () {
-    testWidgets('Renders all player cards, handles votes, displays reveal button, and contains invisible detector', (WidgetTester tester) async {
+    testWidgets('Renders all player cards, handles votes, displays reveal button, and contains invisible detector',
+        (WidgetTester tester) async {
       final container = ProviderContainer();
       final notifier = container.read(gameStateProvider.notifier);
 
@@ -224,35 +221,33 @@ void main() {
       notifier.addPlayer('Bob', 0xFF1D9E75);
 
       await tester.pumpWidget(buildGameTestApp(home: const VotingScreen(), container: container));
-      await tester.pumpAndSettle();
+      await pumpScreen(tester);
 
-      // Verify both player cards are rendered
-      expect(find.text('Alice'), findsOneWidget);
-      expect(find.text('Bob'), findsOneWidget);
+      expect(find.text('ALICE'), findsOneWidget);
+      expect(find.text('BOB'), findsOneWidget);
+      expect(find.text('VOTER: ALICE'), findsOneWidget);
+      expect(find.widgetWithText(ElevatedButton, 'REVEAL RESULTS'), findsNothing);
+      expect(find.widgetWithText(ElevatedButton, 'SUBMIT VOTE'), findsOneWidget);
 
-      // Voter is Alice initially, and Reveal Results button is absent
-      expect(find.text('Voter: Alice'), findsOneWidget);
-      expect(find.widgetWithText(ElevatedButton, 'Reveal Results'), findsNothing);
+      // Alice selects Bob, submits
+      await tester.tap(find.text('BOB'));
+      await pumpScreen(tester);
+      final submitBtn = find.widgetWithText(ElevatedButton, 'SUBMIT VOTE');
+      expect(tester.widget<ElevatedButton>(submitBtn).onPressed, isNotNull);
+      await tester.tap(submitBtn);
+      await pumpScreen(tester);
 
-      // Alice votes for Bob
-      await tester.tap(find.widgetWithText(ElevatedButton, 'Bob'));
-      await tester.pumpAndSettle();
+      expect(find.text('VOTER: BOB'), findsOneWidget);
 
-      // Voter is Bob now
-      expect(find.text('Voter: Bob'), findsOneWidget);
+      // Bob selects Alice, submits
+      await tester.tap(find.text('ALICE'));
+      await pumpScreen(tester);
+      await tester.tap(find.widgetWithText(ElevatedButton, 'SUBMIT VOTE'));
+      await pumpScreen(tester);
 
-      // Bob votes for Alice
-      await tester.tap(find.widgetWithText(ElevatedButton, 'Alice'));
-      await tester.pumpAndSettle();
+      expect(find.text('ALL VOTES LOCKED IN'), findsOneWidget);
+      expect(find.widgetWithText(ElevatedButton, 'REVEAL RESULTS'), findsOneWidget);
 
-      // Both players voted
-      expect(find.text('All Voted'), findsOneWidget);
-      
-      // Reveal Results button becomes visible
-      final revealResultsFinder = find.widgetWithText(ElevatedButton, 'Reveal Results');
-      expect(revealResultsFinder, findsOneWidget);
-
-      // TriggerDetector is present and invisible (transparent SizedBox.expand)
       final detectorFinder = find.byType(TriggerDetector);
       expect(detectorFinder, findsOneWidget);
 
@@ -268,7 +263,9 @@ void main() {
   // 5 · ResultsScreen Tests
   // ═══════════════════════════════════════════════════════════════════════
   group('5 · ResultsScreen', () {
-    testWidgets('Plays reveal animation, displays scores, navigation buttons function, and has invisible detector', (WidgetTester tester) async {
+    /// Helper to build a fresh ResultsScreen with seeded state
+    Future<({ProviderContainer container, Map<String, int> voteCounts})>
+        _buildResultsState() async {
       final container = ProviderContainer();
       final notifier = container.read(gameStateProvider.notifier);
 
@@ -280,56 +277,81 @@ void main() {
       final bobId = state.players[1].id;
 
       notifier.state = state.copyWith(
-        mimicId: aliceId,
-        currentWord: 'Guitar',
+        mimicIds: [aliceId],
+        currentWordPair: const WordPair(realWord: 'Guitar', mimicWord: 'Piano'),
       );
 
-      final voteCounts = {aliceId: 2, bobId: 0};
+      return (container: container, voteCounts: {aliceId: 2, bobId: 0});
+    }
+
+    testWidgets('Plays reveal animation, displays scores, and TriggerDetector is present',
+        (WidgetTester tester) async {
+      final (:container, :voteCounts) = await _buildResultsState();
 
       await tester.pumpWidget(buildGameTestApp(
         home: ResultsScreen(voteCounts: voteCounts),
         container: container,
       ));
-      await tester.pumpAndSettle();
+      await pumpScreen(tester);
 
-      // Initially, Mimic identity remains hidden (animation has not fired)
-      expect(find.text('Alice'), findsNothing);
+      // Accusation phase — action buttons absent
+      expect(find.text('NEXT ROUND'), findsNothing);
 
-      // Advance clock past 1.5 seconds to play reveal animation
-      await tester.pump(const Duration(milliseconds: 1600));
-      await tester.pumpAndSettle();
+      // Advance to revelation phase (2s accusation + 1.5s judgment = 3.5s)
+      await tester.pump(const Duration(milliseconds: 3600));
+      await tester.pump(const Duration(milliseconds: 200));
 
-      // Mimic name and victory/defeat messages render
-      expect(find.text('Alice'), findsOneWidget);
-      expect(find.text('The group correctly identified the Mimic!'), findsOneWidget);
-      expect(find.text('Scoreboard'), findsOneWidget);
+      // Revelation phase — mimic name + banner + scoreboard visible
+      expect(find.text('ALICE'), findsAtLeastNWidgets(1));
+      expect(find.text('THE MIMIC HAS BEEN FOUND'), findsOneWidget);
+      expect(find.text('SCOREBOARD'), findsOneWidget);
 
-      // Test "Play Again" button navigates back to word reveal
-      final playAgainBtn = find.widgetWithText(ElevatedButton, 'Play Again');
-      expect(playAgainBtn, findsOneWidget);
-      await tester.tap(playAgainBtn);
-      await tester.pumpAndSettle();
+      // TriggerDetector overlay is present
+      expect(find.byType(TriggerDetector), findsOneWidget);
+    });
+
+    testWidgets('NEXT ROUND navigates to WordRevealScreen',
+        (WidgetTester tester) async {
+      final (:container, :voteCounts) = await _buildResultsState();
+
+      await tester.pumpWidget(buildGameTestApp(
+        home: ResultsScreen(voteCounts: voteCounts),
+        container: container,
+      ));
+      await pumpScreen(tester);
+
+      await tester.pump(const Duration(milliseconds: 3600));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final nextRoundBtn = find.widgetWithText(ElevatedButton, 'NEXT ROUND');
+      expect(nextRoundBtn, findsOneWidget);
+      await tester.tap(nextRoundBtn);
+      await pumpScreen(tester);
+
       expect(find.byType(WordRevealScreen), findsOneWidget);
+    });
 
-      // Rebuild and reveal to test "New Game"
+    testWidgets('END GAME resets state and navigates to PlayerSetupScreen',
+        (WidgetTester tester) async {
+      final (:container, :voteCounts) = await _buildResultsState();
+
       await tester.pumpWidget(buildGameTestApp(
         home: ResultsScreen(voteCounts: voteCounts),
         container: container,
       ));
-      await tester.pump(const Duration(milliseconds: 1600));
-      await tester.pumpAndSettle();
+      await pumpScreen(tester);
 
-      // Test "New Game" resets game state and redirects to player setup
-      final newGameBtn = find.widgetWithText(OutlinedButton, 'New Game');
-      expect(newGameBtn, findsOneWidget);
-      await tester.tap(newGameBtn);
-      await tester.pumpAndSettle();
+      await tester.pump(const Duration(milliseconds: 3600));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      final endGameBtn = find.widgetWithText(OutlinedButton, 'END GAME');
+      expect(endGameBtn, findsOneWidget);
+      await tester.tap(endGameBtn);
+      await pumpScreen(tester);
+
       expect(find.byType(PlayerSetupScreen), findsOneWidget);
       expect(container.read(gameStateProvider).players.length, 0,
-          reason: 'New Game must clear/reset all players from state');
-
-      // Verify TriggerDetector overlay is present and invisible
-      expect(find.byType(TriggerDetector), findsOneWidget);
+          reason: 'End Game must clear/reset all players from state');
     });
   });
 

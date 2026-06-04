@@ -12,10 +12,14 @@ class DocumentVaultScreen extends ConsumerStatefulWidget {
 }
 
 class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
-  List<DocumentMeta> _documents = [];
-  List<DocumentMeta> get documents => _documents;
-  set documents(List<DocumentMeta> value) => _documents = value;
+  List<DocumentMeta> documents = [];
   bool _isLoading = true;
+
+  void setDocumentsForTesting(List<DocumentMeta> docs) {
+    setState(() {
+      documents = docs;
+    });
+  }
 
   @override
   void initState() {
@@ -29,7 +33,7 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
     // different metadata. We'll use the platform service for document listing.
     if (mounted) {
       setState(() {
-        _documents = [];
+        documents = [];
         _isLoading = false;
       });
     }
@@ -116,7 +120,7 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: VaultColors.accent))
-          : _documents.isEmpty
+          : documents.isEmpty
               ? Center(
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -150,9 +154,9 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                 )
               : ListView.builder(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  itemCount: _documents.length,
+                  itemCount: documents.length,
                   itemBuilder: (context, index) {
-                    final doc = _documents[index];
+                    final doc = documents[index];
                     final docColor = _getDocColor(doc.type);
 
                     return Dismissible(

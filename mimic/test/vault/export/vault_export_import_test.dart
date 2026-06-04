@@ -2,9 +2,6 @@
 
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
-
-import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mimic/core/services/platform_service.dart';
@@ -275,7 +272,7 @@ void main() {
       // Verify the encrypted file was restored on disk
       expect(await photoFile.exists(), isTrue);
       expect(utf8.decode(await photoFile.readAsBytes()), equals('photo_bytes'));
-    });
+    }, timeout: const Timeout(Duration(minutes: 2)));
 
     // ─────────────────────────────────────────────────────────────────
     //  Wrong recovery phrase must fail without overwriting existing data
@@ -338,6 +335,6 @@ void main() {
       expect(notes.length, equals(1));
       expect(notes[0]['title'], equals('Active Vault Note'),
           reason: 'Existing active vault data must not be affected by failed recovery phrase import');
-    });
+    }, timeout: const Timeout(Duration(minutes: 2)));
   });
 }

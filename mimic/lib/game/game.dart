@@ -2,91 +2,71 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
-import 'package:mimic/game/screens/home_screen.dart';
-import 'package:mimic/game/screens/mode_select_screen.dart';
-import 'package:mimic/game/screens/pack_select_screen.dart';
-import 'package:mimic/game/screens/player_setup_screen.dart';
-import 'package:mimic/game/screens/word_reveal_screen.dart';
-import 'package:mimic/game/screens/voting_screen.dart';
-import 'package:mimic/game/screens/results_screen.dart';
-import 'package:mimic/vault/screens/pin_screen.dart';
-import 'package:mimic/vault/screens/vault_home_screen.dart';
-import 'package:mimic/vault/screens/photo_vault_screen.dart';
-import 'package:mimic/vault/screens/notes_screen.dart';
-import 'package:mimic/vault/screens/audio_vault_screen.dart';
-import 'package:mimic/vault/screens/document_vault_screen.dart';
-import 'package:mimic/vault/screens/vault_settings_screen.dart';
-import 'package:mimic/vault/screens/breakin_log_screen.dart';
-import 'package:mimic/vault/screens/recovery_phrase_screen.dart';
-import 'package:mimic/vault/screens/enter_recovery_screen.dart';
-import 'package:mimic/vault/screens/reset_pin_screen.dart';
-import 'package:mimic/vault/screens/export_vault_screen.dart';
-import 'package:mimic/vault/screens/import_vault_screen.dart';
+import 'package:mimic/core/router/app_router.dart' as router;
+import 'package:mimic/multiplayer/network/disconnect_handler.dart';
+
+
 
 class MimicGame extends StatelessWidget {
   const MimicGame({super.key});
 
-  // Game routes
-  static const String homeRoute = '/';
-  static const String modeSelectRoute = '/mode-select';
-  static const String playerSetupRoute = '/player-setup';
-  static const String packSelectRoute = '/pack-select';
-  static const String wordRevealRoute = '/word-reveal';
-  static const String discussionRoute = '/discussion';
-  static const String votingRoute = '/voting';
-  static const String resultsRoute = '/results';
+  static GlobalKey<NavigatorState> get navigatorKey => router.navigatorKey;
 
-  // Vault routes
-  static const String vaultPinRoute = '/vault-pin';
-  static const String vaultHomeRoute = '/vault-home';
-  static const String vaultPhotosRoute = '/vault-photos';
-  static const String vaultNotesRoute = '/vault-notes';
-  static const String vaultAudioRoute = '/vault-audio';
-  static const String vaultDocumentsRoute = '/vault-documents';
-  static const String vaultSettingsRoute = '/vault-settings';
-  static const String vaultBreakinLogsRoute = '/vault-breakin-logs';
-  static const String vaultRecoveryPhraseRoute = '/vault-recovery-phrase';
-  static const String vaultEnterRecoveryRoute = '/vault-enter-recovery';
-  static const String vaultResetPinRoute = '/vault-reset-pin';
-  static const String vaultExportRoute = '/vault-export';
-  static const String vaultImportRoute = '/vault-import';
+  // Game routes (forwarded to AppRouter for backward compatibility)
+  static const String homeRoute = router.AppRouter.homeRoute;
+  static const String modeSelectRoute = router.AppRouter.modeSelectRoute;
+  static const String playerSetupRoute = router.AppRouter.playerSetupRoute;
+  static const String packSelectRoute = router.AppRouter.packSelectRoute;
+  static const String wordRevealRoute = router.AppRouter.wordRevealRoute;
+  static const String discussionRoute = router.AppRouter.discussionRoute;
+  static const String votingRoute = router.AppRouter.votingRoute;
+  static const String resultsRoute = router.AppRouter.resultsRoute;
+  static const String multiplayerRoute = router.AppRouter.multiplayerRoute;
+  static const String tutorialRoute = router.AppRouter.tutorialRoute;
+  static const String profileRoute = router.AppRouter.profileRoute;
+  static const String leaderboardRoute = router.AppRouter.leaderboardRoute;
+
+  // Vault routes (forwarded to AppRouter for backward compatibility)
+  static const String vaultPinRoute = router.AppRouter.vaultPinRoute;
+  static const String vaultHomeRoute = router.AppRouter.vaultHomeRoute;
+  static const String vaultPhotosRoute = router.AppRouter.vaultPhotosRoute;
+  static const String vaultNotesRoute = router.AppRouter.vaultNotesRoute;
+  static const String vaultAudioRoute = router.AppRouter.vaultAudioRoute;
+  static const String vaultDocumentsRoute = router.AppRouter.vaultDocumentsRoute;
+  static const String vaultSettingsRoute = router.AppRouter.vaultSettingsRoute;
+  static const String vaultBreakinLogsRoute = router.AppRouter.vaultBreakinLogsRoute;
+  static const String vaultRecoveryPhraseRoute = router.AppRouter.vaultRecoveryPhraseRoute;
+  static const String vaultEnterRecoveryRoute = router.AppRouter.vaultEnterRecoveryRoute;
+  static const String vaultResetPinRoute = router.AppRouter.vaultResetPinRoute;
+  static const String vaultExportRoute = router.AppRouter.vaultExportRoute;
+  static const String vaultImportRoute = router.AppRouter.vaultImportRoute;
 
   @override
   Widget build(BuildContext context) {
     return ProviderScope(
-      child: MaterialApp(
-        title: 'Mimic Game',
-        debugShowCheckedModeBanner: false,
-        theme: HorrorTheme.themeData,
-        themeMode: ThemeMode.dark, // Keep theme consistently in dark horror mode
-        initialRoute: homeRoute,
-        routes: {
-          // Game screens
-          homeRoute: (context) => const HomeScreen(),
-          modeSelectRoute: (context) => const ModeSelectScreen(),
-          playerSetupRoute: (context) => const PlayerSetupScreen(),
-          packSelectRoute: (context) => const PackSelectScreen(),
-          wordRevealRoute: (context) => const WordRevealScreen(),
-          discussionRoute: (context) => const DiscussionScreen(),
-          votingRoute: (context) => const VotingScreen(),
-          resultsRoute: (context) => const ResultsScreen(),
+      child: Consumer(
+        builder: (context, ref, _) {
+          // Listen to disconnectHandlerProvider globally to instantiate it and route disconnect events
+          ref.listen<DisconnectHandler>(disconnectHandlerProvider, (previous, next) {
+            // The disconnect handler is now initialized and listening.
+            // Any routing of DisconnectEvents is handled globally via this controller.
+          });
 
-          // Vault screens
-          vaultPinRoute: (context) => const PinScreen(),
-          vaultHomeRoute: (context) => const VaultHomeScreen(),
-          vaultPhotosRoute: (context) => const PhotoVaultScreen(),
-          vaultNotesRoute: (context) => const NotesScreen(),
-          vaultAudioRoute: (context) => const AudioVaultScreen(),
-          vaultDocumentsRoute: (context) => const DocumentVaultScreen(),
-          vaultSettingsRoute: (context) => const VaultSettingsScreen(),
-          vaultBreakinLogsRoute: (context) => const BreakInLogScreen(),
-          vaultRecoveryPhraseRoute: (context) => const RecoveryPhraseScreen(),
-          vaultEnterRecoveryRoute: (context) => const EnterRecoveryScreen(),
-          vaultResetPinRoute: (context) => const ResetPinScreen(),
-          vaultExportRoute: (context) => const ExportVaultScreen(),
-          vaultImportRoute: (context) => const ImportVaultScreen(),
+          return MaterialApp(
+            title: 'Mimic Game',
+            navigatorKey: router.navigatorKey,
+            debugShowCheckedModeBanner: false,
+            theme: HorrorTheme.themeData,
+            themeMode: ThemeMode.dark, // Keep theme consistently in dark horror mode
+            initialRoute: homeRoute,
+            onGenerateRoute: router.AppRouter.onGenerateRoute,
+            navigatorObservers: [
+              ref.watch(router.networkNavigatorObserverProvider),
+            ],
+          );
         },
       ),
     );
   }
 }
+

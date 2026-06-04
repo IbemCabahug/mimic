@@ -9,7 +9,7 @@ void main() {
     // Verify that the title 'MIMIC' is displayed.
     expect(find.text('MIMIC'), findsOneWidget);
 
-    // Verify that the 'Play' button is displayed.
-    expect(find.text('Play'), findsOneWidget);
+    // Verify that the 'BEGIN' button is displayed.
+    expect(find.text('BEGIN'), findsOneWidget);
   });
 }

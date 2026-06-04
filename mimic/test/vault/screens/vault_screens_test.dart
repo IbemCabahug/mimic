@@ -16,7 +16,6 @@
 // - No decrypted file data is written to disk
 
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -38,7 +37,6 @@ import 'package:mimic/vault/screens/vault_home_screen.dart';
 import 'package:mimic/vault/screens/photo_vault_screen.dart';
 import 'package:mimic/vault/screens/notes_screen.dart';
 import 'package:mimic/vault/screens/audio_vault_screen.dart';
-import 'package:mimic/vault/screens/audio_recorder_screen.dart';
 import 'package:mimic/vault/screens/document_vault_screen.dart';
 import 'package:mimic/vault/screens/vault_settings_screen.dart';
 import 'package:mimic/vault/screens/breakin_log_screen.dart';
@@ -525,17 +523,15 @@ void main() {
 
       // Inject document metadata state directly using Widget state manipulation
       final DocumentVaultScreenState docState = tester.state(find.byType(DocumentVaultScreen));
-      docState.setState(() {
-        docState.documents = [
-          DocumentMeta(
-            id: 'doc_99',
-            name: 'Tax_Return_2025.pdf',
-            type: 'pdf',
-            size: 1024 * 128, // 128 KB
-            createdAt: DateTime.now(),
-          )
-        ];
-      });
+      docState.setDocumentsForTesting([
+        DocumentMeta(
+          id: 'doc_99',
+          name: 'Tax_Return_2025.pdf',
+          type: 'pdf',
+          size: 1024 * 128, // 128 KB
+          createdAt: DateTime.now(),
+        )
+      ]);
       await tester.pumpAndSettle();
 
       // Verify metadata renders correctly
@@ -561,6 +557,11 @@ void main() {
       // Verify settings options render
       expect(find.text('Change PIN'), findsOneWidget);
       expect(find.text('Lock Vault'), findsOneWidget);
+
+      // Scroll to render lower settings options
+      await tester.drag(find.byType(ListView), const Offset(0, -300));
+      await tester.pumpAndSettle();
+
       expect(find.text('Intruder Logs'), findsOneWidget);
       expect(find.text('Clear All Data'), findsOneWidget);
 

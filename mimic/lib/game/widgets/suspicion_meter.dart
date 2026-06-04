@@ -7,11 +7,7 @@ class SuspicionMeter extends StatelessWidget {
   final double value; // range 0.0 to 1.0 (representing 0% to 100%)
   final double height;
 
-  const SuspicionMeter({
-    Key? key,
-    required this.value,
-    this.height = 20.0,
-  }) : super(key: key);
+  const SuspicionMeter({super.key, required this.value, this.height = 20.0});
 
   @override
   Widget build(BuildContext context) {
@@ -33,7 +29,10 @@ class SuspicionMeter extends StatelessWidget {
                   height: height,
                   decoration: BoxDecoration(
                     color: HorrorColors.deepSurface,
-                    border: Border.all(color: HorrorColors.darkRedTint, width: 1),
+                    border: Border.all(
+                      color: HorrorColors.darkRedTint,
+                      width: 1,
+                    ),
                   ),
                   child: Stack(
                     children: [
