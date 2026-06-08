@@ -5,6 +5,7 @@ import '../crypto/vault_crypto.dart';
 import '../services/file_vault_service.dart';
 import '../services/notes_service.dart';
 import '../services/audio_vault_service.dart';
+import '../services/backup_reminder_service.dart';
 import '../widgets/vault_scaffold.dart';
 
 class VaultHomeScreen extends ConsumerStatefulWidget {
@@ -29,6 +30,12 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
       vsync: this,
     )..forward();
     _loadCounts();
+
+    Future.delayed(const Duration(seconds: 1), () {
+      if (mounted) {
+        BackupReminderService.checkAndShowReminder(context);
+      }
+    });
   }
 
   @override

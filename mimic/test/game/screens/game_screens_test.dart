@@ -58,6 +58,27 @@ Future<void> pumpScreen(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 300));
 }
 
+/// Helper to build a fresh ResultsScreen with seeded state.
+Future<({ProviderContainer container, Map<String, int> voteCounts})>
+    buildResultsState() async {
+  final container = ProviderContainer();
+  final notifier = container.read(gameStateProvider.notifier);
+
+  notifier.addPlayer('Alice', 0xFF7F77DD);
+  notifier.addPlayer('Bob', 0xFF1D9E75);
+
+  final state = container.read(gameStateProvider);
+  final aliceId = state.players[0].id;
+  final bobId = state.players[1].id;
+
+  notifier.state = state.copyWith(
+    mimicIds: [aliceId],
+    currentWordPair: const WordPair(realWord: 'Guitar', mimicWord: 'Piano'),
+  );
+
+  return (container: container, voteCounts: <String, int>{aliceId: 2, bobId: 0});
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Tests Main Entry
 // ═══════════════════════════════════════════════════════════════════════════
@@ -263,30 +284,9 @@ void main() {
   // 5 · ResultsScreen Tests
   // ═══════════════════════════════════════════════════════════════════════
   group('5 · ResultsScreen', () {
-    /// Helper to build a fresh ResultsScreen with seeded state
-    Future<({ProviderContainer container, Map<String, int> voteCounts})>
-        _buildResultsState() async {
-      final container = ProviderContainer();
-      final notifier = container.read(gameStateProvider.notifier);
-
-      notifier.addPlayer('Alice', 0xFF7F77DD);
-      notifier.addPlayer('Bob', 0xFF1D9E75);
-
-      final state = container.read(gameStateProvider);
-      final aliceId = state.players[0].id;
-      final bobId = state.players[1].id;
-
-      notifier.state = state.copyWith(
-        mimicIds: [aliceId],
-        currentWordPair: const WordPair(realWord: 'Guitar', mimicWord: 'Piano'),
-      );
-
-      return (container: container, voteCounts: {aliceId: 2, bobId: 0});
-    }
-
     testWidgets('Plays reveal animation, displays scores, and TriggerDetector is present',
         (WidgetTester tester) async {
-      final (:container, :voteCounts) = await _buildResultsState();
+      final (:container, :voteCounts) = await buildResultsState();
 
       await tester.pumpWidget(buildGameTestApp(
         home: ResultsScreen(voteCounts: voteCounts),
@@ -312,7 +312,7 @@ void main() {
 
     testWidgets('NEXT ROUND navigates to WordRevealScreen',
         (WidgetTester tester) async {
-      final (:container, :voteCounts) = await _buildResultsState();
+      final (:container, :voteCounts) = await buildResultsState();
 
       await tester.pumpWidget(buildGameTestApp(
         home: ResultsScreen(voteCounts: voteCounts),
@@ -333,7 +333,7 @@ void main() {
 
     testWidgets('END GAME resets state and navigates to PlayerSetupScreen',
         (WidgetTester tester) async {
-      final (:container, :voteCounts) = await _buildResultsState();
+      final (:container, :voteCounts) = await buildResultsState();
 
       await tester.pumpWidget(buildGameTestApp(
         home: ResultsScreen(voteCounts: voteCounts),

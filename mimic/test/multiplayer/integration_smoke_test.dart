@@ -41,7 +41,6 @@ class MockNetworkService extends NetworkService {
   @override
   NetworkRole get role => _role;
 
-  @override
   set role(NetworkRole val) {
     _role = val;
     notifyListeners();

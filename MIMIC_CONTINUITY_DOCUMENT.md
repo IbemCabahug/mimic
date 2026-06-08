@@ -1,15 +1,8 @@
 # 🎭 Mimic — Session Continuity Document
 > Paste this at the start of a new session to restore full context instantly.
 
----
+**Last Updated:** 2026-06-08
 
-## Quick Context Snapshot
-> Read this first — everything essential in 60 seconds.
-
-**App name:** Mimic
-**What it is:** A fully playable social deduction party game (the disguise) with an AES-256 encrypted personal vault hidden inside it (the real product). Nobody suspects a game.
-**Platform:** Flutter — Android-first. iOS later.
-**Dev environment:** Antigravity editor + Gemini Flash 2.5 (code writing). Claude used for final feature review and testing phases only.
 **Current build status:**
 - ✅ Phase 1 (game redesign & features) — COMPLETE (redesigned with full horror theme, game modes, word packs, suspicion levels, and custom animations)
 - ✅ Phase 2 (vault) — COMPLETE (including BIP39 Recovery Phrase and PIN Reset features)
@@ -18,11 +11,15 @@
 - ✅ Web compatibility layer — COMPLETE (PlatformService, shared_preferences fallback, in-memory keystore for crypto, kIsWeb guards on biometrics/camera)
 - ✅ BIP39 PIN Recovery — COMPLETE
 - ✅ Vault Export/Import (.mimic backup files) — COMPLETE
-- 🔄 Phase 5 (v1.1 — Multiplayer + Engagement) — IN PLANNING
-- ⬜ Phase 6 (pre-launch prep) — not started
-- ⬜ Phase 7 (launch) — not started
+- ✅ Phase 5 (v1.1 — Multiplayer) — COMPLETE (WebSocket LAN, QR code joining, rejoin flow)
+- ✅ Phase 6A (Critical Fixes) — COMPLETE
+- ✅ Phase 6B (Vault Features) — COMPLETE
+- ✅ Phase 6C (Security) — COMPLETE (zero analyzer errors)
+- ✅ BUG-001: Photo vault import — RESOLVED
+- ⬜ Phase 6D — Analyzer Cleanup (in progress)
+- ⬜ Phase 7 — Launch — NOT STARTED
 
-**Current rating:** 99/100 — the only remaining point is final production hardening (Phases 6–7). v1.1 multiplayer + engagement features will push this to 100/100 on completion.
+**Current status:** Analyzer cleanup session in progress — Phase 6D paused for fix verification. 9 analyzer issues identified in `test/multiplayer/integration_smoke_test.dart` (1 warning + 9 info). All production code clean.
 
 **AI workflow:**
 - **Gemini Flash 2.5** — writes all code (one file at a time)
@@ -118,23 +115,21 @@ Implemented full encrypted vault backup and restore functionality, resolving the
 Major game enhancement plan designed to make Mimic a genuinely convincing published game and push rating to 100/100. Three areas scoped:
 
 **Multiplayer:**
-- Local WiFi multiplayer via `nearby_connections` (v1.1)
+- LAN multiplayer via WebSocket using `web_socket_channel` + `stomp_dart_client` (v1.1)
 - Online multiplayer deferred to v2.0
-- Host/Guest model — one device hosts, others join via room code
-- Max 2–10 players
+- Host/Guest model — one device hosts (hotspot), others join via room code
+- Max 2–8 players
+- Room code encodes host IP + port, QR code sharing via `qr_flutter`
+- Guest joining via QR scan (`mobile_scanner`) or manual entry
 
 **Communication (Voice + Chat):**
-- Push-to-talk voice via `flutter_webrtc` — hold button to speak
-- Text chat overlay — available simultaneously with voice
-- Each player independently chooses their preferred mode
-- Both auto-disabled during word reveal, voting, and results phases
-- Pulsing red speaking indicator next to active speaker's name
+- Voice/chat deferred to v2.0 — not included in v1.1 scope
 
 **Engagement Features:**
 - Player profiles with persistent stats and horror avatars
 - Suspicion Score system (cumulative points for all actions)
 - Rank tiers: Bystander → Suspect → Investigator → Phantom → The Original
-- Local leaderboard (online leaderboard deferred to v2.0)
+- Local leaderboard using SQLite stats_service
 - Post-round Case File screen (shareable dramatic summary)
 - Auto-generated Roast Cards (one-liner humor based on round events)
 - Special roles in Nightmare mode: Informant, Paranoid, Ally
@@ -148,6 +143,66 @@ Major game enhancement plan designed to make Mimic a genuinely convincing publis
 - Step 3 secretly embeds the TriggerDetector vault trigger
 - If triggered → glitch transition → PIN screen
 - If completed normally → "You're ready to play!" screen — 100% innocent
+
+### Stage 21 — v1.1 Multiplayer Implementation Complete
+Phase 5 (v1.1 Multiplayer) fully implemented and integrated. Built using Antigravity IDE with Gemini agent. WebSocket-based LAN multiplayer replaces the originally planned `nearby_connections` P2P approach for greater reliability.
+
+**Batch A — Network Layer:**
+- A1: MimicServer — WebSocket server, binds to hotspot IP, port 4567
+- A2: MimicClient — WebSocket client with reconnect (3 attempts)
+- A3: NetworkService — abstraction layer, Riverpod provider, zero vault imports
+
+**Batch B — Room System:**
+- B1: HostScreen — room code + QR code generation, player list, START button enabled when 2+ players connected
+- B2: JoinScreen — room code entry + QR scan via mobile_scanner, player name input
+- B3: LobbyScreen — shared waiting room, ready states, animated player list, max 8 players
+
+**Batch C — Game State Sync:**
+- C1: GameStateSyncNotifier — bridges GameStateNotifier with NetworkService, host-authoritative, sanitized state per player
+- C2: NetworkWordRevealScreen — 3-stage reveal (waiting/ready/revealed), privacy guard on app background
+- C3: NetworkVotingScreen — synced voting, host tallies, simultaneous results broadcast
+
+**Batch D — Resilience:**
+- D1: DisconnectHandler — ping/pong every 5s, 3s timeout detection, graceful UI dialogs
+- D2: RejoinScreen — auto-reconnect on launch, 3 attempts, SharedPreferences persistence
+- D3: MultiplayerMenuScreen — entry point, network disguise, session-active detection
+
+**Batch E — Integration:**
+- E1: App router updated — all multiplayer routes, NavigatorObserver, route guards
+- E2: AndroidManifest — INTERNET, WIFI, CAMERA permissions, usesCleartextTraffic=true
+- E3: Provider registration — autoDispose on all multiplayer providers, MultiplayerProviderScope
+- E4: Main menu — MULTIPLAYER card with NEW badge added
+- E5: Integration smoke tests — 12/12 passing
+
+### Stage 22 — BUG-001 Resolution (Photo Vault Import)
+Root cause identified and fixed: encrypted files were saved/read using bare UUID strings as paths (e.g. `File("3f8a9b2c-...")`) instead of full absolute paths. Files wrote to an unstable working directory instead of persistent app storage.
+
+Fixes applied:
+- `lib/core/services/platform_service.dart` — `saveEncryptedFile()` now calls `file.parent.create(recursive: true)` before writing
+- `lib/vault/services/file_vault_service.dart` — added `_vaultFilePath(id)` helper using `getApplicationDocumentsDirectory()` + `'vault_files'` subfolder
+- `lib/vault/services/audio_vault_service.dart` — same fix with `'vault_audio'` subfolder
+- `lib/vault/services/notes_service.dart` — no fix needed (SQLite text columns only)
+- `lib/vault/services/video_vault_service.dart` — does not exist yet; will be built with correct `_vaultFilePath()` pattern from the start
+
+BUG-001 status: **RESOLVED ✅**
+
+### Stage 23 — Phase 6C Security Upgrades Complete
+Three interconnected security features built and verified (zero errors on flutter analyze):
+
+**FEATURE 1 — Fake PIN → Admin Panel**
+- `lib/vault/security/duress_service.dart` — SHA-256 + salt PIN hashing, `duressServiceProvider`
+- `lib/game/screens/admin_panel_screen.dart` — full horror-themed admin UI with 9 actions across 4 sections (Game Intel, Round Control, Score Control, System)
+- `lib/vault/screens/set_duress_pin_screen.dart` — set/change/remove fake PIN with double-entry confirmation
+- Modified: `pin_screen.dart` (fake PIN → admin panel), `vault_settings_screen.dart` (Duress PIN tile), `app_router.dart` (route), `game_state.dart` (`setMimicIds()` + `restartRound()`), `stats_service.dart` (`resetAllScores()`)
+
+**FEATURE 2 — Shake to Wipe PIN**
+- `lib/vault/security/shake_wipe_service.dart` — sensors_plus accelerometer, double-shake detection, `shakeWipeServiceProvider`
+- `lib/vault/security/pin_wipe_service.dart` — `wipePin()` / `isPinWiped()`, `pinWipeServiceProvider`
+- Modified: `pin_screen.dart` (wipe check + shake listener), `home_screen.dart` (shake listener during gameplay), `vault_settings_screen.dart` (Shake to Wipe toggle with warning dialog)
+
+**FEATURE 3 — Wiped Vault Restore Screen**
+- `lib/vault/screens/wiped_vault_screen.dart` — plain white restore screen, "Restore Vault" → EnterRecoveryScreen, "Return to game" → game home
+- Modified: `app_router.dart` (WipedVaultScreen route added)
 
 ---
 
@@ -174,7 +229,8 @@ Major game enhancement plan designed to make Mimic a genuinely convincing publis
 - Vault export/import (.mimic encrypted backup files) for cross-device migration
 - sqflite_common_ffi for desktop test environments (resolving MissingPluginException)
 - AI workflow switch: Gemini Flash 2.5 for code, Claude for final review/testing only
-- v1.1 multiplayer + voice/chat + engagement features planning
+- v1.1 multiplayer + engagement features planning
+- v1.1 multiplayer implementation complete (WebSocket LAN, QR joining, rejoin flow)
 
 ---
 
@@ -196,10 +252,11 @@ Major game enhancement plan designed to make Mimic a genuinely convincing publis
 | Web testing | Temporary web compatibility layer via PlatformService abstraction | Faster testing on Chrome without rebuilding for Android every time |
 | Vault export/import | Local encrypted .mimic binary file with SHA-256 checksum | Cross-device migration without cloud — aligns with local-only privacy model |
 | Multiplayer networking | nearby_connections for local WiFi (v1.1), online deferred to v2.0 | Keeps local-only promise for v1, scales naturally to v2 |
-| Voice communication | Push-to-talk via flutter_webrtc | Cleaner than open mic — no accidental broadcasting |
+| Voice communication | Push-to-talk via flutter_webrtc — hold button to speak | Cleaner than open mic — no accidental broadcasting |
 | Voice + chat | Both available simultaneously, player chooses | Maximum flexibility without forcing one mode on all players |
 | Leaderboard | Local only (v1.1), online deferred to v2.0 | Consistent with local-only architecture |
 | AI workflow | Gemini Flash 2.5 for code, Claude for final review/testing | Faster iteration — Claude reserved for quality gate moments |
+| Multiplayer networking (v1.1) | WebSocket server/client (web_socket_channel) | More reliable than nearby_connections P2P for hotspot play |
 
 ---
 
@@ -285,8 +342,11 @@ Major game enhancement plan designed to make Mimic a genuinely convincing publis
 | Camera | camera (intruder selfie) |
 | File picker | image_picker (photos), file_picker (audio & vault import) |
 | Audio | just_audio + just_audio_web |
-| Voice (v1.1) | flutter_webrtc (push-to-talk P2P audio) |
-| Local networking (v1.1) | nearby_connections (WiFi/Bluetooth P2P) |
+| Voice (v1.1) | Not included in v1.1 — deferred to v2.0 |
+| Local networking (v1.1) | web_socket_channel (WebSocket server/client on port 4567) |
+| QR display (v1.1) | qr_flutter (QR code on host screen) |
+| QR scan (v1.1) | mobile_scanner (QR scan on join screen) |
+| File picker | image_picker (photos), file_picker (audio & vault import) |
 | State management | Riverpod |
 | Web detection | kIsWeb from flutter/foundation.dart |
 | Sharing | share_plus (vault export sharing + case file sharing) |
@@ -294,10 +354,19 @@ Major game enhancement plan designed to make Mimic a genuinely convincing publis
 | File paths | path_provider (Downloads directory for export) |
 | Desktop SQLite (test) | sqflite_common_ffi (FFI-backed SQLite for Windows/macOS/Linux tests) |
 
-### v1.1 New Dependencies to Add
+### v1.1 Dependencies Added
 ```yaml
-nearby_connections: ^4.1.0      # Local WiFi P2P
-flutter_webrtc: ^0.9.47         # Push-to-talk voice
+qr_flutter: ^4.1.0            # QR code display on host screen
+mobile_scanner: ^5.2.3        # QR scan on join screen
+file_picker: 10.3.10          # Audio import & vault import — pinned (v11 has Android build bug)
+web_socket_channel: ^2.4.0    # WebSocket server/client for LAN multiplayer
+```
+
+### Phase 6 Dependencies Added
+```yaml
+video_player: ^2.8.6          # Video vault playback
+chewie: ^1.7.5               # Video player UI controls
+package_info_plus: ^8.0.0     # Version detection for backup reminder
 ```
 
 ---
@@ -489,20 +558,93 @@ Split-face design — one half normal, one half glitchy/distorted. Dark backgrou
 - ✅ vault_export_import_test.dart — 6/6 tests passing
 - ✅ manual_testing_checklist.md
 
-### Phase 5 — v1.1 Multiplayer + Engagement 🔄 IN PLANNING
-- ⬜ Batch A: nearby_service, game_sync, voice_service, chat_service
-- ⬜ Batch B: multiplayer_menu, host_lobby, join_lobby, tutorial_screen
-- ⬜ Batch C: player_profile, special_roles, stats_service, leaderboard_screen
-- ⬜ Batch D: case_file, roast_card, ambience_service, PTT + chat widgets
-- ⬜ Batch E: updated home, setup, voting, results, mode_select screens
+### Phase 5 — v1.1 Multiplayer ✅ COMPLETE
+- ✅ Batch A — Network Layer: MimicServer (WebSocket, port 4567), MimicClient (3-attempt reconnect), NetworkService (Riverpod, zero vault imports)
+- ✅ Batch B — Room System: HostScreen (QR + room code, START at 2+ players), JoinScreen (QR scan + manual entry), LobbyScreen (ready states, max 8 players, animated list)
+- ✅ Batch C — Game State Sync: GameStateSyncNotifier (host-authoritative, sanitized per player), NetworkWordRevealScreen (3-stage + privacy guard), NetworkVotingScreen (synced voting + simultaneous results)
+- ✅ Batch D — Resilience: DisconnectHandler (5s ping/pong, 3s timeout, UI dialogs), RejoinScreen (auto-reconnect, SharedPreferences), MultiplayerMenuScreen (entry + session detection)
+- ✅ Batch E — Integration: App router (NavigatorObserver + route guards), AndroidManifest (INTERNET/WIFI/CAMERA + usesCleartextTraffic), Provider registration (autoDispose + MultiplayerProviderScope), Main menu MULTIPLAYER card with NEW badge
+- ✅ 12/12 integration smoke tests passing
 
-### Phase 6 — Pre-launch Prep ⬜ NOT STARTED
-- Release build config (signing keystore, key.properties)
-- R8/ProGuard obfuscation
-- App icon & splash screen final assets
-- Play Store listing (description, screenshots, content rating)
-- Privacy policy (required by Google Play)
-- Version & build number (pubspec.yaml production values)
+### Phase 6A — Critical Fixes ✅ COMPLETE
+
+**6A-1: Biometric Authentication Fix**
+- BiometricService created with 4 methods: isBiometricAvailable(), authenticate(), setBiometricEnabled(), isBiometricEnabled()
+- PinScreen auto-triggers biometric on load via didChangeDependencies()
+- Fingerprint icon button shown on PinScreen when available
+- Biometric toggle added to VaultSettingsScreen
+- USE_BIOMETRIC and USE_FINGERPRINT permissions added to AndroidManifest.xml
+- Status: 14/15 checks passed, 1 minor naming fix applied
+
+**6A-2: Intruder Selfie Fix**
+- IntruderService with 4 methods: captureIntruder(), getIntruderLog(), decryptIntruderImage(), deleteIntruderEntry()
+- Silent front camera capture with no preview
+- Image encrypted immediately after capture
+- PinScreen tracks _wrongAttempts, triggers at 3 wrong attempts
+- BreakInLogScreen (breakin_log_screen.dart) with blurred thumbnails and tap-to-reveal dialog
+- Fix applied: import path corrected from break_in_log_screen to breakin_log_screen in app_router.dart
+
+**6A-3: Update Warning / Backup Reminder**
+- BackupReminderService with 3 methods: checkAndShowReminder(), markBackupCompleted(), getLastBackupDate()
+- Version update dialog shown when app version changes
+- 30-day backup reminder dialog
+- markBackupCompleted() called after successful export
+- Called in home_screen.dart initState with 1 second delay
+- Secondary call added to vault_home_screen.dart with session flag to prevent duplicate dialogs
+
+### Phase 6B — New Vault Features ✅ COMPLETE
+
+**6B-1: Video Vault**
+- VideoVaultService with 5 methods: importVideo(), getVideos(), decryptVideoToTemp(), deleteVideo(), decryptThumbnail()
+- VideoVaultEntry model: filename, thumbFilename, originalName, fileSizeBytes, importedAt, videoDuration
+- VideoVaultScreen: 2-column grid, thumbnail cards, import via FilePicker, long press to delete
+- VideoPlayerScreen: Chewie player, temp file deleted on dispose, auto-play, full screen support
+- Video added to VaultHomeScreen grid with video count
+- Routes added: /vault/videos, /vault/video-player
+- Security: temp files only in cache directory, deleted after playback, never written to external storage
+- Dependencies added: video_player: ^2.8.6, chewie: ^1.7.5
+
+**6B-2: Auto-Backup Reminder Banner**
+- BackupReminderService updated with getDaysSinceLastBackup() and getLastBackupFormatted()
+- BackupBannerWidget with 3 states: Never backed up (amber warning), 8-29 days (subtle grey info), 30+ days (crimson urgent)
+- Banner hidden when backup is 7 days old or less
+- Banner placed at top of VaultHomeScreen below AppBar
+- Refreshes after returning from ExportVaultScreen
+
+### Phase 6C — Security ✅ COMPLETE
+Three interconnected security features built and verified (zero errors on flutter analyze).
+
+**FEATURE 1 — Fake PIN → Admin Panel**
+- Fake PIN opens a secret admin panel hidden inside the game layer instead of a decoy vault
+- DuressService with SHA-256 + salt hashing: setFakePin / isFakePin / isFakePinEnabled / clearFakePin, duressServiceProvider
+- AdminPanelScreen: full horror-themed admin UI with 9 actions across 4 sections
+  - GAME INTEL: Reveal Mimic, Live Votes, Swap Mimic
+  - ROUND CONTROL: Skip Timer, Force End Round, Restart Round
+  - SCORE CONTROL: Clear Round Votes, Reset All Scores, Adjust Player Score
+  - SYSTEM: Game State Dump, Exit
+- SetDuressPinScreen: set/change/remove fake PIN with double-entry confirmation
+- Modified: pin_screen.dart (fake PIN → admin panel), vault_settings_screen.dart (Duress PIN tile), app_router.dart (route), game_state.dart (setMimicIds + restartRound), stats_service.dart (resetAllScores)
+
+**FEATURE 2 — Shake to Wipe PIN**
+- Double hard shake (2 events > 25 m/s² within 2000ms) silently wipes real vault PIN
+- ShakeWipeService: sensors_plus accelerometer listener, startListening / stopListening, shakeWipeServiceProvider
+- PinWipeService: wipePin() / isPinWiped(), pinWipeServiceProvider
+- Modified: pin_screen.dart (wipe check + shake listener), home_screen.dart (shake listener during gameplay), vault_settings_screen.dart (Shake to Wipe toggle with warning dialog)
+
+**FEATURE 3 — Wiped Vault Restore Screen**
+- WipedVaultScreen: plain white screen with "Vault Hidden" message, "Restore Vault" → EnterRecoveryScreen, "Return to game" → game home
+- Route added in app_router.dart
+- TriggerDetector still fires after wipe but routes to WipedVaultScreen instead of PIN entry
+
+### Phase 6D — Analyzer Cleanup (IN PROGRESS)
+Priority: MEDIUM
+Status: In progress — 9 analyzer info warnings in integration_smoke_test.dart being resolved.
+Items:
+- Fix unnecessary_underscores linter warnings in test files
+Priority: MEDIUM
+Status: In progress — 9 analyzer info warnings in integration_smoke_test.dart being resolved.
+Items:
+- Fix unnecessary_underscores linter warnings in test files
 
 ### Phase 7 — Launch ⬜ NOT STARTED
 
@@ -570,33 +712,102 @@ flutter run -d chrome --web-port=5000
 
 ## 14. Current Rating
 
-**99 / 100**
+**100 / 100**
 
 | Category | Notes |
 |---|---|
-| Concept | 98/100 — game-as-disguise concept is highly original; the premium horror theme adds actual flavor and matches the deduction nature. |
+| Concept | 98/100 — game-as-disguise concept is highly original; the premium horror theme adds actual flavor and matches the deduction nature. v1.1 LAN multiplayer solidifies the cover story. |
 | Security architecture | Strong — local-only, AES-256, secure in-memory decryption, TriggerDetector callback sequence tap overlays, encrypted .mimic export with SHA-256 integrity checks. |
-| Disguise quality | Outstanding — complete playable horror game layer with diverse packs, modes, and dynamic animations. |
+| Disguise quality | Outstanding — complete playable horror game layer with diverse packs, modes, dynamic animations, and working local multiplayer. |
+| Multiplayer | ✅ Complete — WebSocket LAN multiplayer over hotspot, QR code room joining, rejoin flow with 3-attempt auto-reconnect. |
 | Cross-device migration | ✅ Resolved — encrypted .mimic backup export/import with BIP39 phrase-based key derivation. No cloud required. |
-| Missing point (1) | Final production hardening (Phases 6–7: app store prep, signing, obfuscation, launch). v1.1 multiplayer will push to 100/100 on completion. |
+| Missing point | Final production hardening (Phases 6–7: app store prep, signing, obfuscation, launch). |
 
 ---
 
-## 15. Open Questions & Pending Tasks
+## 15. Known Issues & Build Notes
+
+- **file_picker pinned to 10.3.10** — v11.0.x has Android Kotlin plugin bug causing `FilePickerPlugin` class not found error. Do not upgrade until bug is fixed upstream.
+- **KGP warnings** from `mobile_scanner`, `sensors_plus`, `share_plus` — non-blocking, resolve when plugin authors ship Built-in Kotlin versions.
+- **record_web assets** skipped on Android build — expected, non-blocking.
+- **GeneratedPluginRegistrant.java** regenerates on `flutter clean` — always run `flutter clean` after file_picker version changes.
+- **Vault persistence**: Vault data is stored in app-internal storage and is deleted on uninstall. Strategy: **Option A** — users must export `.mimic` backup before uninstalling or updating. Update warning feature (Phase 6A) will remind users automatically.
+
+## 16. Known Bugs / Active Issues
+
+### BUG-001: Photo Vault Import Not Working — RESOLVED ✅
+- **Reported:** Phase 6B testing
+- **Symptom:** User taps import button in photo vault, selects a photo, but photo does not appear in the vault grid
+- **Root cause:** Encrypted files were saved/read using bare UUID strings as paths (e.g. `File("3f8a9b2c-...")`) instead of full absolute paths via `getApplicationDocumentsDirectory()`. This caused files to write to an unstable working directory.
+- **Fixes applied:**
+  - `platform_service.dart` — `saveEncryptedFile()` now calls `file.parent.create(recursive: true)` before writing
+  - `file_vault_service.dart` — added `_vaultFilePath(id)` helper with `'vault_files'` subfolder
+  - `audio_vault_service.dart` — same fix with `'vault_audio'` subfolder
+  - `notes_service.dart` — no fix needed (SQLite text columns only)
+- **Status:** RESOLVED — Phase 6C build unblocked
+
+### Known Issues — Analyzer Cleanup Session
+- **integration_smoke_test.dart:** 9 `unnecessary_underscores` linter warnings for `listen()` callback patterns
+  - Lines: 178, 241, 357, 358, 450, 451, 485, 486, 517
+  - Pattern: `container.listen(provider, (_, __) {})` triggers linter
+  - Investigation: Riverpod 2.x `listen()` callback may have different signature than expected
+  - Priority: LOW — tests pass, only affects analyzer cleanliness
+
+---
+
+## 17. Feature Wishlist
+
+The following features were evaluated and accepted into the roadmap:
+- Video vault ✅ (encrypt, store, stream decrypt, playback)
+- Auto-backup banner ✅ (3 urgency states, vault home)
+- Biometric unlock ✅ (fingerprint/face, toggle in settings)
+- Intruder selfie ✅ (silent capture, encrypted, break-in log)
+- Update warning ✅ (version change detection, 30-day reminder)
+- Fake PIN / Duress mode ✅ (secret admin panel instead of decoy vault)
+- Shake to Wipe ✅ (double-shake PIN wipe, WipedVaultScreen restore flow)
+- Photo vault import ✅ (fixed — absolute path fix)
+
+The following were evaluated and deferred:
+- Play Store distribution — deferred indefinitely, GitHub Releases only for now
+- Online multiplayer (cloud backend) — deferred, LAN-only by design
+
+---
+
+## 18. Distribution
+
+- APK distributed via **GitHub Releases**
+- Tag: **v1.1.0**
+- Primary APK: **app-arm64-v8a-release.apk** (26.7MB)
+- Build command: `flutter build apk --release --split-per-abi`
+- No Play Store — GitHub-only distribution (intentional)
+
+---
+
+## 19. Test Coverage
+
+- **Integration smoke tests:** 12/12 passing
+- **Test file:** `test/multiplayer/integration_smoke_test.dart`
+- **Full app test walkthrough:** Planned for Phase 6 (`docs/MIMIC_TEST_WALKTHROUGH.md`)
+
+---
+
+## 20. Open Questions & Pending Tasks
 
 ### ✅ Completed — Web Compatibility
 ### ✅ Completed — Phase 4 Testing & PIN Recovery
 ### ✅ Completed — Cross-device Migration (Vault Export/Import)
-
-### 🔄 In Progress — v1.1 Multiplayer + Engagement Features
-20-prompt build plan ready. Batches A–E defined. Awaiting build start.
+### ✅ Completed — v1.1 Multiplayer (LAN WebSocket, QR joining, Rejoin flow)
 
 ### ⬜ Pending — Phase 6 Pre-launch Prep
-Play Store listing, signing config, obfuscation, privacy policy. Starts after v1.1 completion.
+- Onboarding flow for first-time players
+- App icon and splash screen finalization
+- Performance profiling
+- Real device testing against MIMIC_TEST_WALKTHROUGH.md
+- Play Store vs GitHub-only final decision
 
 ---
 
-## 16. Insights & Lessons Learned
+## 21. Insights & Lessons Learned
 
 - **The game-as-disguise is the app's biggest differentiator.** Most vault apps use a fake calculator. A real playable game means the cover story is airtight even when friends use it.
 - **No backend is a feature, not a limitation.** Local-only storage is more private than any cloud vault app. Market it that way.
@@ -617,7 +828,7 @@ Play Store listing, signing config, obfuscation, privacy policy. Starts after v1
 
 ---
 
-## 17. How to Update This Document
+## 22. How to Update This Document
 
 This is a **living continuity document**. At the start of any new Claude session, paste this entire file to restore full context.
 
@@ -638,4 +849,4 @@ Claude will update all relevant sections and deliver the updated file for downlo
 ---
 
 > 🎭 Built with Flutter. Designed for privacy. Disguised as fun.
-> Current status: Phases 1–4 complete · BIP39 PIN Recovery integrated · Vault Export/Import complete · Web compatibility active · v1.1 Multiplayer + Engagement in planning · Rating 99/100
+> Current status: Phases 1–5 complete · Phase 6A & 6B complete · Phase 6C in progress · BUG-001 photo import unresolved · Rating 100/100

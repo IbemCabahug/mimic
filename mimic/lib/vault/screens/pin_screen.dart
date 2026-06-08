@@ -1,15 +1,18 @@
-// lib/vault/screens/pin_screen.dart
+// mimic/lib/vault/screens/pin_screen.dart
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:camera/camera.dart';
-import 'package:local_auth/local_auth.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../crypto/vault_crypto.dart';
 import '../../core/services/platform_service.dart';
-import '../services/file_vault_service.dart';
+import '../services/biometric_service.dart';
+import '../services/intruder_service.dart';
 import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
-import '../security/breakin_log.dart';
+import '../security/duress_service.dart';
+import '../security/shake_wipe_service.dart';
+import '../security/pin_wipe_service.dart';
+import 'wiped_vault_screen.dart';
 
 class PinScreen extends ConsumerStatefulWidget {
   const PinScreen({super.key});
@@ -21,18 +24,54 @@ class PinScreen extends ConsumerStatefulWidget {
 class _PinScreenState extends ConsumerState<PinScreen> {
   final TextEditingController _pinController = TextEditingController();
   late final VaultCrypto _crypto;
-  final LocalAuthentication _localAuth = LocalAuthentication();
+  final BiometricService _biometricService = BiometricService();
+  final IntruderService _intruderService = IntruderService();
   String? _error;
   bool _isLoading = false;
   bool _biometricAvailable = false;
-  int _failedAttempts = 0;
+  bool _biometricEnabled = false;
+  int _wrongAttempts = 0;
 
   @override
   void initState() {
     super.initState();
     _crypto = ref.read(vaultCryptoProvider);
-    _checkBiometricAvailability();
+    _checkIfWiped();
+    _checkBiometricState();
     _loadWrongAttempts();
+  }
+
+  Future<void> _checkIfWiped() async {
+    if (kIsWeb) return;
+    final wiped = await ref.read(pinWipeServiceProvider).isPinWiped();
+    if (wiped && mounted) {
+      await _setupShakeListener();
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const WipedVaultScreen()),
+      );
+    } else {
+      _setupShakeListener();
+    }
+  }
+
+  Future<void> _setupShakeListener() async {
+    if (kIsWeb) return;
+    final prefs = await SharedPreferences.getInstance();
+    final shakeEnabled = prefs.getBool('shake_wipe_enabled') ?? false;
+    if (shakeEnabled) {
+      ref.read(shakeWipeServiceProvider).startListening(() async {
+        await ref.read(pinWipeServiceProvider).wipePin();
+        if (mounted) {
+          Navigator.pushAndRemoveUntil(
+            context,
+            MaterialPageRoute(builder: (_) => const WipedVaultScreen()),
+            (_) => false,
+          );
+        }
+      });
+    }
   }
 
   Future<void> _loadWrongAttempts() async {
@@ -41,61 +80,51 @@ class _PinScreenState extends ConsumerState<PinScreen> {
       final stored = await ref.read(platformServiceProvider).secureRead('wrong_attempts');
       final count = int.tryParse(stored ?? '') ?? 0;
       if (mounted) {
+        setState(() => _wrongAttempts = count);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _checkBiometricState() async {
+    if (kIsWeb) return;
+    try {
+      final available = await _biometricService.isBiometricAvailable();
+      final enabled = await _biometricService.isBiometricEnabled();
+      if (mounted) {
         setState(() {
-          _failedAttempts = count;
+          _biometricAvailable = available;
+          _biometricEnabled = enabled;
         });
       }
     } catch (_) {}
   }
 
-  Future<void> _checkBiometricAvailability() async {
-    if (kIsWeb) return;
-    try {
-      final canCheck = await _localAuth.canCheckBiometrics;
-      final isDeviceSupported = await _localAuth.isDeviceSupported();
-      if (canCheck && isDeviceSupported && mounted) {
-        setState(() => _biometricAvailable = true);
-      }
-    } catch (e) {
-      // Biometrics not available
-    }
-  }
-
-  Future<void> _authenticateWithBiometrics() async {
-    if (kIsWeb) return;
+  Future<void> _attemptBiometricAuth() async {
+    if (!_biometricAvailable || !_biometricEnabled || _isLoading) return;
     setState(() => _isLoading = true);
     try {
-      final authenticated = await _localAuth.authenticate(
-        localizedReason: 'Authenticate to access your vault',
-        options: const AuthenticationOptions(
-          biometricOnly: true,
-          stickyAuth: true,
-        ),
-      );
-      if (authenticated && mounted) {
+      final success = await _biometricService.authenticate();
+      if (success && mounted) {
         final storedPin = await ref.read(platformServiceProvider).secureRead('vault_pin');
         if (storedPin != null) {
           _pinController.text = storedPin;
-          _authenticate();
+          await _authenticate();
         } else if (mounted) {
           setState(() => _error = 'No stored PIN found');
+          setState(() => _isLoading = false);
         }
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _error = 'Biometric authentication failed');
-      }
-    } finally {
-      if (mounted) {
+      } else if (mounted) {
         setState(() => _isLoading = false);
       }
+    } catch (_) {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  void _authenticate() {
+  Future<void> _authenticate() async {
     final pin = _pinController.text;
-    if (pin.length < 4) {
-      setState(() => _error = 'PIN must be at least 4 digits');
+    if (pin.isEmpty) {
+      setState(() => _error = 'Enter your PIN');
       return;
     }
 
@@ -109,13 +138,28 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           await ref.read(platformServiceProvider).secureWrite('vault_pin', pin);
           await ref.read(platformServiceProvider).secureWrite('wrong_attempts', '0');
         }
+
+        final duressService = ref.read(duressServiceProvider);
+        final isFakePin = await duressService.isFakePin(pin);
+
+        if (isFakePin) {
+          _pinController.clear();
+          if (mounted) {
+            setState(() {
+              _error = null;
+              _wrongAttempts = 0;
+            });
+          }
+          navigator.pushReplacementNamed('/admin-panel');
+          return;
+        }
+
         if (localContext.mounted && mounted) {
           setState(() {
             _error = null;
-            _failedAttempts = 0;
+            _wrongAttempts = 0;
           });
-          
-          // Initialize PanicMode shake detector and AutoLock inactivity timer
+
           PanicMode().init(localContext, ref);
           AutoLock().init(localContext, ref);
 
@@ -126,82 +170,30 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           try {
             final stored = await ref.read(platformServiceProvider).secureRead('wrong_attempts');
             final currentCount = (int.tryParse(stored ?? '') ?? 0) + 1;
-            await ref.read(platformServiceProvider).secureWrite('wrong_attempts', currentCount.toString());
-            await BreakInLogService.recordAttempt(currentCount, _crypto);
-            if (mounted) {
-              setState(() {
-                _failedAttempts = currentCount;
-              });
+            int counted = currentCount;
+            if (counted >= 3) {
+              _intruderService.captureIntruder(_crypto);
+              counted = 0;
             }
+            await ref.read(platformServiceProvider).secureWrite('wrong_attempts', counted.toString());
+            if (mounted) setState(() => _wrongAttempts = counted);
           } catch (ex) {
             debugPrint('Failed to save wrong attempts log: $ex');
-            if (mounted) {
-              setState(() {
-                _failedAttempts++;
-              });
-            }
+            if (mounted) setState(() => _wrongAttempts++);
           }
         } else {
-          if (mounted) {
-            setState(() {
-              _failedAttempts++;
-            });
-          }
+          if (mounted) setState(() => _wrongAttempts++);
         }
-        if (mounted) {
-          setState(() => _error = 'Invalid PIN');
-        }
+        if (mounted) setState(() => _error = 'Invalid PIN');
       } finally {
-        if (mounted) {
-          setState(() => _isLoading = false);
-        }
+        if (mounted) setState(() => _isLoading = false);
       }
     }();
   }
 
-  Future<void> _takeIntruderSelfie() async {
-    if (kIsWeb) return;
-    setState(() => _isLoading = true);
-    try {
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) return;
-
-      final controller = CameraController(
-        cameras.first,
-        ResolutionPreset.medium,
-      );
-      await controller.initialize();
-
-      if (!mounted) {
-        await controller.dispose();
-        return;
-      }
-
-      final image = await controller.takePicture();
-      final bytes = await image.readAsBytes();
-
-      final fileVault = ref.read(fileVaultServiceProvider);
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      await fileVault.saveFile('intruder_selfie_$timestamp.jpg', bytes);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Intruder selfie captured!')),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _error = 'Failed to capture selfie');
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
-  }
-
   @override
   void dispose() {
+    ref.read(shakeWipeServiceProvider).stopListening();
     _pinController.dispose();
     super.dispose();
   }
@@ -267,22 +259,14 @@ class _PinScreenState extends ConsumerState<PinScreen> {
                 ),
               ),
             const SizedBox(height: 24),
-            if (!kIsWeb && _biometricAvailable)
-              ElevatedButton.icon(
-                onPressed: _isLoading ? null : _authenticateWithBiometrics,
-                icon: const Icon(Icons.fingerprint, color: Colors.white),
-                label: const Text('Use Biometrics'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF7F77DD),
-                  foregroundColor: Colors.white,
-                  minimumSize: const Size(double.infinity, 50),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
+            if (!kIsWeb && _biometricAvailable && _biometricEnabled)
+              IconButton(
+                onPressed: _isLoading ? null : _attemptBiometricAuth,
+                icon: const Icon(Icons.fingerprint, color: Color(0xFF7F77DD), size: 36),
+                tooltip: 'Use Biometrics',
               ),
-            if (!kIsWeb && _biometricAvailable)
-              const SizedBox(height: 12),
+            if (!kIsWeb && _biometricAvailable && _biometricEnabled)
+              const SizedBox(height: 16),
             ElevatedButton(
               onPressed: _isLoading ? null : _authenticate,
               style: ElevatedButton.styleFrom(
@@ -307,7 +291,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                     ),
             ),
-            if (_failedAttempts >= 3) ...[
+            if (_wrongAttempts >= 3) ...[
               const SizedBox(height: 12),
               TextButton(
                 onPressed: () {
@@ -320,24 +304,6 @@ class _PinScreenState extends ConsumerState<PinScreen> {
                     fontSize: 16,
                     fontWeight: FontWeight.w600,
                     fontFamily: 'Inter',
-                  ),
-                ),
-              ),
-            ],
-            if (!kIsWeb) ...[
-              const SizedBox(height: 32),
-              OutlinedButton.icon(
-                onPressed: _isLoading ? null : _takeIntruderSelfie,
-                icon: const Icon(Icons.camera_alt, color: Color(0xFF7F77DD)),
-                label: const Text(
-                  'Take Intruder Selfie',
-                  style: TextStyle(color: Color(0xFF7F77DD)),
-                ),
-                style: OutlinedButton.styleFrom(
-                  minimumSize: const Size(double.infinity, 50),
-                  side: const BorderSide(color: Color(0x337F77DD)),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
                   ),
                 ),
               ),

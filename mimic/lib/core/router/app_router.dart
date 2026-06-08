@@ -19,8 +19,6 @@ import 'package:mimic/game/screens/results_screen.dart';
 import 'package:mimic/game/screens/tutorial_screen.dart';
 import 'package:mimic/game/screens/player_profile_screen.dart';
 import 'package:mimic/game/screens/leaderboard_screen.dart';
-
-// Vault screens
 import 'package:mimic/vault/screens/pin_screen.dart';
 import 'package:mimic/vault/screens/vault_home_screen.dart';
 import 'package:mimic/vault/screens/photo_vault_screen.dart';
@@ -34,6 +32,7 @@ import 'package:mimic/vault/screens/enter_recovery_screen.dart';
 import 'package:mimic/vault/screens/reset_pin_screen.dart';
 import 'package:mimic/vault/screens/export_vault_screen.dart';
 import 'package:mimic/vault/screens/import_vault_screen.dart';
+import 'package:mimic/vault/screens/set_duress_pin_screen.dart';
 
 // Multiplayer screens
 import 'package:mimic/multiplayer/screens/multiplayer_menu_screen.dart';
@@ -79,6 +78,7 @@ class AppRouter {
   static const String vaultRecoveryPhraseRoute = '/vault-recovery-phrase';
   static const String vaultEnterRecoveryRoute = '/vault-enter-recovery';
   static const String vaultResetPinRoute = '/vault-reset-pin';
+  static const String vaultSetDuressPinRoute = '/vault-set-duress-pin';
   static const String vaultExportRoute = '/vault-export';
   static const String vaultImportRoute = '/vault-import';
 
@@ -229,6 +229,11 @@ class AppRouter {
       case vaultResetPinRoute:
         return MaterialPageRoute(
           builder: (_) => const ResetPinScreen(),
+          settings: settings,
+        );
+      case vaultSetDuressPinRoute:
+        return MaterialPageRoute(
+          builder: (_) => const SetDuressPinScreen(),
           settings: settings,
         );
       case vaultExportRoute:

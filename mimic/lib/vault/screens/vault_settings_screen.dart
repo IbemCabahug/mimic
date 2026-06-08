@@ -1,15 +1,18 @@
+// mimic/lib/vault/screens/vault_settings_screen.dart
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:io';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import '../crypto/vault_crypto.dart';
 import '../../core/services/platform_service.dart';
+import '../../core/theme/app_theme.dart';
 import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
+import '../services/biometric_service.dart';
 import '../widgets/vault_scaffold.dart';
-import '../../core/theme/app_theme.dart';
 
 class VaultSettingsScreen extends ConsumerStatefulWidget {
   const VaultSettingsScreen({super.key});
@@ -20,11 +23,24 @@ class VaultSettingsScreen extends ConsumerStatefulWidget {
 
 class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   bool _hasRecoveryBlob = false;
+  bool _biometricAvailable = false;
+  bool _biometricEnabled = false;
+  bool _isLoadingBiometric = false;
+  bool _shakeEnabled = false;
 
   @override
   void initState() {
     super.initState();
     _checkRecoveryBlob();
+    _checkBiometricState();
+    _loadShakePref();
+  }
+
+  Future<void> _loadShakePref() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (mounted) {
+      setState(() => _shakeEnabled = prefs.getBool('shake_wipe_enabled') ?? false);
+    }
   }
 
   Future<void> _checkRecoveryBlob() async {
@@ -34,6 +50,82 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
       setState(() {
         _hasRecoveryBlob = blob != null && blob.isNotEmpty;
       });
+    }
+  }
+
+  Future<void> _checkBiometricState() async {
+    final biometricService = BiometricService();
+    final available = await biometricService.isBiometricAvailable();
+    final enabled = await biometricService.isBiometricEnabled();
+    if (mounted) {
+      setState(() {
+        _biometricAvailable = available;
+        _biometricEnabled = enabled;
+      });
+    }
+  }
+
+  Future<void> _onBiometricToggle(bool value) async {
+    if (!_biometricAvailable) return;
+    final biometricService = BiometricService();
+    if (value) {
+      setState(() => _isLoadingBiometric = true);
+      final success = await biometricService.authenticate();
+      if (mounted) {
+        setState(() => _isLoadingBiometric = false);
+      }
+      if (success && mounted) {
+        await biometricService.setBiometricEnabled(true);
+        setState(() => _biometricEnabled = true);
+      }
+    } else {
+      await biometricService.setBiometricEnabled(false);
+      if (mounted) {
+        setState(() => _biometricEnabled = false);
+      }
+    }
+  }
+
+  Future<void> _onShakeToggle(bool value) async {
+    if (value) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text(
+            'Are you sure?',
+            style: TextStyle(fontWeight: FontWeight.bold, fontFamily: 'Inter'),
+          ),
+          content: const Text(
+            'If you shake and have lost your 12-word recovery phrase, your vault cannot be recovered. Make sure your recovery phrase is safely backed up before enabling this.',
+            style: TextStyle(fontFamily: 'Inter'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Enable', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+            ),
+          ],
+        ),
+      );
+      if (confirmed == true) {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setBool('shake_wipe_enabled', true);
+        if (mounted) {
+          setState(() => _shakeEnabled = true);
+        }
+      }
+    } else {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('shake_wipe_enabled', false);
+      if (mounted) {
+        setState(() => _shakeEnabled = false);
+      }
     }
   }
 
@@ -101,12 +193,10 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                   return;
                 }
 
-                // Re-initialize with the new PIN
                 try {
                   final crypto = ref.read(vaultCryptoProvider);
                   crypto.lock();
                   final platformService = ref.read(platformServiceProvider);
-                  // Clear old PIN data
                   await platformService.secureDelete('vault_salt');
                   await platformService.secureDelete('vault_pin_hash');
                   if (!kIsWeb) {
@@ -200,8 +290,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
               await platformService.secureDelete('vault_photos_meta');
               await platformService.secureDelete('vault_audio_meta');
               await platformService.secureDelete('vault_notes');
-              
-              // Wiping sqflite breakin logs database
+
               try {
                 final dbPath = p.join(await getDatabasesPath(), 'breakin_logs.db');
                 final file = File(dbPath);
@@ -259,6 +348,52 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
             trailing: _hasRecoveryBlob
                 ? const Icon(Icons.check_circle, color: VaultColors.success, size: 20)
                 : null,
+          ),
+          _buildSettingsTile(
+            icon: Icons.fingerprint,
+            title: 'Biometric Unlock',
+            subtitle: _biometricAvailable
+                ? 'Use fingerprint or face to access your vault'
+                : 'Not available on this device',
+            onTap: _biometricAvailable && !_isLoadingBiometric ? () {
+              if (_biometricEnabled) {
+                _onBiometricToggle(false);
+              } else {
+                _onBiometricToggle(true);
+              }
+            } : null,
+              trailing: !_isLoadingBiometric && _biometricAvailable
+                  ? Switch(
+                      value: _biometricEnabled,
+                      onChanged: (value) => _onBiometricToggle(value),
+                      activeThumbColor: VaultColors.accent,
+                    )
+                : _isLoadingBiometric
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: VaultColors.accent),
+                      )
+                    : null,
+          ),
+          _buildSettingsTile(
+            icon: Icons.admin_panel_settings,
+            title: 'Duress PIN',
+            subtitle: 'Fake PIN that opens the admin panel instead of your vault',
+            onTap: () {
+              Navigator.of(context).pushNamed('/vault-set-duress-pin');
+            },
+          ),
+          _buildSettingsTile(
+            icon: Icons.vibration,
+            title: 'Shake to Wipe',
+            subtitle: 'Double shake instantly hides your vault until restored',
+            onTap: () {},
+            trailing: Switch(
+              value: _shakeEnabled,
+              onChanged: (value) => _onShakeToggle(value),
+              activeThumbColor: VaultColors.accent,
+            ),
           ),
           _buildSettingsTile(
             icon: Icons.lock,
@@ -340,7 +475,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     required IconData icon,
     required String title,
     required String subtitle,
-    required VoidCallback onTap,
+    required VoidCallback? onTap,
     Color iconColor = VaultColors.accent,
     Widget? trailing,
   }) {

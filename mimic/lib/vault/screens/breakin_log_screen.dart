@@ -1,9 +1,8 @@
-import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../crypto/vault_crypto.dart';
-import '../security/breakin_log.dart';
+import '../services/intruder_service.dart';
 import '../widgets/vault_scaffold.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -15,91 +14,117 @@ class BreakInLogScreen extends ConsumerStatefulWidget {
 }
 
 class _BreakInLogScreenState extends ConsumerState<BreakInLogScreen> {
-  List<BreakInLog> _logs = [];
+  List<IntruderEntry> _entries = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _loadLogs();
+    _loadEntries();
   }
 
-  Future<void> _loadLogs() async {
+  Future<void> _loadEntries() async {
     setState(() => _isLoading = true);
     try {
-      final logs = await BreakInLogService.getLogs();
+      final entries = await IntruderService().getIntruderLog();
       if (mounted) {
         setState(() {
-          _logs = logs;
+          _entries = entries;
           _isLoading = false;
         });
       }
-    } catch (e) {
+    } catch (_) {
       if (mounted) {
         setState(() => _isLoading = false);
       }
     }
   }
 
-  Future<void> _deleteLog(String id) async {
-    await BreakInLogService.deleteLog(id);
-    _loadLogs();
+  Future<void> _deleteEntry(String filename) async {
+    await IntruderService().deleteIntruderEntry(filename);
+    _loadEntries();
   }
 
-  String _formatDateTime(String isoString) {
-    try {
-      final dt = DateTime.parse(isoString);
-      return '${dt.day}/${dt.month}/${dt.year} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
-    } catch (_) {
-      return isoString;
-    }
+  String _formatTimestamp(DateTime dt) {
+    final months = [
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final month = months[dt.month - 1];
+    final day = dt.day.toString().padLeft(2, '0');
+    final year = dt.year;
+    final hour = dt.hour.toString().padLeft(2, '0');
+    final minute = dt.minute.toString().padLeft(2, '0');
+    return '$month $day, $year — $hour:$minute';
   }
 
   @override
   Widget build(BuildContext context) {
     return VaultScaffold(
-      title: 'Logs',
+      title: 'Intruder Logs',
       body: _isLoading
           ? const Center(
               child: CircularProgressIndicator(color: VaultColors.accent),
             )
-          : _logs.isEmpty
+          : _entries.isEmpty
               ? _buildEmptyState()
               : ListView.builder(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  itemCount: _logs.length,
+                  itemCount: _entries.length,
                   itemBuilder: (context, index) {
-                    final log = _logs[index];
-                    return Dismissible(
-                      key: Key(log.id),
-                      direction: DismissDirection.horizontal,
-                      background: Container(
-                        alignment: Alignment.centerLeft,
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        margin: const EdgeInsets.symmetric(vertical: 6),
-                        decoration: BoxDecoration(
-                          color: VaultColors.error,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: const Icon(Icons.delete, color: Colors.white),
+                    final entry = _entries[index];
+                    return Container(
+                      margin: const EdgeInsets.symmetric(vertical: 6),
+                      decoration: BoxDecoration(
+                        color: VaultColors.surface,
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.03),
+                            blurRadius: 8,
+                            offset: const Offset(0, 2),
+                          ),
+                        ],
                       ),
-                      secondaryBackground: Container(
-                        alignment: Alignment.centerRight,
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        margin: const EdgeInsets.symmetric(vertical: 6),
-                        decoration: BoxDecoration(
-                          color: VaultColors.error,
-                          borderRadius: BorderRadius.circular(16),
+                      child: ListTile(
+                        contentPadding:
+                            const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        leading: ClipRRect(
+                          borderRadius: BorderRadius.circular(10),
+                          child: Container(
+                            width: 50,
+                            height: 50,
+                            color: VaultColors.accent.withValues(alpha: 0.05),
+                            child: _BlurredThumbnail(filename: entry.filename),
+                          ),
                         ),
-                        child: const Icon(Icons.delete, color: Colors.white),
+                        title: const Text(
+                          'Failed Login Attempt',
+                          style: TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: VaultColors.textPrimary,
+                            fontFamily: 'Inter',
+                          ),
+                        ),
+                        subtitle: Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(
+                            _formatTimestamp(entry.timestamp),
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: VaultColors.textSecondary,
+                              fontFamily: 'Inter',
+                            ),
+                          ),
+                        ),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete_outline,
+                              color: VaultColors.error, size: 20),
+                          onPressed: () => _deleteEntry(entry.filename),
+                        ),
+                        onTap: () => _showFullImage(entry.filename),
                       ),
-                      onDismissed: (_) {
-                        _deleteLog(log.id);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Log deleted')),
-                        );
-                      },
-                      child: _buildLogCard(log),
                     );
                   },
                 ),
@@ -125,7 +150,7 @@ class _BreakInLogScreenState extends ConsumerState<BreakInLogScreen> {
           ),
           const SizedBox(height: 16),
           const Text(
-            'No intrusion attempts detected',
+            'No intrusion attempts recorded',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,
@@ -138,91 +163,61 @@ class _BreakInLogScreenState extends ConsumerState<BreakInLogScreen> {
     );
   }
 
-  Widget _buildLogCard(BreakInLog log) {
-    final hasPhoto = log.encryptedPhotoPath != null && log.encryptedPhotoPath!.isNotEmpty;
-
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 6),
-      decoration: BoxDecoration(
-        color: VaultColors.surface,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        leading: ClipRRect(
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            width: 50,
-            height: 50,
-            color: VaultColors.accent.withValues(alpha: 0.05),
-            child: hasPhoto
-                ? DecryptedThumbnail(photoPath: log.encryptedPhotoPath!)
-                : const Icon(Icons.lock_outline, color: VaultColors.accent),
-          ),
-        ),
-        title: Text(
-          'Failed Login Attempt (${log.attemptCount})',
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            color: VaultColors.textPrimary,
-            fontFamily: 'Inter',
-          ),
-        ),
-        subtitle: Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Text(
-            _formatDateTime(log.timestamp),
-            style: const TextStyle(
-              fontSize: 12,
-              color: VaultColors.textSecondary,
-              fontFamily: 'Inter',
-            ),
-          ),
-        ),
-        trailing: hasPhoto
-            ? const Icon(Icons.chevron_right, color: VaultColors.textTertiary)
-            : null,
-        onTap: hasPhoto
-            ? () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => FullScreenPhotoViewer(
-                      photoPath: log.encryptedPhotoPath!,
-                    ),
+  void _showFullImage(String filename) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => Dialog(
+        backgroundColor: Colors.black,
+        child: Stack(
+          children: [
+            FutureBuilder<Uint8List>(
+              future: IntruderService().decryptIntruderImage(filename),
+              builder: (context, snapshot) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Center(
+                    child: CircularProgressIndicator(color: Colors.white),
+                  );
+                }
+                if (snapshot.hasError || !snapshot.hasData) {
+                  return const Center(
+                    child: Icon(Icons.broken_image,
+                        color: Colors.white, size: 48),
+                  );
+                }
+                return InteractiveViewer(
+                  minScale: 0.5,
+                  maxScale: 4.0,
+                  child: Image.memory(
+                    snapshot.data!,
+                    fit: BoxFit.contain,
                   ),
                 );
-              }
-            : null,
+              },
+            ),
+            Positioned(
+              top: 8,
+              right: 8,
+              child: IconButton(
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                icon: const Icon(Icons.close, color: Colors.white),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class DecryptedThumbnail extends ConsumerWidget {
-  final String photoPath;
+class _BlurredThumbnail extends ConsumerWidget {
+  final String filename;
 
-  const DecryptedThumbnail({super.key, required this.photoPath});
+  const _BlurredThumbnail({required this.filename});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final crypto = ref.watch(vaultCryptoProvider);
     return FutureBuilder<Uint8List>(
-      future: () async {
-        final file = File(photoPath);
-        if (!await file.exists()) {
-          throw Exception('File does not exist');
-        }
-        final encryptedBytes = await file.readAsBytes();
-        return await crypto.decryptBytes(encryptedBytes);
-      }(),
+      future: IntruderService().decryptIntruderImage(filename),
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return const Center(
@@ -238,64 +233,20 @@ class DecryptedThumbnail extends ConsumerWidget {
         }
         if (snapshot.hasError || !snapshot.hasData) {
           return const Center(
-            child: Icon(Icons.broken_image, color: VaultColors.error, size: 20),
+            child: Icon(Icons.broken_image,
+                color: VaultColors.error, size: 20),
           );
         }
-        return Image.memory(
-          snapshot.data!,
-          fit: BoxFit.cover,
-          width: 50,
-          height: 50,
+        return ImageFiltered(
+          imageFilter: ImageFilter.blur(sigmaX: 8.0, sigmaY: 8.0),
+          child: Image.memory(
+            snapshot.data!,
+            fit: BoxFit.cover,
+            width: 50,
+            height: 50,
+          ),
         );
       },
-    );
-  }
-}
-
-class FullScreenPhotoViewer extends StatelessWidget {
-  final String photoPath;
-
-  const FullScreenPhotoViewer({super.key, required this.photoPath});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        elevation: 0,
-        iconTheme: const IconThemeData(color: Colors.white),
-      ),
-      body: Center(
-        child: InteractiveViewer(
-          minScale: 0.5,
-          maxScale: 4.0,
-          child: Consumer(
-            builder: (context, ref, _) {
-              final crypto = ref.watch(vaultCryptoProvider);
-              return FutureBuilder<Uint8List>(
-                future: () async {
-                  final file = File(photoPath);
-                  final encryptedBytes = await file.readAsBytes();
-                  return await crypto.decryptBytes(encryptedBytes);
-                }(),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    return const CircularProgressIndicator(color: Colors.white);
-                  }
-                  if (snapshot.hasError || !snapshot.hasData) {
-                    return const Icon(Icons.broken_image, color: Colors.white, size: 48);
-                  }
-                  return Image.memory(
-                    snapshot.data!,
-                    fit: BoxFit.contain,
-                  );
-                },
-              );
-            },
-          ),
-        ),
-      ),
     );
   }
 }

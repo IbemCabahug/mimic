@@ -335,9 +335,28 @@ class GameStateNotifier extends StateNotifier<GameState> {
   // Backward compatibility alias
   void assignMimic() => assignMimics();
 
+  void setMimicIds(List<String> ids) {
+    state = state.copyWith(mimicIds: ids);
+  }
+
   void updateScore(String playerId, int score) {
     state = state.copyWith(
       scores: {...state.scores, playerId: score},
+    );
+  }
+
+  void restartRound() {
+    state = state.copyWith(
+      currentRound: 0,
+      currentWordPair: null,
+      secondMimicWord: null,
+      mimicIds: const [],
+      currentCategory: '',
+      scores: {for (var p in state.players) p.id: 0},
+      suspicionScores: {for (var p in state.players) p.id: 0},
+      players: state.players.map((p) => p.copyWith(isAlive: true, isGhost: false, suspicion: 0.0)).toList(),
+      eliminatedPlayers: const [],
+      ghostPlayers: const [],
     );
   }
 

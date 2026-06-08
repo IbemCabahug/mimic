@@ -15,7 +15,6 @@ import 'package:mimic/core/animations/horror_animations.dart';
 import 'package:mimic/game/game.dart';
 import 'package:mimic/game/state/game_state.dart';
 import 'package:mimic/multiplayer/network/network_service.dart';
-import 'package:mimic/multiplayer/state/game_state_sync_notifier.dart';
 import 'package:mimic/multiplayer/game_sync.dart';
 
 enum RejoinStatus { attempting, success, failed, hostGone }

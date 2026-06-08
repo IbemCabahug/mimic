@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/core/theme/app_theme.dart';
 import 'package:mimic/core/services/platform_service.dart';
+import 'package:mimic/vault/services/backup_reminder_service.dart';
 import 'package:mimic/vault/widgets/vault_scaffold.dart';
 import 'package:mimic/vault/export/vault_exporter.dart';
 
@@ -49,6 +50,7 @@ class _ExportVaultScreenState extends ConsumerState<ExportVaultScreen> {
     setState(() => _isExporting = true);
     try {
       final file = await VaultExporter.buildExportFile();
+      await BackupReminderService.markBackupCompleted();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -87,6 +89,7 @@ class _ExportVaultScreenState extends ConsumerState<ExportVaultScreen> {
     setState(() => _isExporting = true);
     try {
       final file = await VaultExporter.buildExportFile();
+      await BackupReminderService.markBackupCompleted();
       await VaultExporter.shareFile(file);
     } catch (e) {
       if (mounted) {

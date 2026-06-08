@@ -101,17 +101,21 @@ void main() {
   // Intercept the native platform window manager method calls to track FLAG_SECURE
   setUpAll(() {
     TestWidgetsFlutterBinding.ensureInitialized();
-    const MethodChannel('flutter_windowmanager').setMockMethodCallHandler((MethodCall methodCall) async {
-      final flag = methodCall.arguments['flags'] as int?;
-      if (flag != null) {
-        if (methodCall.method == 'addFlags') {
-          secureFlagsList.add(flag);
-        } else if (methodCall.method == 'clearFlags') {
-          secureFlagsList.remove(flag);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('flutter_windowmanager'),
+      (MethodCall methodCall) async {
+        final flag = methodCall.arguments['flags'] as int?;
+        if (flag != null) {
+          if (methodCall.method == 'addFlags') {
+            secureFlagsList.add(flag);
+          } else if (methodCall.method == 'clearFlags') {
+            secureFlagsList.remove(flag);
+          }
         }
-      }
-      return true;
-    });
+        return true;
+      },
+    );
   });
 
   // ═══════════════════════════════════════════════════════════════════════

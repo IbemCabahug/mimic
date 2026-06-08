@@ -308,6 +308,16 @@ class StatsService extends ChangeNotifier {
     _log('All profiles cleared');
     notifyListeners();
   }
+
+  /// Reset suspicion scores for all profiles to zero.
+  Future<void> resetAllScores() async {
+    _profiles = _profiles
+        .map((p) => p.copyWith(suspicionScore: 0))
+        .toList();
+    await _saveProfiles();
+    _log('All scores reset');
+    notifyListeners();
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

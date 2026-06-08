@@ -1,4 +1,4 @@
-// lib/vault/services/file_vault_service.dart
+// mimic/lib/vault/services/file_vault_service.dart
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
@@ -80,7 +80,7 @@ class FileVaultService {
     final id = const Uuid().v4();
     final now = DateTime.now();
 
-    final encrypted = _crypto.encrypt(bytes);
+    final encrypted = await _crypto.encryptSystem(bytes);
     await _platformService.saveEncryptedFile(id, encrypted);
 
     final meta = PhotoMeta(
@@ -97,7 +97,7 @@ class FileVaultService {
   Future<Uint8List?> getPhoto(String id) async {
     final encrypted = await _platformService.readEncryptedFile(id);
     if (encrypted == null) return null;
-    return _crypto.decrypt(encrypted);
+    return await _crypto.decryptSystem(encrypted);
   }
 
   Future<void> deletePhoto(String id) async {
@@ -152,31 +152,41 @@ class FileVaultService {
   }
 
   Future<String?> pickAndEncryptImage() async {
-    final picker = ImagePicker();
-    final XFile? picked = await picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 1920,
-      maxHeight: 1920,
-      imageQuality: 85,
-    );
-    if (picked == null) return null;
-    final bytes = await picked.readAsBytes();
-    final id = await savePhoto(bytes, picked.mimeType ?? 'image/jpeg');
-    return id;
+    try {
+      final picker = ImagePicker();
+      final XFile? picked = await picker.pickImage(
+        source: ImageSource.gallery,
+        maxWidth: 1920,
+        maxHeight: 1920,
+        imageQuality: 85,
+      );
+      if (picked == null) return null;
+      final bytes = await picked.readAsBytes();
+      final id = await savePhoto(bytes, picked.mimeType ?? 'image/jpeg');
+      return id;
+    } catch (e) {
+      debugPrint('pickAndEncryptImage failed: $e');
+      return null;
+    }
   }
 
   Future<String?> captureAndEncryptImage() async {
-    final picker = ImagePicker();
-    final XFile? picked = await picker.pickImage(
-      source: ImageSource.camera,
-      maxWidth: 1920,
-      maxHeight: 1920,
-      imageQuality: 85,
-    );
-    if (picked == null) return null;
-    final bytes = await picked.readAsBytes();
-    final id = await savePhoto(bytes, picked.mimeType ?? 'image/jpeg');
-    return id;
+    try {
+      final picker = ImagePicker();
+      final XFile? picked = await picker.pickImage(
+        source: ImageSource.camera,
+        maxWidth: 1920,
+        maxHeight: 1920,
+        imageQuality: 85,
+      );
+      if (picked == null) return null;
+      final bytes = await picked.readAsBytes();
+      final id = await savePhoto(bytes, picked.mimeType ?? 'image/jpeg');
+      return id;
+    } catch (e) {
+      debugPrint('captureAndEncryptImage failed: $e');
+      return null;
+    }
   }
 }
 
