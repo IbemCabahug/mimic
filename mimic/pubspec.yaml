@@ -17,7 +17,8 @@ dependencies:
   pointycastle: ^3.8.0
   sqflite: ^2.3.0
   local_auth: ^2.0.0
-  camera: ^0.11.0+1
+  camera_android_camerax: ^0.7.2+1
+  camera: ^0.12.0+1
   flutter_riverpod: ^2.4.0
   shared_preferences: ^2.2.2
   just_audio: ^0.9.36
@@ -25,13 +26,13 @@ dependencies:
   path_provider: ^2.1.2
   image_picker: ^1.0.7
   path: ^1.9.0
-  record: ^5.0.4
+  record: ^7.0.0
   uuid: ^4.0.0
   photo_view: ^0.14.0
   sensors_plus: ^7.0.0
   share_plus: ^10.1.4
   crypto: ^3.0.6
-  file_picker: ^11.0.2
+  file_picker: 10.3.10
   qr_flutter: ^4.1.0
   mobile_scanner: ^7.2.0
 
