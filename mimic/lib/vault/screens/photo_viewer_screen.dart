@@ -115,7 +115,7 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
                     }
                     return Center(
                       child: InteractiveViewer(
-                        child: Image.memory(bytes, fit: BoxFit.contain),
+                        child: Image.memory(bytes, fit: BoxFit.contain, cacheWidth: 1080),
                       ),
                     );
                   },

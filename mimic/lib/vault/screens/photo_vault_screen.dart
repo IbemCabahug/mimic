@@ -236,6 +236,8 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                           child: Image.memory(
                             bytes,
                             fit: BoxFit.cover,
+                            cacheWidth: 300,
+                            cacheHeight: 300,
                           ),
                         );
                       },

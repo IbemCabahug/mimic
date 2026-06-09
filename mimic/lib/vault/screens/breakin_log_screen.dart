@@ -190,6 +190,7 @@ class _BreakInLogScreenState extends ConsumerState<BreakInLogScreen> {
                   child: Image.memory(
                     snapshot.data!,
                     fit: BoxFit.contain,
+                    cacheWidth: 1080,
                   ),
                 );
               },
@@ -244,6 +245,8 @@ class _BlurredThumbnail extends ConsumerWidget {
             fit: BoxFit.cover,
             width: 50,
             height: 50,
+            cacheWidth: 80,
+            cacheHeight: 80,
           ),
         );
       },

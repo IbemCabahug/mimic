@@ -8,6 +8,8 @@ import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import '../crypto/vault_crypto.dart';
 import '../../core/services/platform_service.dart';
+import '../../core/services/stealth_mode_service.dart';
+import '../../core/services/launcher_icon_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
@@ -126,6 +128,41 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
       if (mounted) {
         setState(() => _shakeEnabled = false);
       }
+    }
+  }
+
+  Future<void> _onHideAppIconToggle(bool hide) async {
+    if (hide) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text(
+            'Hide app icon?',
+            style: TextStyle(fontWeight: FontWeight.bold, fontFamily: 'Inter'),
+          ),
+          content: const Text(
+            "Mimic's icon will disappear from your home screen and app drawer. To reopen it, go to Android Settings > Apps > Mimic > Open, then turn this off again. Continue?",
+            style: TextStyle(fontFamily: 'Inter'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(false),
+              child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(true),
+              child: const Text('Hide', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+            ),
+          ],
+        ),
+      );
+      if (confirmed == true) {
+        ref.read(launcherIconProvider.notifier).setIconVisible(false);
+      }
+    } else {
+      ref.read(launcherIconProvider.notifier).setIconVisible(true);
     }
   }
 
@@ -322,6 +359,9 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final bool stealth = ref.watch(stealthModeProvider);
+    final bool iconVisible = ref.watch(launcherIconProvider);
+
     return VaultScaffold(
       title: 'Settings',
       showLockButton: false,
@@ -392,6 +432,28 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
             trailing: Switch(
               value: _shakeEnabled,
               onChanged: (value) => _onShakeToggle(value),
+              activeThumbColor: VaultColors.accent,
+            ),
+          ),
+          _buildSettingsTile(
+            icon: Icons.visibility_off,
+            title: 'Stealth Mode',
+            subtitle: 'Hides all vault hints across the game. Secret unlock patterns still work.',
+            onTap: null,
+            trailing: Switch(
+              value: stealth,
+              onChanged: (value) => ref.read(stealthModeProvider.notifier).setStealthMode(value),
+              activeThumbColor: VaultColors.accent,
+            ),
+          ),
+          _buildSettingsTile(
+            icon: Icons.visibility_off,
+            title: 'Hide App Icon',
+            subtitle: 'Removes Mimic from the app drawer. Reopen via Android Settings > Apps > Mimic > Open.',
+            onTap: null,
+            trailing: Switch(
+              value: !iconVisible,
+              onChanged: (value) => _onHideAppIconToggle(value),
               activeThumbColor: VaultColors.accent,
             ),
           ),

@@ -142,8 +142,8 @@ Widget buildTestApp({
       theme: HorrorTheme.themeData,
       home: home,
       routes: {
-        '/discussion': (_) => const Scaffold(body: Text('DISCUSSION_SCREEN')),
-        '/multiplayer': (_) => const Scaffold(body: Text('MULTIPLAYER_SCREEN')),
+        '/discussion': (context) => const Scaffold(body: Text('DISCUSSION_SCREEN')),
+        '/multiplayer': (context) => const Scaffold(body: Text('MULTIPLAYER_SCREEN')),
       },
     ),
   );
@@ -165,7 +165,7 @@ void main() {
   group('NetworkService', () {
     late MockNetworkService mockNetworkService;
     late ProviderContainer container;
-    late ProviderSubscription networkServiceSub;
+    late ProviderSubscription<NetworkService> networkServiceSub;
 
     setUp(() {
       SharedPreferences.setMockInitialValues({});
@@ -175,7 +175,10 @@ void main() {
           networkServiceProvider.overrideWith((ref) => mockNetworkService),
         ],
       );
-      networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
+      networkServiceSub = container.listen(
+        networkServiceProvider,
+        (NetworkService? previous, NetworkService next) {},
+      );
     });
 
     tearDown(() {
@@ -228,7 +231,7 @@ void main() {
   group('Room Flow', () {
     late MockNetworkService mockNetworkService;
     late ProviderContainer container;
-    late ProviderSubscription networkServiceSub;
+    late ProviderSubscription<NetworkService> networkServiceSub;
 
     setUp(() {
       SharedPreferences.setMockInitialValues({});
@@ -238,7 +241,10 @@ void main() {
           networkServiceProvider.overrideWith((ref) => mockNetworkService),
         ],
       );
-      networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
+      networkServiceSub = container.listen(
+        networkServiceProvider,
+        (NetworkService? previous, NetworkService next) {},
+      );
     });
 
     tearDown(() {
@@ -343,8 +349,8 @@ void main() {
   group('Game Sync', () {
     late MockNetworkService mockNetworkService;
     late ProviderContainer container;
-    late ProviderSubscription gameStateSyncSub;
-    late ProviderSubscription networkServiceSub;
+    late ProviderSubscription<GameSyncState> gameStateSyncSub;
+    late ProviderSubscription<NetworkService> networkServiceSub;
 
     setUp(() {
       SharedPreferences.setMockInitialValues({});
@@ -354,8 +360,14 @@ void main() {
           networkServiceProvider.overrideWith((ref) => mockNetworkService),
         ],
       );
-      gameStateSyncSub = container.listen(gameStateSyncProvider, (_, __) {});
-      networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
+      gameStateSyncSub = container.listen(
+        gameStateSyncProvider,
+        (GameSyncState? previous, GameSyncState next) {},
+      );
+      networkServiceSub = container.listen(
+        networkServiceProvider,
+        (NetworkService? previous, NetworkService next) {},
+      );
     });
 
     tearDown(() {
@@ -434,106 +446,121 @@ void main() {
     });
   });
 
-// ─────────────────────────────────────────────────────────────────────────
-// Disconnect Tests
-// ─────────────────────────────────────────────────────────────────────────
-group('Disconnect', () {
-  test('DisconnectHandler emits DisconnectType.timeout when pong not received within 3 seconds', () async {
-    SharedPreferences.setMockInitialValues({});
-    final mockNetworkService = MockNetworkService();
+  // ─────────────────────────────────────────────────────────────────────────
+  // Disconnect Tests
+  // ─────────────────────────────────────────────────────────────────────────
+  group('Disconnect', () {
+    test('DisconnectHandler emits DisconnectType.timeout when pong not received within 3 seconds', () async {
+      SharedPreferences.setMockInitialValues({});
+      final mockNetworkService = MockNetworkService();
 
-    final container = ProviderContainer(
-      overrides: [
-        networkServiceProvider.overrideWith((ref) => mockNetworkService),
-      ],
-    );
-    final networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
-    final gameStateSyncSub = container.listen(gameStateSyncProvider, (_, __) {});
+      final container = ProviderContainer(
+        overrides: [
+          networkServiceProvider.overrideWith((ref) => mockNetworkService),
+        ],
+      );
+      final networkServiceSub = container.listen(
+        networkServiceProvider,
+        (NetworkService? previous, NetworkService next) {},
+      );
+      final gameStateSyncSub = container.listen(
+        gameStateSyncProvider,
+        (GameSyncState? previous, GameSyncState next) {},
+      );
 
-    mockNetworkService.role = NetworkRole.guest;
+      mockNetworkService.role = NetworkRole.guest;
 
-    final syncNotifier = container.read(gameStateSyncProvider.notifier);
-    final handler = DisconnectHandler(mockNetworkService, syncNotifier);
+      final syncNotifier = container.read(gameStateSyncProvider.notifier);
+      final handler = DisconnectHandler(mockNetworkService, syncNotifier);
 
-    handler.startMonitoring();
+      handler.startMonitoring();
 
-    // Simulate ping - guest should reply with pong
-    mockNetworkService.simulateMessageReceived({'type': 'ping'});
-    await Future<void>.delayed(Duration.zero);
+      // Simulate ping - guest should reply with pong
+      mockNetworkService.simulateMessageReceived({'type': 'ping'});
+      await Future<void>.delayed(Duration.zero);
 
-    // Verify that pong was sent in response to ping
-    expect(mockNetworkService.sentMessages.any((m) => m['type'] == 'pong'), isTrue);
+      // Verify that pong was sent in response to ping
+      expect(mockNetworkService.sentMessages.any((m) => m['type'] == 'pong'), isTrue);
 
-    handler.stopMonitoring();
-    await Future<void>.delayed(Duration.zero);
+      handler.stopMonitoring();
+      await Future<void>.delayed(Duration.zero);
 
-    networkServiceSub.close();
-    gameStateSyncSub.close();
-    container.dispose();
+      networkServiceSub.close();
+      gameStateSyncSub.close();
+      container.dispose();
+    });
+
+    testWidgets('RejoinScreen calls networkServiceProvider.joinAsGuest() on initState', (WidgetTester tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final mockNetworkService = MockNetworkService();
+      mockNetworkService.joinShouldSucceed = true;
+
+      final container = ProviderContainer(
+        overrides: [
+          networkServiceProvider.overrideWith((ref) => mockNetworkService),
+        ],
+      );
+      final networkServiceSub = container.listen(
+        networkServiceProvider,
+        (NetworkService? previous, NetworkService next) {},
+      );
+      final gameStateSyncSub = container.listen(
+        gameStateSyncProvider,
+        (GameSyncState? previous, GameSyncState next) {},
+      );
+
+      await tester.pumpWidget(buildTestApp(
+        home: const RejoinScreen(
+          lastRoomCode: 'A1B2C3',
+          lastPlayerName: 'Ghosty',
+          lastPlayerId: 'old_guest_id',
+        ),
+        container: container,
+      ));
+
+      // initState triggers _attemptReconnect which calls joinAsGuest
+      await tester.pump();
+
+      expect(mockNetworkService.role, NetworkRole.guest);
+
+      networkServiceSub.close();
+      gameStateSyncSub.close();
+      container.dispose();
+    });
+
+    testWidgets('RejoinScreen shows hostGone UI state when MimicClient.connect() fails on all 3 attempts', (WidgetTester tester) async {
+      SharedPreferences.setMockInitialValues({});
+      final mockNetworkService = MockNetworkService();
+      mockNetworkService.joinShouldSucceed = false;
+
+      final container = ProviderContainer(
+        overrides: [
+          networkServiceProvider.overrideWith((ref) => mockNetworkService),
+        ],
+      );
+      final networkServiceSub = container.listen(
+        networkServiceProvider,
+        (NetworkService? previous, NetworkService next) {},
+      );
+
+      await tester.pumpWidget(buildTestApp(
+        home: const RejoinScreen(
+          lastRoomCode: 'A1B2C3',
+          lastPlayerName: 'Ghosty',
+          lastPlayerId: 'old_guest_id',
+        ),
+        container: container,
+      ));
+      await tester.pump();
+
+      // Pump to allow retries to fail (each retry after ~1.5s)
+      await tester.pump(const Duration(milliseconds: 5000));
+
+      // Should show connection lost state after 3 failed attempts
+      expect(find.text('CONNECTION LOST'), findsOneWidget);
+
+      networkServiceSub.close();
+      container.dispose();
+    });
   });
-
-  testWidgets('RejoinScreen calls networkServiceProvider.joinAsGuest() on initState', (WidgetTester tester) async {
-    SharedPreferences.setMockInitialValues({});
-    final mockNetworkService = MockNetworkService();
-    mockNetworkService.joinShouldSucceed = true;
-
-    final container = ProviderContainer(
-      overrides: [
-        networkServiceProvider.overrideWith((ref) => mockNetworkService),
-      ],
-    );
-    final networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
-    final gameStateSyncSub = container.listen(gameStateSyncProvider, (_, __) {});
-
-    await tester.pumpWidget(buildTestApp(
-      home: const RejoinScreen(
-        lastRoomCode: 'A1B2C3',
-        lastPlayerName: 'Ghosty',
-        lastPlayerId: 'old_guest_id',
-      ),
-      container: container,
-    ));
-
-    // initState triggers _attemptReconnect which calls joinAsGuest
-    await tester.pump();
-
-    expect(mockNetworkService.role, NetworkRole.guest);
-
-    networkServiceSub.close();
-    gameStateSyncSub.close();
-    container.dispose();
-  });
-
-  testWidgets('RejoinScreen shows hostGone UI state when MimicClient.connect() fails on all 3 attempts', (WidgetTester tester) async {
-    SharedPreferences.setMockInitialValues({});
-    final mockNetworkService = MockNetworkService();
-    mockNetworkService.joinShouldSucceed = false;
-
-    final container = ProviderContainer(
-      overrides: [
-        networkServiceProvider.overrideWith((ref) => mockNetworkService),
-      ],
-    );
-    final networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
-
-    await tester.pumpWidget(buildTestApp(
-      home: const RejoinScreen(
-        lastRoomCode: 'A1B2C3',
-        lastPlayerName: 'Ghosty',
-        lastPlayerId: 'old_guest_id',
-      ),
-      container: container,
-    ));
-    await tester.pump();
-
-    // Pump to allow retries to fail (each retry after ~1.5s)
-    await tester.pump(const Duration(milliseconds: 5000));
-
-    // Should show connection lost state after 3 failed attempts
-    expect(find.text('CONNECTION LOST'), findsOneWidget);
-
-    networkServiceSub.close();
-    container.dispose();
-  });
-});
 }

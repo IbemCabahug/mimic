@@ -115,13 +115,12 @@ class VaultImporter {
       final salt = base64Decode(recoverySaltStr);
 
       // Derive recovery key
-      final recoveryKey = RecoveryPhrase.deriveKey(recoveryWords, salt);
+      final recoveryKey = await RecoveryPhrase.deriveKey(recoveryWords, salt);
 
       if (blob.length < 16) return false;
       final iv = blob.sublist(0, 16);
       final encryptedMasterKey = blob.sublist(16);
 
-      // Decrypt master key to verify phrase correctness
       final cipher = CBCBlockCipher(AESEngine());
       final paddedCipher = PaddedBlockCipherImpl(PKCS7Padding(), cipher);
       paddedCipher.init(

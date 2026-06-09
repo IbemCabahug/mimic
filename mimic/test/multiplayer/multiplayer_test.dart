@@ -10,7 +10,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/game/state/game_state.dart';
@@ -134,8 +133,8 @@ Widget buildTestApp({
       theme: HorrorTheme.themeData,
       home: home,
       routes: {
-        '/discussion': (_) => const Scaffold(body: Text('DISCUSSION_SCREEN')),
-        '/multiplayer': (_) => const Scaffold(body: Text('MULTIPLAYER_SCREEN')),
+        '/discussion': (context) => const Scaffold(body: Text('DISCUSSION_SCREEN')),
+        '/multiplayer': (context) => const Scaffold(body: Text('MULTIPLAYER_SCREEN')),
       },
     ),
   );
@@ -154,8 +153,8 @@ void main() {
   group('Multiplayer Game Tests', () {
     late FakeNetworkService fakeNetworkService;
     late ProviderContainer container;
-    late ProviderSubscription gameStateSyncSub;
-    late ProviderSubscription networkServiceSub;
+    late ProviderSubscription<GameSyncState> gameStateSyncSub;
+    late ProviderSubscription<NetworkService> networkServiceSub;
 
     setUp(() {
       fakeNetworkService = FakeNetworkService();
@@ -165,8 +164,8 @@ void main() {
         ],
       );
       // Keep providers alive during tests to prevent FakeNetworkService from being disposed
-      gameStateSyncSub = container.listen(gameStateSyncProvider, (_, __) {});
-      networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
+      gameStateSyncSub = container.listen(gameStateSyncProvider, (GameSyncState? previous, GameSyncState next) {});
+      networkServiceSub = container.listen(networkServiceProvider, (NetworkService? previous, NetworkService next) {});
     });
 
     tearDown(() {
@@ -181,7 +180,6 @@ void main() {
     // ─────────────────────────────────────────────────────────────────────────
     group('1 · GameStateSyncNotifier', () {
       test('Initializes state correctly', () {
-        final notifier = container.read(gameStateSyncProvider.notifier);
         final state = container.read(gameStateSyncProvider);
 
         expect(state.isReady, isFalse);
@@ -193,9 +191,7 @@ void main() {
         fakeNetworkService.role = NetworkRole.host;
         fakeNetworkService.connectedPlayerIds.addAll(['guest_1', 'guest_2']);
 
-        final notifier = container.read(gameStateSyncProvider.notifier);
-
-        // Send startGame message to host sync notifier
+      // Send startGame message to host sync notifier
         fakeNetworkService.simulateMessageReceived({'type': 'startGame'});
         await Future<void>.delayed(Duration.zero);
 
@@ -216,12 +212,10 @@ void main() {
         fakeNetworkService.role = NetworkRole.host;
         fakeNetworkService.connectedPlayerIds.addAll(['guest_1']);
 
-        final notifier = container.read(gameStateSyncProvider.notifier);
+      fakeNetworkService.simulateMessageReceived({'type': 'startGame'});
+      await Future<void>.delayed(Duration.zero);
 
-        fakeNetworkService.simulateMessageReceived({'type': 'startGame'});
-        await Future<void>.delayed(Duration.zero);
-
-        // guest_1 acknowledges
+      // guest_1 acknowledges
         fakeNetworkService.simulateMessageReceived({
           'type': 'wordAck',
           'senderId': 'guest_1',
@@ -234,7 +228,6 @@ void main() {
 
       test('Handles playerJoined correctly (updates list)', () async {
         fakeNetworkService.role = NetworkRole.host;
-        final notifier = container.read(gameStateSyncProvider.notifier);
 
         fakeNetworkService.simulateMessageReceived({
           'type': 'playerJoined',
@@ -250,8 +243,6 @@ void main() {
       test('Handles playerLeft correctly (removes or eliminates player)', () async {
         fakeNetworkService.role = NetworkRole.host;
         fakeNetworkService.connectedPlayerIds.add('guest_1');
-
-        final notifier = container.read(gameStateSyncProvider.notifier);
 
         fakeNetworkService.simulateMessageReceived({'type': 'startGame'});
         await Future<void>.delayed(Duration.zero);

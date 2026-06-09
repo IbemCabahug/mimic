@@ -316,21 +316,25 @@ void main() {
   // Set up sqflite method channel interceptor for BreakInLogScreen tests.
   setUpAll(() {
     TestWidgetsFlutterBinding.ensureInitialized();
-    const MethodChannel('plugins.flutter.io/sqflite').setMockMethodCallHandler((MethodCall methodCall) async {
-      if (methodCall.method == 'getDatabasesPath') {
-        return '/mock/db/path';
-      }
-      if (methodCall.method == 'openDatabase') {
-        return 1; // mock database ID
-      }
-      if (methodCall.method == 'execute') {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/sqflite'),
+      (MethodCall methodCall) async {
+        if (methodCall.method == 'getDatabasesPath') {
+          return '/mock/db/path';
+        }
+        if (methodCall.method == 'openDatabase') {
+          return 1; // mock database ID
+        }
+        if (methodCall.method == 'execute') {
+          return null;
+        }
+        if (methodCall.method == 'query') {
+          return mockLogs;
+        }
         return null;
-      }
-      if (methodCall.method == 'query') {
-        return mockLogs;
-      }
-      return null;
-    });
+      },
+    );
   });
 
   // ═══════════════════════════════════════════════════════════════════════

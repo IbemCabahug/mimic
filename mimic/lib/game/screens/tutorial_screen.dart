@@ -9,20 +9,22 @@
 // is a perfect cover for opening the app alone.
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/core/animations/horror_animations.dart';
+import 'package:mimic/core/services/stealth_mode_service.dart';
 import 'package:mimic/vault/trigger/trigger_detector.dart';
 import 'package:mimic/game/game.dart';
 
-class TutorialScreen extends StatefulWidget {
+class TutorialScreen extends ConsumerStatefulWidget {
   const TutorialScreen({super.key});
 
   @override
-  State<TutorialScreen> createState() => _TutorialScreenState();
+  ConsumerState<TutorialScreen> createState() => _TutorialScreenState();
 }
 
-class _TutorialScreenState extends State<TutorialScreen>
+class _TutorialScreenState extends ConsumerState<TutorialScreen>
     with TickerProviderStateMixin {
   int _currentStep = 0;
   late AnimationController _fadeController;
@@ -147,6 +149,7 @@ class _TutorialScreenState extends State<TutorialScreen>
 
   @override
   Widget build(BuildContext context) {
+    final bool stealth = ref.watch(stealthModeProvider);
     final step = _steps[_currentStep];
 
     return Scaffold(
@@ -167,7 +170,7 @@ class _TutorialScreenState extends State<TutorialScreen>
               Expanded(
                 child: FadeTransition(
                   opacity: _fadeAnimation,
-                  child: _buildStepContent(step),
+                  child: _buildStepContent(step, stealth),
                 ),
               ),
 
@@ -242,7 +245,7 @@ class _TutorialScreenState extends State<TutorialScreen>
     );
   }
 
-  Widget _buildStepContent(_TutorialStep step) {
+  Widget _buildStepContent(_TutorialStep step, bool stealth) {
     return SingleChildScrollView(
       padding: const EdgeInsets.symmetric(horizontal: 24.0),
       child: Column(
@@ -303,8 +306,12 @@ class _TutorialScreenState extends State<TutorialScreen>
 
           const SizedBox(height: 20),
 
-          // Pro tip
-          _buildTipCard(step),
+          // Pro tip — stealth mode swaps step 3's tip text only
+          _buildTipCard(
+            _currentStep == 2 && stealth
+                ? "Tap a player's card to learn more about their role."
+                : step.tip,
+          ),
           const SizedBox(height: 40),
         ],
       ),
@@ -362,7 +369,7 @@ class _TutorialScreenState extends State<TutorialScreen>
     );
   }
 
-  Widget _buildTipCard(_TutorialStep step) {
+  Widget _buildTipCard(String tip) {
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
@@ -385,7 +392,7 @@ class _TutorialScreenState extends State<TutorialScreen>
           const SizedBox(width: 12),
           Expanded(
             child: Text(
-              step.tip,
+              tip,
               style: GoogleFonts.inter(
                 color: HorrorColors.fogWhite.withValues(alpha: 0.8),
                 fontSize: 13,

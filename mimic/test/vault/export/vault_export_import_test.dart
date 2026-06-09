@@ -33,48 +33,54 @@ void main() {
     databaseFactory = databaseFactoryFfi;
 
     // Intercept flutter_secure_storage method channel
-    const MethodChannel('plugins.it_nomads.com/flutter_secure_storage')
-        .setMockMethodCallHandler((MethodCall methodCall) async {
-      if (methodCall.method == 'write') {
-        final key = methodCall.arguments['key'] as String;
-        final value = methodCall.arguments['value'] as String;
-        secureStorageData[key] = value;
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('plugins.it_nomads.com/flutter_secure_storage'),
+      (MethodCall methodCall) async {
+        if (methodCall.method == 'write') {
+          final key = methodCall.arguments['key'] as String;
+          final value = methodCall.arguments['value'] as String;
+          secureStorageData[key] = value;
+          return null;
+        }
+        if (methodCall.method == 'read') {
+          final key = methodCall.arguments['key'] as String;
+          return secureStorageData[key];
+        }
+        if (methodCall.method == 'delete') {
+          final key = methodCall.arguments['key'] as String;
+          secureStorageData.remove(key);
+          return null;
+        }
+        if (methodCall.method == 'readAll') {
+          return secureStorageData;
+        }
+        if (methodCall.method == 'deleteAll') {
+          secureStorageData.clear();
+          return null;
+        }
         return null;
-      }
-      if (methodCall.method == 'read') {
-        final key = methodCall.arguments['key'] as String;
-        return secureStorageData[key];
-      }
-      if (methodCall.method == 'delete') {
-        final key = methodCall.arguments['key'] as String;
-        secureStorageData.remove(key);
-        return null;
-      }
-      if (methodCall.method == 'readAll') {
-        return secureStorageData;
-      }
-      if (methodCall.method == 'deleteAll') {
-        secureStorageData.clear();
-        return null;
-      }
-      return null;
-    });
+      },
+    );
 
     // Intercept path_provider method channel
     // These paths are set in setUp() before each test runs.
-    const MethodChannel('plugins.flutter.io/path_provider')
-        .setMockMethodCallHandler((MethodCall methodCall) async {
-      if (methodCall.method == 'getApplicationDocumentsDirectory') {
-        return appDocsPath;
-      }
-      if (methodCall.method == 'getDownloadsDirectory') {
-        return downloadsPath;
-      }
-      if (methodCall.method == 'getExternalStorageDirectory') {
-        return downloadsPath;
-      }
-      return null;
-    });
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('plugins.flutter.io/path_provider'),
+      (MethodCall methodCall) async {
+        if (methodCall.method == 'getApplicationDocumentsDirectory') {
+          return appDocsPath;
+        }
+        if (methodCall.method == 'getDownloadsDirectory') {
+          return downloadsPath;
+        }
+        if (methodCall.method == 'getExternalStorageDirectory') {
+          return downloadsPath;
+        }
+        return null;
+      },
+    );
   });
 
   setUp(() async {

@@ -42,6 +42,7 @@ import 'package:mimic/multiplayer/screens/lobby_screen.dart';
 import 'package:mimic/multiplayer/screens/network_word_reveal_screen.dart';
 import 'package:mimic/multiplayer/screens/network_voting_screen.dart';
 import 'package:mimic/multiplayer/screens/rejoin_screen.dart';
+import 'package:mimic/game/screens/onboarding_screen.dart';
 
 // Network dependencies
 import 'package:mimic/multiplayer/network/network_service.dart';
@@ -99,6 +100,11 @@ class AppRouter {
       case homeRoute:
         return MaterialPageRoute(
           builder: (_) => const HomeScreen(),
+          settings: settings,
+        );
+      case '/onboarding':
+        return MaterialPageRoute(
+          builder: (_) => const OnboardingScreen(),
           settings: settings,
         );
       case modeSelectRoute:
