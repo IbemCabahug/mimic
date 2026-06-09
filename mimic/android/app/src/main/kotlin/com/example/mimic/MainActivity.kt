@@ -8,7 +8,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "mimic/launcher_icon"
-    private val LAUNCHER_ALIAS = "${packageName}.LauncherAlias"
+    private val LAUNCHER_ALIAS by lazy { "$packageName.LauncherAlias" }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
