@@ -2,15 +2,14 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../crypto/vault_crypto.dart';
 import '../../core/services/platform_service.dart';
-import '../services/biometric_service.dart';
+import '../../core/services/biometric_service.dart';
+import '../../core/widgets/biometric_vault_unlock.dart';
 import '../services/intruder_service.dart';
 import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
 import '../security/duress_service.dart';
-import '../security/shake_wipe_service.dart';
 import '../security/pin_wipe_service.dart';
 import 'wiped_vault_screen.dart';
 
@@ -24,12 +23,9 @@ class PinScreen extends ConsumerStatefulWidget {
 class _PinScreenState extends ConsumerState<PinScreen> {
   final TextEditingController _pinController = TextEditingController();
   late final VaultCrypto _crypto;
-  final BiometricService _biometricService = BiometricService();
   final IntruderService _intruderService = IntruderService();
   String? _error;
   bool _isLoading = false;
-  bool _biometricAvailable = false;
-  bool _biometricEnabled = false;
   int _wrongAttempts = 0;
 
   @override
@@ -37,7 +33,6 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     super.initState();
     _crypto = ref.read(vaultCryptoProvider);
     _checkIfWiped();
-    _checkBiometricState();
     _loadWrongAttempts();
   }
 
@@ -45,32 +40,10 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     if (kIsWeb) return;
     final wiped = await ref.read(pinWipeServiceProvider).isPinWiped();
     if (wiped && mounted) {
-      await _setupShakeListener();
-      if (!mounted) return;
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const WipedVaultScreen()),
       );
-    } else {
-      _setupShakeListener();
-    }
-  }
-
-  Future<void> _setupShakeListener() async {
-    if (kIsWeb) return;
-    final prefs = await SharedPreferences.getInstance();
-    final shakeEnabled = prefs.getBool('shake_wipe_enabled') ?? false;
-    if (shakeEnabled) {
-      ref.read(shakeWipeServiceProvider).startListening(() async {
-        await ref.read(pinWipeServiceProvider).wipePin();
-        if (mounted) {
-          Navigator.pushAndRemoveUntil(
-            context,
-            MaterialPageRoute(builder: (_) => const WipedVaultScreen()),
-            (_) => false,
-          );
-        }
-      });
     }
   }
 
@@ -85,44 +58,12 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     } catch (_) {}
   }
 
-  Future<void> _checkBiometricState() async {
-    if (kIsWeb) return;
-    try {
-      final available = await _biometricService.isBiometricAvailable();
-      final enabled = await _biometricService.isBiometricEnabled();
-      if (mounted) {
-        setState(() {
-          _biometricAvailable = available;
-          _biometricEnabled = enabled;
-        });
-      }
-    } catch (_) {}
+  Future<void> _authenticateWithSecret(String secret) async {
+    await _authenticate(secret);
   }
 
-  Future<void> _attemptBiometricAuth() async {
-    if (!_biometricAvailable || !_biometricEnabled || _isLoading) return;
-    setState(() => _isLoading = true);
-    try {
-      final success = await _biometricService.authenticate();
-      if (success && mounted) {
-        final storedPin = await ref.read(platformServiceProvider).secureRead('vault_pin');
-        if (storedPin != null) {
-          _pinController.text = storedPin;
-          await _authenticate();
-        } else if (mounted) {
-          setState(() => _error = 'No stored PIN found');
-          setState(() => _isLoading = false);
-        }
-      } else if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    } catch (_) {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _authenticate() async {
-    final pin = _pinController.text;
+  Future<void> _authenticate([String? overridePin]) async {
+    final pin = overridePin ?? _pinController.text;
     if (pin.isEmpty) {
       setState(() => _error = 'Enter your PIN');
       return;
@@ -133,12 +74,6 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     setState(() => _isLoading = true);
     () async {
       try {
-        await _crypto.initialize(pin);
-        if (!kIsWeb) {
-          await ref.read(platformServiceProvider).secureWrite('vault_pin', pin);
-          await ref.read(platformServiceProvider).secureWrite('wrong_attempts', '0');
-        }
-
         final duressService = ref.read(duressServiceProvider);
         final isFakePin = await duressService.isFakePin(pin);
 
@@ -152,6 +87,12 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           }
           navigator.pushReplacementNamed('/admin-panel');
           return;
+        }
+
+        await _crypto.initialize(pin);
+        if (!kIsWeb) {
+          await ref.read(platformServiceProvider).secureWrite('vault_pin', pin);
+          await ref.read(platformServiceProvider).secureWrite('wrong_attempts', '0');
         }
 
         if (localContext.mounted && mounted) {
@@ -191,9 +132,25 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     }();
   }
 
+  String? _biometricResultToMessage(BiometricResult result) {
+    switch (result) {
+      case BiometricResult.unavailable:
+        return 'Biometrics unavailable';
+      case BiometricResult.notEnrolled:
+        return 'No biometrics enrolled';
+      case BiometricResult.lockedOut:
+        return 'Biometrics locked out';
+      case BiometricResult.error:
+        return 'Biometric error';
+      case BiometricResult.failed:
+        return 'Biometric authentication failed';
+      case BiometricResult.success:
+        return null;
+    }
+  }
+
   @override
   void dispose() {
-    ref.read(shakeWipeServiceProvider).stopListening();
     _pinController.dispose();
     super.dispose();
   }
@@ -259,13 +216,15 @@ class _PinScreenState extends ConsumerState<PinScreen> {
                 ),
               ),
             const SizedBox(height: 24),
-            if (!kIsWeb && _biometricAvailable && _biometricEnabled)
-              IconButton(
-                onPressed: _isLoading ? null : _attemptBiometricAuth,
-                icon: const Icon(Icons.fingerprint, color: Color(0xFF7F77DD), size: 36),
-                tooltip: 'Use Biometrics',
+            if (!kIsWeb)
+              BiometricVaultUnlock(
+                onUnlockedVault: (secret) => _authenticateWithSecret(secret),
+                onUnlockedAdmin: (secret) => _authenticateWithSecret(secret),
+                onError: (result) {
+                  if (mounted) setState(() => _error = _biometricResultToMessage(result));
+                },
               ),
-            if (!kIsWeb && _biometricAvailable && _biometricEnabled)
+            if (!kIsWeb)
               const SizedBox(height: 16),
             ElevatedButton(
               onPressed: _isLoading ? null : _authenticate,

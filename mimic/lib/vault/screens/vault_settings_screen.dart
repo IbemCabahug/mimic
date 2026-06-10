@@ -9,9 +9,11 @@ import 'package:path/path.dart' as p;
 import '../crypto/vault_crypto.dart';
 import '../../core/services/platform_service.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/providers/biometric_providers.dart';
+import '../../core/services/biometric_service.dart';
+import '../../core/services/biometric_unlock_store.dart';
 import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
-import '../services/biometric_service.dart';
 import '../widgets/vault_scaffold.dart';
 
 class VaultSettingsScreen extends ConsumerStatefulWidget {
@@ -23,8 +25,6 @@ class VaultSettingsScreen extends ConsumerStatefulWidget {
 
 class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   bool _hasRecoveryBlob = false;
-  bool _biometricAvailable = false;
-  bool _biometricEnabled = false;
   bool _isLoadingBiometric = false;
   bool _shakeEnabled = false;
 
@@ -32,7 +32,6 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   void initState() {
     super.initState();
     _checkRecoveryBlob();
-    _checkBiometricState();
     _loadShakePref();
   }
 
@@ -53,36 +52,24 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     }
   }
 
-  Future<void> _checkBiometricState() async {
-    final biometricService = BiometricService();
-    final available = await biometricService.isBiometricAvailable();
-    final enabled = await biometricService.isBiometricEnabled();
-    if (mounted) {
-      setState(() {
-        _biometricAvailable = available;
-        _biometricEnabled = enabled;
-      });
-    }
-  }
-
   Future<void> _onBiometricToggle(bool value) async {
-    if (!_biometricAvailable) return;
-    final biometricService = BiometricService();
+    final biometricService = ref.read(biometricServiceProvider);
+    final unlockStore = ref.read(biometricUnlockStoreProvider);
     if (value) {
       setState(() => _isLoadingBiometric = true);
-      final success = await biometricService.authenticate();
+      final result = await biometricService.authenticate(reason: 'Unlock');
       if (mounted) {
         setState(() => _isLoadingBiometric = false);
       }
-      if (success && mounted) {
-        await biometricService.setBiometricEnabled(true);
-        setState(() => _biometricEnabled = true);
+      if (result == BiometricResult.success) {
+        final crypto = ref.read(vaultCryptoProvider);
+        final pin = await ref.read(platformServiceProvider).secureRead('vault_pin') ?? '';
+        await unlockStore.enable(BiometricLayer.vault, pin);
+        ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
       }
     } else {
-      await biometricService.setBiometricEnabled(false);
-      if (mounted) {
-        setState(() => _biometricEnabled = false);
-      }
+      await unlockStore.disable(BiometricLayer.vault);
+      ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
     }
   }
 
@@ -352,29 +339,33 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           _buildSettingsTile(
             icon: Icons.fingerprint,
             title: 'Biometric Unlock',
-            subtitle: _biometricAvailable
-                ? 'Use fingerprint or face to access your vault'
-                : 'Not available on this device',
-            onTap: _biometricAvailable && !_isLoadingBiometric ? () {
-              if (_biometricEnabled) {
-                _onBiometricToggle(false);
-              } else {
-                _onBiometricToggle(true);
-              }
-            } : null,
-              trailing: !_isLoadingBiometric && _biometricAvailable
+            subtitle: 'Use fingerprint or face to access your vault',
+            onTap: ref.watch(biometricEnabledProvider(BiometricLayer.vault)).maybeWhen(
+              data: (enabled) => !_isLoadingBiometric ? () {
+                _onBiometricToggle(!enabled);
+              } : null,
+              orElse: () => null,
+            ),
+            trailing: ref.watch(biometricEnabledProvider(BiometricLayer.vault)).maybeWhen(
+              data: (enabled) => enabled
                   ? Switch(
-                      value: _biometricEnabled,
-                      onChanged: (value) => _onBiometricToggle(value),
+                      value: true,
+                      onChanged: (_) => _onBiometricToggle(false),
                       activeThumbColor: VaultColors.accent,
                     )
-                : _isLoadingBiometric
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: VaultColors.accent),
-                      )
-                    : null,
+                  : _isLoadingBiometric
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: VaultColors.accent),
+                        )
+                      : Switch(
+                          value: false,
+                          onChanged: (_) => _onBiometricToggle(true),
+                          activeThumbColor: VaultColors.accent,
+                        ),
+              orElse: () => const SizedBox.shrink(),
+            ),
           ),
           _buildSettingsTile(
             icon: Icons.admin_panel_settings,

@@ -1,4 +1,4 @@
-# 🎭 Mimic — Session Continuity Part 2
+p# 🎭 Mimic — Session Continuity Part 2
 > Quick-reference summary of project basics + current session status.
 
 ---
