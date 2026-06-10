@@ -664,7 +664,7 @@ void main() {
                                   // 2. Navigate to game home with no animation
                                   Navigator.of(context).pushAndRemoveUntil(
                                     PageRouteBuilder(
-                                      pageBuilder: (ctx, _, __) =>
+                                      pageBuilder: (ctx, _, _) =>
                                           const Scaffold(body: Text('GAME_HOME')),
                                       transitionDuration: Duration.zero,
                                     ),

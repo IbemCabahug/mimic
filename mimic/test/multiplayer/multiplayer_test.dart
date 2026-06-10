@@ -165,8 +165,8 @@ void main() {
         ],
       );
       // Keep providers alive during tests to prevent FakeNetworkService from being disposed
-      gameStateSyncSub = container.listen(gameStateSyncProvider, (_, __) {});
-      networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
+      gameStateSyncSub = container.listen(gameStateSyncProvider, (_, _) {});
+      networkServiceSub = container.listen(networkServiceProvider, (_, _) {});
     });
 
     tearDown(() {

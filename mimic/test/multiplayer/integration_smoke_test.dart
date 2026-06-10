@@ -175,7 +175,7 @@ void main() {
           networkServiceProvider.overrideWith((ref) => mockNetworkService),
         ],
       );
-      networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
+      networkServiceSub = container.listen(networkServiceProvider, (_, _) {});
     });
 
     tearDown(() {
@@ -238,7 +238,7 @@ void main() {
           networkServiceProvider.overrideWith((ref) => mockNetworkService),
         ],
       );
-      networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
+      networkServiceSub = container.listen(networkServiceProvider, (_, _) {});
     });
 
     tearDown(() {
@@ -354,8 +354,8 @@ void main() {
           networkServiceProvider.overrideWith((ref) => mockNetworkService),
         ],
       );
-      gameStateSyncSub = container.listen(gameStateSyncProvider, (_, __) {});
-      networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
+      gameStateSyncSub = container.listen(gameStateSyncProvider, (_, _) {});
+      networkServiceSub = container.listen(networkServiceProvider, (_, _) {});
     });
 
     tearDown(() {
@@ -447,8 +447,8 @@ group('Disconnect', () {
         networkServiceProvider.overrideWith((ref) => mockNetworkService),
       ],
     );
-    final networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
-    final gameStateSyncSub = container.listen(gameStateSyncProvider, (_, __) {});
+    final networkServiceSub = container.listen(networkServiceProvider, (_, _) {});
+    final gameStateSyncSub = container.listen(gameStateSyncProvider, (_, _) {});
 
     mockNetworkService.role = NetworkRole.guest;
 
@@ -482,8 +482,8 @@ group('Disconnect', () {
         networkServiceProvider.overrideWith((ref) => mockNetworkService),
       ],
     );
-    final networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
-    final gameStateSyncSub = container.listen(gameStateSyncProvider, (_, __) {});
+    final networkServiceSub = container.listen(networkServiceProvider, (_, _) {});
+    final gameStateSyncSub = container.listen(gameStateSyncProvider, (_, _) {});
 
     await tester.pumpWidget(buildTestApp(
       home: const RejoinScreen(
@@ -514,7 +514,7 @@ group('Disconnect', () {
         networkServiceProvider.overrideWith((ref) => mockNetworkService),
       ],
     );
-    final networkServiceSub = container.listen(networkServiceProvider, (_, __) {});
+    final networkServiceSub = container.listen(networkServiceProvider, (_, _) {});
 
     await tester.pumpWidget(buildTestApp(
       home: const RejoinScreen(
