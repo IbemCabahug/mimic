@@ -55,6 +55,8 @@ class VaultCrypto extends ChangeNotifier {
       if (storedHash != null && storedHash == _hashPin(pin)) {
         _derivedKey = await _deriveKey(pin, storedSalt);
         _isUnlocked = true;
+        await _platformService.secureWrite('vault_setup_completed', 'true');
+        await _platformService.secureDelete('vault_wiped');
         notifyListeners();
         return;
       } else {
@@ -65,6 +67,8 @@ class VaultCrypto extends ChangeNotifier {
     salt = _generateSecureRandomBytes(16);
     await _platformService.secureWrite(_storageKeySalt, base64Encode(salt));
     await _platformService.secureWrite(_storageKeyPinHash, _hashPin(pin));
+    await _platformService.secureWrite('vault_setup_completed', 'true');
+    await _platformService.secureDelete('vault_wiped');
     _derivedKey = await _deriveKey(pin, base64Encode(salt));
     _isUnlocked = true;
     notifyListeners();
@@ -137,6 +141,8 @@ class VaultCrypto extends ChangeNotifier {
     if (!kIsWeb) {
       await _platformService.secureWrite('vault_pin', newPin);
       await _platformService.secureWrite('wrong_attempts', '0');
+      await _platformService.secureWrite('vault_setup_completed', 'true');
+      await _platformService.secureDelete('vault_wiped');
     }
     _derivedKey = await _deriveKey(newPin, base64Encode(salt));
     _isUnlocked = true;

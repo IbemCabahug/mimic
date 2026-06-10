@@ -79,7 +79,7 @@ class IntruderService {
     try {
       final appDir = await getApplicationDocumentsDirectory();
       final dir = Directory(appDir.path);
-      final entities = await dir.list().toList();
+      final entities = dir.listSync();
 
       final entries = <IntruderEntry>[];
       for (final entity in entities) {

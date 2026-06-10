@@ -66,29 +66,15 @@ After a trigger is detected, a brief glitch animation plays → fade to the PIN 
 
 ## Features
 
-### Security
-* **AES-256 file encryption**, SQLCipher for the notes database
-* **Keys derived from PIN via PBKDF2** — never stored in plain text
-* **Biometric unlock** (fingerprint / Face ID) support
-* **Decoy PIN** — opens a convincing empty vault under pressure
-* **Intruder selfie** — silent front camera photo after 3 failed PIN attempts
-* **Self-destruct mode** — wipe vault after N wrong attempts (configurable)
-* **Time-lock mode** — lock vault for a set period
-* **Break-in log** — timestamps of every failed unlock attempt, stored encrypted
-
-### Disguise
-* **App icon and name** look like a normal party game
-* **Recent apps switcher** shows the game screen — never the vault
-* **Auto-lock** on: app backgrounded, notification received, screen off, inactivity timeout
-* **Panic mode** — triple-press power button to instantly lock and return to game screen
-* **Transformable disguise skins** (future: calculator, weather, utility, wallpaper browser)
-
-### Vault
-* **Import photos/videos** from gallery with optional auto-delete of originals
-* **Full-screen viewer** with swipe navigation
-* **Encrypted note editor** with search and pin support
-* **Built-in audio player** for locked music/audio files
-* **All data stored locally** — no cloud by default
+* **Disguised Game Shell**: Looks, acts, and plays like a genuine horror party game.
+* **PIN-Protected Encrypted Vault**: Hidden behind secret in-game tap gestures.
+* **Vault Sections**: Separate encrypted databases/directories for Photos, Videos, Notes, Audio, and Documents.
+* **Move-to-Vault & Restore-to-Gallery**: Imports media into the vault (originals deleted from gallery after system consent) and allows restoring them back (moving back to gallery).
+* **Dual Biometric Unlock**: Fingerprint/face unlock with shake-routing for either admin panel access or the secret vault.
+* **Duress / Decoy PIN**: Inputting a duress PIN redirects to a mock Admin Panel; decoy PIN opens an empty fake vault.
+* **Shake-to-Hide**: A non-destructive shake gesture immediately clears the in-memory keys, returns to the game disguise, and displays a temporary blood-splatter overlay (no data deleted, no wiped/recovery UI shown).
+* **12-Word BIP39 Recovery & Encrypted Backup**: Recover access with a 12-word phrase or export/import encrypted `.mimic` backups.
+* **Panic / PIN Wipe**: Self-destruct PIN wipe after consecutive failed entries and instant panic locking.
 
 ---
 
@@ -221,12 +207,19 @@ When a user first discovers and triggers the unlock for the very first time, a s
 
 ---
 
-## Security Notes
-* The vault key is derived from the user's PIN using PBKDF2 and is never written to disk in plain text.
-* All files are encrypted individually using AES-256 before being written to storage.
-* The game layer and vault layer are completely isolated — no shared imports or state.
-* There is no "forgot PIN" recovery by design — losing the PIN means losing access to vault contents.
-* The app never requests network permissions for vault functionality — all encryption is local.
+## Security Model
+
+* **Encryption**: Files are individually encrypted using AES-256-CBC. SQLite databases (such as notes and video metadata) are protected via SQLCipher.
+* **Key Derivation**: Master keys are derived from the user PIN using PBKDF2 with 100,000 iterations.
+* **Key Storage**: Derived keys and hashes are stored in local platform secure storage using `flutter_secure_storage` with Android's `encryptedSharedPreferences: true` enabled. Note that switching or updating the secure storage configuration requires a clean app reinstall.
+* **Encrypted Files**: All encrypted media and database assets are saved inside the application's persistent documents directory.
+* **Key Lifecycle**: Cryptographic keys reside only in ephemeral memory when the vault is unlocked. Action triggers like Auto-Lock or Shake-to-Hide instantly clear this memory key (`VaultCrypto.clearKey()`).
+* **Recovery**: PIN recovery is possible only through the 12-word BIP39 phrase. Losing both the PIN and the recovery phrase means permanent loss of access.
+* **Decoy / Duress Routing**: Entering a decoy PIN opens an empty vault. Entering a duress PIN routes the app to a mock `AdminPanelScreen` instead of the vault.
+* **Shake-to-Hide (Non-Destructive)**: Shaking the device locks the vault silently by clearing the in-memory key, routing back to the game, and showing an animated blood-splatter. No database entries, files, PIN hashes, or biometric secrets are modified or deleted.
+* **Commit History Reference**: The recovery phrase and backup/migration features were introduced in commit `a233255`.
+* **Isolation**: The game layer and vault layer are completely isolated — no shared imports or state.
+* **Network Privacy**: The app never requests network permissions for vault functionality — all encryption is local.
 
 ---
 *Built with Flutter. Designed for privacy. Disguised as fun.*

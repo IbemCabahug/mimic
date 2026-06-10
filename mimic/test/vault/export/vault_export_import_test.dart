@@ -214,7 +214,8 @@ void main() {
       await photosDb.close();
 
       // Write a mock encrypted photo file to the app-docs directory
-      final photoFile = File('$appDocsPath/photo1');
+      final photoFile = File('$appDocsPath/vault_files/photo1');
+      await Directory('$appDocsPath/vault_files').create(recursive: true);
       await photoFile.writeAsBytes(utf8.encode('photo_bytes'));
 
       // 3. Perform export

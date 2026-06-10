@@ -56,7 +56,9 @@ class VaultExporter {
   ///
   /// Returns the written [File].
   static Future<File> buildExportFile() async {
-    const storage = FlutterSecureStorage();
+    const storage = FlutterSecureStorage(
+      aOptions: AndroidOptions(encryptedSharedPreferences: true),
+    );
 
     // ── 1. Collect all secure-storage entries into a payload map ──────
     final Map<String, dynamic> payload = {};
@@ -128,7 +130,7 @@ class VaultExporter {
     // Gather IDs from photo metadata
     final photoIds = _extractIds(payload['vault_photos_meta']);
     for (final id in photoIds) {
-      final file = File('${appDir.path}/$id');
+      final file = File('${appDir.path}/vault_files/$id');
       if (await file.exists()) {
         final bytes = await file.readAsBytes();
         encryptedFiles[id] = base64Encode(bytes);
@@ -138,7 +140,7 @@ class VaultExporter {
     // Gather IDs from audio metadata
     final audioIds = _extractIds(payload['vault_audio_meta']);
     for (final id in audioIds) {
-      final file = File('${appDir.path}/$id');
+      final file = File('${appDir.path}/vault_files/$id');
       if (await file.exists()) {
         final bytes = await file.readAsBytes();
         encryptedFiles[id] = base64Encode(bytes);

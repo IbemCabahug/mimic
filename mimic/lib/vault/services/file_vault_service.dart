@@ -2,11 +2,13 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
+import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 import '../../core/services/platform_service.dart';
 import '../crypto/vault_crypto.dart';
 
@@ -15,12 +17,14 @@ class PhotoMeta {
   final String mimeType;
   final int size;
   final DateTime createdAt;
+  final String? originalName;
 
   PhotoMeta({
     required this.id,
     required this.mimeType,
     required this.size,
     required this.createdAt,
+    this.originalName,
   });
 
   Map<String, dynamic> toMap() => {
@@ -28,6 +32,7 @@ class PhotoMeta {
         'mimeType': mimeType,
         'size': size,
         'createdAt': createdAt.toIso8601String(),
+        'originalName': originalName,
       };
 
   factory PhotoMeta.fromMap(Map<String, dynamic> map) => PhotoMeta(
@@ -35,6 +40,7 @@ class PhotoMeta {
         mimeType: map['mimeType'] as String,
         size: map['size'] as int,
         createdAt: DateTime.parse(map['createdAt'] as String),
+        originalName: map['originalName'] as String?,
       );
 }
 
@@ -58,11 +64,21 @@ class FileVaultService {
             id TEXT PRIMARY KEY,
             mimeType TEXT,
             size INTEGER,
-            createdAt TEXT
+            createdAt TEXT,
+            originalName TEXT
           )
         ''');
       },
     );
+    try {
+      final List<Map<String, dynamic>> columns = await _db!.rawQuery("PRAGMA table_info($_tableName)");
+      final hasOriginalName = columns.any((column) => column['name'] == 'originalName');
+      if (!hasOriginalName) {
+        await _db!.execute("ALTER TABLE $_tableName ADD COLUMN originalName TEXT");
+      }
+    } catch (e) {
+      debugPrint('Error updating schema: $e');
+    }
   }
 
   Future<void> saveFile(String filename, Uint8List bytes) async {
@@ -76,7 +92,7 @@ class FileVaultService {
     return await _crypto.decryptSystem(encrypted);
   }
 
-  Future<String> savePhoto(Uint8List bytes, String mimeType) async {
+  Future<String> savePhoto(Uint8List bytes, String mimeType, {String? originalName}) async {
     final id = const Uuid().v4();
     final now = DateTime.now();
 
@@ -88,6 +104,7 @@ class FileVaultService {
       mimeType: mimeType,
       size: bytes.length,
       createdAt: now,
+      originalName: originalName,
     );
 
     await _saveMeta(meta);
@@ -151,22 +168,53 @@ class FileVaultService {
     await _db!.delete(_tableName, where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<String?> pickAndEncryptImage() async {
+  Future<List<String>> pickAndEncryptImage(BuildContext context) async {
     try {
-      final picker = ImagePicker();
-      final XFile? picked = await picker.pickImage(
-        source: ImageSource.gallery,
-        maxWidth: 1920,
-        maxHeight: 1920,
-        imageQuality: 85,
+      final List<AssetEntity>? assets = await AssetPicker.pickAssets(
+        context,
+        pickerConfig: const AssetPickerConfig(
+          requestType: RequestType.image,
+        ),
       );
-      if (picked == null) return null;
-      final bytes = await picked.readAsBytes();
-      final id = await savePhoto(bytes, picked.mimeType ?? 'image/jpeg');
-      return id;
+      if (assets == null || assets.isEmpty) return [];
+
+      final savedIds = <String>[];
+      for (final asset in assets) {
+        final file = await asset.originFile;
+        if (file == null) continue;
+        final bytes = await file.readAsBytes();
+        final name = asset.title;
+        final mime = await asset.mimeTypeAsync ?? 'image/jpeg';
+        final id = await savePhoto(bytes, mime, originalName: name);
+        savedIds.add(id);
+      }
+
+      if (savedIds.length == assets.length) {
+        try {
+          final deletedIds = await PhotoManager.editor.deleteWithIds(assets.map((a) => a.id).toList());
+          if (deletedIds.length < assets.length && context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Original photos kept on device.')),
+            );
+          }
+        } catch (e) {
+          debugPrint('Gallery deletion failed: $e');
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Gallery deletion failed.')),
+            );
+          }
+        }
+      }
+      return savedIds;
     } catch (e) {
       debugPrint('pickAndEncryptImage failed: $e');
-      return null;
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to import photos: $e')),
+        );
+      }
+      return [];
     }
   }
 
@@ -181,12 +229,27 @@ class FileVaultService {
       );
       if (picked == null) return null;
       final bytes = await picked.readAsBytes();
-      final id = await savePhoto(bytes, picked.mimeType ?? 'image/jpeg');
+      final id = await savePhoto(bytes, picked.mimeType ?? 'image/jpeg', originalName: p.basename(picked.path));
       return id;
     } catch (e) {
       debugPrint('captureAndEncryptImage failed: $e');
       return null;
     }
+  }
+
+  Future<void> restorePhotoToGallery(String id) async {
+    final bytes = await getPhoto(id);
+    if (bytes == null) throw Exception('Photo file not found in vault');
+
+    final photos = await getAllPhotos();
+    final photo = photos.firstWhere((p) => p.id == id);
+    final originalName = photo.originalName ?? '$id.jpg';
+
+    await PhotoManager.editor.saveImage(
+      bytes,
+      filename: originalName,
+    );
+    await deletePhoto(id);
   }
 }
 

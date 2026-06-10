@@ -27,13 +27,26 @@ class _PinScreenState extends ConsumerState<PinScreen> {
   String? _error;
   bool _isLoading = false;
   int _wrongAttempts = 0;
+  bool _isCreateMode = false;
+  bool _isConfirming = false;
+  String _firstEnteredPin = '';
 
   @override
   void initState() {
     super.initState();
     _crypto = ref.read(vaultCryptoProvider);
+    _checkCreateMode();
     _checkIfWiped();
     _loadWrongAttempts();
+  }
+
+  Future<void> _checkCreateMode() async {
+    final hash = await ref.read(platformServiceProvider).secureRead('vault_pin_hash');
+    if (mounted) {
+      setState(() {
+        _isCreateMode = (hash == null || hash.isEmpty);
+      });
+    }
   }
 
   Future<void> _checkIfWiped() async {
@@ -69,7 +82,32 @@ class _PinScreenState extends ConsumerState<PinScreen> {
       return;
     }
 
-    final localContext = context;
+    if (_isCreateMode && overridePin == null) {
+      if (pin.length < 4) {
+        setState(() => _error = 'PIN must be at least 4 digits');
+        return;
+      }
+      if (!_isConfirming) {
+        setState(() {
+          _firstEnteredPin = pin;
+          _isConfirming = true;
+          _error = null;
+        });
+        _pinController.clear();
+        return;
+      } else {
+        if (pin != _firstEnteredPin) {
+          setState(() {
+            _error = 'PINs do not match. Please try again.';
+            _isConfirming = false;
+            _firstEnteredPin = '';
+          });
+          _pinController.clear();
+          return;
+        }
+      }
+    }
+
     final navigator = Navigator.of(context);
     setState(() => _isLoading = true);
     () async {
@@ -93,16 +131,17 @@ class _PinScreenState extends ConsumerState<PinScreen> {
         if (!kIsWeb) {
           await ref.read(platformServiceProvider).secureWrite('vault_pin', pin);
           await ref.read(platformServiceProvider).secureWrite('wrong_attempts', '0');
+          await ref.read(platformServiceProvider).secureWrite('vault_setup_completed', 'true');
         }
 
-        if (localContext.mounted && mounted) {
+        if (mounted) {
           setState(() {
             _error = null;
             _wrongAttempts = 0;
           });
 
-          PanicMode().init(localContext, ref);
-          AutoLock().init(localContext, ref);
+          PanicMode().init(context, ref);
+          AutoLock().init(context, ref);
 
           navigator.pushReplacementNamed('/vault-home');
         }
@@ -162,9 +201,9 @@ class _PinScreenState extends ConsumerState<PinScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text(
-          'Vault Access',
-          style: TextStyle(color: Color(0xFF7F77DD)),
+        title: Text(
+          _isCreateMode ? 'Vault Setup' : 'Vault Access',
+          style: const TextStyle(color: Color(0xFF7F77DD)),
         ),
         centerTitle: true,
       ),
@@ -173,9 +212,11 @@ class _PinScreenState extends ConsumerState<PinScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Text(
-              'Enter Vault PIN',
-              style: TextStyle(
+            Text(
+              _isCreateMode
+                  ? (_isConfirming ? 'Confirm Vault PIN' : 'Create Vault PIN')
+                  : 'Enter Vault PIN',
+              style: const TextStyle(
                 color: Color(0xFF7F77DD),
                 fontSize: 24,
                 fontWeight: FontWeight.bold,
@@ -216,7 +257,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
                 ),
               ),
             const SizedBox(height: 24),
-            if (!kIsWeb)
+            if (!kIsWeb && !_isCreateMode)
               BiometricVaultUnlock(
                 onUnlockedVault: (secret) => _authenticateWithSecret(secret),
                 onUnlockedAdmin: (secret) => _authenticateWithSecret(secret),
@@ -224,7 +265,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
                   if (mounted) setState(() => _error = _biometricResultToMessage(result));
                 },
               ),
-            if (!kIsWeb)
+            if (!kIsWeb && !_isCreateMode)
               const SizedBox(height: 16),
             ElevatedButton(
               onPressed: _isLoading ? null : _authenticate,
@@ -245,12 +286,29 @@ class _PinScreenState extends ConsumerState<PinScreen> {
                         color: Colors.white,
                       ),
                     )
-                  : const Text(
-                      'Unlock',
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                  : Text(
+                      _isCreateMode ? 'Create PIN' : 'Unlock',
+                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
                     ),
             ),
-            if (_wrongAttempts >= 3) ...[
+            if (_isCreateMode) ...[
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).pushNamed('/vault-import');
+                },
+                child: const Text(
+                  'Restore from Backup',
+                  style: TextStyle(
+                    color: Color(0xFF7F77DD),
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'Inter',
+                  ),
+                ),
+              ),
+            ],
+            if (!_isCreateMode && _wrongAttempts >= 3) ...[
               const SizedBox(height: 12),
               TextButton(
                 onPressed: () {

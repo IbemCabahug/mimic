@@ -129,9 +129,10 @@ FIRST TIME SETUP
 
 VAULT FEATURES
 --------------
-  Photos   — import from gallery, encrypted, never appears in system gallery
-  Notes    — create/edit/delete encrypted text notes
-  Audio    — import and play audio files, decrypted to memory only
+  Photos    — import from gallery, encrypted, never appears in system gallery
+  Videos    — import from gallery, encrypted, playable via built-in player
+  Notes     — create/edit/delete encrypted text notes
+  Audio     — import and play audio files, decrypted to memory only
   Documents — import PDFs and files, encrypted at rest
 
 SECURITY FEATURES

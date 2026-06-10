@@ -62,7 +62,6 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
         setState(() => _isLoadingBiometric = false);
       }
       if (result == BiometricResult.success) {
-        final crypto = ref.read(vaultCryptoProvider);
         final pin = await ref.read(platformServiceProvider).secureRead('vault_pin') ?? '';
         await unlockStore.enable(BiometricLayer.vault, pin);
         ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
@@ -74,45 +73,10 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   }
 
   Future<void> _onShakeToggle(bool value) async {
-    if (value) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (dialogContext) => AlertDialog(
-          backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text(
-            'Are you sure?',
-            style: TextStyle(fontWeight: FontWeight.bold, fontFamily: 'Inter'),
-          ),
-          content: const Text(
-            'If you shake and have lost your 12-word recovery phrase, your vault cannot be recovered. Make sure your recovery phrase is safely backed up before enabling this.',
-            style: TextStyle(fontFamily: 'Inter'),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
-            ),
-            TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Enable', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
-            ),
-          ],
-        ),
-      );
-      if (confirmed == true) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setBool('shake_wipe_enabled', true);
-        if (mounted) {
-          setState(() => _shakeEnabled = true);
-        }
-      }
-    } else {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('shake_wipe_enabled', false);
-      if (mounted) {
-        setState(() => _shakeEnabled = false);
-      }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('shake_wipe_enabled', value);
+    if (mounted) {
+      setState(() => _shakeEnabled = value);
     }
   }
 
@@ -377,8 +341,8 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           ),
           _buildSettingsTile(
             icon: Icons.vibration,
-            title: 'Shake to Wipe',
-            subtitle: 'Double shake instantly hides your vault until restored',
+            title: 'Shake to Hide',
+            subtitle: 'Shaking instantly hides your vault',
             onTap: () {},
             trailing: Switch(
               value: _shakeEnabled,

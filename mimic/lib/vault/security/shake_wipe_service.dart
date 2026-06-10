@@ -7,13 +7,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
 class ShakeWipeService {
-  static const double _shakeThreshold = 25.0;
-  static const int _shakeWindowMs = 2000;
-  static const int _minShakesRequired = 2;
+  static const double shakeThreshold = 18.0;
+  static const int shakeWindowMs = 1500;
+  static const int minShakesRequired = 3;
+  static const int refractoryPeriodMs = 1000;
 
   StreamSubscription<AccelerometerEvent>? _subscription;
-  int _shakeCount = 0;
-  DateTime? _lastShakeTime;
+  final List<DateTime> _shakeTimestamps = [];
+  DateTime? _lastTriggerTime;
   VoidCallback? _onWipeTriggered;
   bool _isListening = false;
 
@@ -21,8 +22,8 @@ class ShakeWipeService {
     if (_isListening) return;
     if (kIsWeb) return;
     _onWipeTriggered = onWipeTriggered;
-    _shakeCount = 0;
-    _lastShakeTime = null;
+    _shakeTimestamps.clear();
+    _lastTriggerTime = null;
     _isListening = true;
 
     _subscription = accelerometerEventStream().listen(_onAccelerometerEvent);
@@ -33,8 +34,8 @@ class ShakeWipeService {
     _subscription = null;
     _isListening = false;
     _onWipeTriggered = null;
-    _shakeCount = 0;
-    _lastShakeTime = null;
+    _shakeTimestamps.clear();
+    _lastTriggerTime = null;
   }
 
   bool get isListening => _isListening;
@@ -42,20 +43,32 @@ class ShakeWipeService {
   void _onAccelerometerEvent(AccelerometerEvent event) {
     if (!_isListening) return;
 
-    final magnitude = sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
-    if (magnitude < _shakeThreshold) return;
-
     final now = DateTime.now();
-    if (_lastShakeTime != null && now.difference(_lastShakeTime!).inMilliseconds > _shakeWindowMs) {
-      _shakeCount = 0;
+
+    // Check refractory window
+    if (_lastTriggerTime != null &&
+        now.difference(_lastTriggerTime!).inMilliseconds < refractoryPeriodMs) {
+      return;
     }
 
-    _shakeCount++;
-    _lastShakeTime = now;
+    final magnitude = sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
+    if (magnitude < shakeThreshold) return;
 
-    if (_shakeCount >= _minShakesRequired) {
-      _shakeCount = 0;
-      _lastShakeTime = null;
+    // Enforce minimum interval of 200ms between counted shake bumps
+    if (_shakeTimestamps.isNotEmpty &&
+        now.difference(_shakeTimestamps.last).inMilliseconds < 200) {
+      return;
+    }
+
+    _shakeTimestamps.add(now);
+
+    // Keep only timestamps within the sliding window
+    _shakeTimestamps.removeWhere((t) =>
+        now.difference(t).inMilliseconds > shakeWindowMs);
+
+    if (_shakeTimestamps.length >= minShakesRequired) {
+      _shakeTimestamps.clear();
+      _lastTriggerTime = now;
       _onWipeTriggered?.call();
     }
   }
