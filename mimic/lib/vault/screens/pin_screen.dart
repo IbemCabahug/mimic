@@ -24,6 +24,7 @@ class PinScreen extends ConsumerStatefulWidget {
 class _PinScreenState extends ConsumerState<PinScreen> {
   final TextEditingController _pinController = TextEditingController();
   late final VaultCrypto _crypto;
+  late final ShakeWipeService _shakeWipeService;
   final BiometricService _biometricService = BiometricService();
   final IntruderService _intruderService = IntruderService();
   String? _error;
@@ -36,6 +37,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
   void initState() {
     super.initState();
     _crypto = ref.read(vaultCryptoProvider);
+    _shakeWipeService = ref.read(shakeWipeServiceProvider);
     _checkIfWiped();
     _checkBiometricState();
     _loadWrongAttempts();
@@ -61,7 +63,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     final prefs = await SharedPreferences.getInstance();
     final shakeEnabled = prefs.getBool('shake_wipe_enabled') ?? false;
     if (shakeEnabled) {
-      ref.read(shakeWipeServiceProvider).startListening(() async {
+      _shakeWipeService.startListening(() async {
         await ref.read(pinWipeServiceProvider).wipePin();
         if (mounted) {
           Navigator.pushAndRemoveUntil(
@@ -193,7 +195,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
 
   @override
   void dispose() {
-    ref.read(shakeWipeServiceProvider).stopListening();
+    _shakeWipeService.stopListening();
     _pinController.dispose();
     super.dispose();
   }
