@@ -150,13 +150,11 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           try {
             final stored = await ref.read(platformServiceProvider).secureRead('wrong_attempts');
             final currentCount = (int.tryParse(stored ?? '') ?? 0) + 1;
-            int counted = currentCount;
-            if (counted >= 3) {
+            if (currentCount % 3 == 0) {
               _intruderService.captureIntruder(_crypto);
-              counted = 0;
             }
-            await ref.read(platformServiceProvider).secureWrite('wrong_attempts', counted.toString());
-            if (mounted) setState(() => _wrongAttempts = counted);
+            await ref.read(platformServiceProvider).secureWrite('wrong_attempts', currentCount.toString());
+            if (mounted) setState(() => _wrongAttempts = currentCount);
           } catch (ex) {
             debugPrint('Failed to save wrong attempts log: $ex');
             if (mounted) setState(() => _wrongAttempts++);

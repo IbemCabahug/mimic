@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -24,6 +25,7 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _fadeController;
   late final ShakeWipeService _shakeWipeService;
+  Timer? _reminderTimer;
   int _photoCount = 0;
   int _noteCount = 0;
   int _audioCount = 0;
@@ -41,7 +43,7 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
     _loadCounts();
     _setupShakeListener();
 
-    Future.delayed(const Duration(seconds: 1), () {
+    _reminderTimer = Timer(const Duration(seconds: 1), () {
       if (mounted) {
         BackupReminderService.checkAndShowReminder(context);
       }
@@ -82,6 +84,7 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
 
   @override
   void dispose() {
+    _reminderTimer?.cancel();
     _shakeWipeService.stopListening();
     _fadeController.dispose();
     super.dispose();
