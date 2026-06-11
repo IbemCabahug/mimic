@@ -19,6 +19,7 @@ import 'package:mimic/game/screens/results_screen.dart';
 import 'package:mimic/game/screens/tutorial_screen.dart';
 import 'package:mimic/game/screens/player_profile_screen.dart';
 import 'package:mimic/game/screens/leaderboard_screen.dart';
+import 'package:mimic/game/screens/admin_panel_screen.dart';
 import 'package:mimic/vault/screens/pin_screen.dart';
 import 'package:mimic/vault/screens/vault_home_screen.dart';
 import 'package:mimic/vault/screens/photo_vault_screen.dart';
@@ -33,6 +34,7 @@ import 'package:mimic/vault/screens/reset_pin_screen.dart';
 import 'package:mimic/vault/screens/export_vault_screen.dart';
 import 'package:mimic/vault/screens/import_vault_screen.dart';
 import 'package:mimic/vault/screens/set_duress_pin_screen.dart';
+import 'package:mimic/vault/screens/video_vault_screen.dart';
 
 // Multiplayer screens
 import 'package:mimic/multiplayer/screens/multiplayer_menu_screen.dart';
@@ -82,6 +84,7 @@ class AppRouter {
   static const String vaultSetDuressPinRoute = '/vault-set-duress-pin';
   static const String vaultExportRoute = '/vault-export';
   static const String vaultImportRoute = '/vault-import';
+  static const String vaultVideosRoute = '/vault-videos';
 
   // Multiplayer route names
   static const String multiplayerHostRoute = '/multiplayer/host';
@@ -105,6 +108,11 @@ class AppRouter {
       case '/onboarding':
         return MaterialPageRoute(
           builder: (_) => const OnboardingScreen(),
+          settings: settings,
+        );
+      case '/admin-panel':
+        return MaterialPageRoute(
+          builder: (_) => const AdminPanelScreen(),
           settings: settings,
         );
       case modeSelectRoute:
@@ -250,6 +258,11 @@ class AppRouter {
       case vaultImportRoute:
         return MaterialPageRoute(
           builder: (_) => const ImportVaultScreen(),
+          settings: settings,
+        );
+      case vaultVideosRoute:
+        return MaterialPageRoute(
+          builder: (_) => const VideoVaultScreen(),
           settings: settings,
         );
 

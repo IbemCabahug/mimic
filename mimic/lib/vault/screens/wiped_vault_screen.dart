@@ -60,16 +60,7 @@ class WipedVaultScreen extends StatelessWidget {
               const SizedBox(height: 16),
               TextButton(
                 onPressed: () {
-                  Navigator.pushAndRemoveUntil(
-                    context,
-                    PageRouteBuilder(
-                      pageBuilder: (context, animation, secondaryAnimation) =>
-                          _buildGameHome(context),
-                      transitionDuration: Duration.zero,
-                      reverseTransitionDuration: Duration.zero,
-                    ),
-                    (_) => false,
-                  );
+                  Navigator.of(context, rootNavigator: true).pushNamedAndRemoveUntil('/', (route) => false);
                 },
                 child: const Text(
                   'Not now — return to game',
@@ -81,43 +72,6 @@ class WipedVaultScreen extends StatelessWidget {
                 ),
               ),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildGameHome(BuildContext context) {
-    // Route back to game home using the root route
-    // This avoids importing game layer from vault layer
-    return Navigator(
-      onGenerateRoute: (settings) {
-        return MaterialPageRoute(
-          builder: (_) => _GameHomePlaceholder(),
-          settings: const RouteSettings(name: '/'),
-        );
-      },
-    );
-  }
-}
-
-class _GameHomePlaceholder extends StatelessWidget {
-  const _GameHomePlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    // Minimal placeholder — in production this would redirect via the app's main navigator
-    return Scaffold(
-      backgroundColor: const Color(0xFF080A0F),
-      body: Center(
-        child: TextButton(
-          onPressed: () {
-            // Navigate to home through the app's root navigator
-            Navigator.of(context).pushNamedAndRemoveUntil('/', (_) => false);
-          },
-          child: const Text(
-            'Return to Game',
-            style: TextStyle(color: Color(0xFF7F77DD), fontSize: 18),
           ),
         ),
       ),

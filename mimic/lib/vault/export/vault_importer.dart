@@ -115,7 +115,7 @@ class VaultImporter {
       final salt = base64Decode(recoverySaltStr);
 
       // Derive recovery key
-      final recoveryKey = await RecoveryPhrase.deriveKey(recoveryWords, salt);
+      final recoveryKey = RecoveryPhrase.deriveKey(recoveryWords, salt);
 
       if (blob.length < 16) return false;
       final iv = blob.sublist(0, 16);
@@ -142,7 +142,9 @@ class VaultImporter {
       // ─── Phrase verified successfully. Restoring data ─────────────────
 
       // 1. Retrieve and delete old encrypted files from app storage
-      const storage = FlutterSecureStorage();
+      const storage = FlutterSecureStorage(
+        aOptions: AndroidOptions(encryptedSharedPreferences: true),
+      );
       final List<String> oldFileIds = [];
       if (kIsWeb) {
         final oldPhotosMeta = await storage.read(key: 'vault_photos_meta');
@@ -172,7 +174,7 @@ class VaultImporter {
 
       final appDir = await getApplicationDocumentsDirectory();
       for (final id in oldFileIds) {
-        final f = File('${appDir.path}/$id');
+        final f = File('${appDir.path}/vault_files/$id');
         if (await f.exists()) {
           await f.delete();
         }
@@ -185,7 +187,7 @@ class VaultImporter {
           final id = entry.key;
           final base64Data = entry.value as String;
           final fileBytes = base64Decode(base64Data);
-          final f = File('${appDir.path}/$id');
+          final f = File('${appDir.path}/vault_files/$id');
           await f.writeAsBytes(fileBytes, flush: true);
         }
       }

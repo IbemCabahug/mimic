@@ -36,6 +36,10 @@ dependencies:
   qr_flutter: ^4.1.0
   mobile_scanner: ^7.2.0
   package_info_plus: ^8.0.0
+  photo_manager: ^3.0.0
+  wechat_assets_picker: ^9.0.0
+  video_player: ^2.8.2
+  chewie: ^1.7.5
 
 dev_dependencies:
   flutter_test:

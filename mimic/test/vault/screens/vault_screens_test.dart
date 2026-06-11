@@ -16,11 +16,13 @@
 // - No decrypted file data is written to disk
 
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 import 'package:mimic/core/theme/app_theme.dart';
 import 'package:mimic/core/services/platform_service.dart';
@@ -40,6 +42,8 @@ import 'package:mimic/vault/screens/audio_vault_screen.dart';
 import 'package:mimic/vault/screens/document_vault_screen.dart';
 import 'package:mimic/vault/screens/vault_settings_screen.dart';
 import 'package:mimic/vault/screens/breakin_log_screen.dart';
+import 'package:mimic/vault/services/video_vault_service.dart';
+import 'package:mimic/vault/screens/video_vault_screen.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Fakes & In-Memory Mocks
@@ -131,13 +135,14 @@ class FakeFileVaultService extends FileVaultService {
   FakeFileVaultService(super.platformService, super.crypto);
 
   @override
-  Future<String> savePhoto(Uint8List bytes, String mimeType) async {
+  Future<String> savePhoto(Uint8List bytes, String mimeType, {String? originalName}) async {
     final id = 'photo_${photos.length + 1}';
     final meta = PhotoMeta(
       id: id,
       mimeType: mimeType,
       size: bytes.length,
       createdAt: DateTime.now(),
+      originalName: originalName,
     );
     photos.add(meta);
     photoData[id] = bytes;
@@ -161,13 +166,19 @@ class FakeFileVaultService extends FileVaultService {
   }
 
   @override
-  Future<String?> pickAndEncryptImage() async {
-    return savePhoto(kTransparentImage, 'image/jpeg');
+  Future<List<String>> pickAndEncryptImage(BuildContext context) async {
+    final id = await savePhoto(kTransparentImage, 'image/jpeg');
+    return [id];
   }
 
   @override
   Future<String?> captureAndEncryptImage() async {
     return savePhoto(kTransparentImage, 'image/png');
+  }
+
+  @override
+  Future<void> restorePhotoToGallery(String id) async {
+    await deletePhoto(id);
   }
 }
 
@@ -208,6 +219,57 @@ class FakeAudioVaultService extends AudioVaultService {
   @override
   Future<List<AudioMeta>> getAllAudio() async {
     return recordings;
+  }
+}
+
+/// Fake implementation of VideoVaultService that stores videos in memory.
+class FakeVideoVaultService extends VideoVaultService {
+  final List<VideoMeta> videos = [];
+  final Map<String, Uint8List> videoData = {};
+
+  FakeVideoVaultService(super.platformService, super.crypto);
+
+  @override
+  Future<String> saveVideo(Uint8List bytes, String mimeType, int durationS, {String? originalName}) async {
+    final id = 'video_${videos.length + 1}';
+    final meta = VideoMeta(
+      id: id,
+      mimeType: mimeType,
+      size: bytes.length,
+      durationS: durationS,
+      createdAt: DateTime.now(),
+      originalName: originalName,
+    );
+    videos.add(meta);
+    videoData[id] = bytes;
+    return id;
+  }
+
+  @override
+  Future<Uint8List?> getVideo(String id) async {
+    return videoData[id];
+  }
+
+  @override
+  Future<void> deleteVideo(String id) async {
+    videos.removeWhere((v) => v.id == id);
+    videoData.remove(id);
+  }
+
+  @override
+  Future<List<VideoMeta>> getAllVideos() async {
+    return videos;
+  }
+
+  @override
+  Future<List<String>> pickAndEncryptVideo(BuildContext context) async {
+    final id = await saveVideo(kTransparentImage, 'video/mp4', 10);
+    return [id];
+  }
+
+  @override
+  Future<void> restoreVideoToGallery(String id) async {
+    await deleteVideo(id);
   }
 }
 
@@ -268,6 +330,8 @@ void main() {
   late FakeNotesService fakeNotes;
   late FakeFileVaultService fakePhotos;
   late FakeAudioVaultService fakeAudio;
+  late FakeVideoVaultService fakeVideos;
+  late Directory testTempDir;
   List<Map<String, dynamic>> mockLogs = [];
 
   setUp(() async {
@@ -280,6 +344,7 @@ void main() {
     fakeNotes = FakeNotesService(fakePlatform, fakeCrypto);
     fakePhotos = FakeFileVaultService(fakePlatform, fakeCrypto);
     fakeAudio = FakeAudioVaultService(fakePlatform, fakeCrypto);
+    fakeVideos = FakeVideoVaultService(fakePlatform, fakeCrypto);
     mockLogs = [];
   });
 
@@ -293,6 +358,7 @@ void main() {
         notesServiceProvider.overrideWithValue(fakeNotes),
         fileVaultServiceProvider.overrideWithValue(fakePhotos),
         audioVaultServiceProvider.overrideWithValue(fakeAudio),
+        videoVaultServiceProvider.overrideWithValue(fakeVideos),
       ],
       child: MaterialApp(
         theme: vaultTheme,
@@ -304,6 +370,7 @@ void main() {
           '/vault-photos': (_) => const PhotoVaultScreen(),
           '/vault-notes': (_) => const NotesScreen(),
           '/vault-audio': (_) => const AudioVaultScreen(),
+          '/vault-videos': (_) => const VideoVaultScreen(),
           '/vault-documents': (_) => const DocumentVaultScreen(),
           '/vault-settings': (_) => const VaultSettingsScreen(),
           '/vault-breakin-logs': (_) => const Scaffold(body: Text('BREAKIN_LOGS_SCREEN')),
@@ -316,42 +383,65 @@ void main() {
   // Set up sqflite method channel interceptor for BreakInLogScreen tests.
   setUpAll(() {
     TestWidgetsFlutterBinding.ensureInitialized();
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(
-      const MethodChannel('plugins.flutter.io/sqflite'),
-      (MethodCall methodCall) async {
-        if (methodCall.method == 'getDatabasesPath') {
-          return '/mock/db/path';
-        }
-        if (methodCall.method == 'openDatabase') {
-          return 1; // mock database ID
-        }
-        if (methodCall.method == 'execute') {
-          return null;
-        }
-        if (methodCall.method == 'query') {
-          return mockLogs;
-        }
+    testTempDir = Directory.systemTemp.createTempSync('vault_screens_test_temp');
+    PathProviderPlatform.instance = MockPathProviderPlatform(testTempDir.path);
+
+    const MethodChannel('plugins.flutter.io/sqflite').setMockMethodCallHandler((MethodCall methodCall) async {
+      if (methodCall.method == 'getDatabasesPath') {
+        return '/mock/db/path';
+      }
+      if (methodCall.method == 'openDatabase') {
+        return 1; // mock database ID
+      }
+      if (methodCall.method == 'execute') {
         return null;
-      },
-    );
+      }
+      if (methodCall.method == 'query') {
+        return mockLogs;
+      }
+      return null;
+    });
+
+    const MethodChannel('plugins.flutter.io/path_provider').setMockMethodCallHandler((MethodCall methodCall) async {
+      if (methodCall.method == 'getApplicationDocumentsDirectory') {
+        return testTempDir.path;
+      }
+      return null;
+    });
   });
+
+  tearDownAll(() {
+    try {
+      testTempDir.deleteSync(recursive: true);
+    } catch (_) {}
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
 
   // ═══════════════════════════════════════════════════════════════════════
   // 1 · VaultHomeScreen Tests
   // ═══════════════════════════════════════════════════════════════════════
   group('1 · VaultHomeScreen', () {
-    testWidgets('Renders 4 section cards, and lock button clears key and redirects', (WidgetTester tester) async {
+    testWidgets('Renders 5 section cards, and lock button clears key and redirects', (WidgetTester tester) async {
+      // Configure larger viewport size to ensure all cards are visible in GridView
+      tester.view.physicalSize = const Size(800, 1000);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
       await tester.pumpWidget(buildTestApp(const VaultHomeScreen()));
       await tester.pumpAndSettle();
 
       // Verify shared screen wrappers and theme constraints
       verifySharedConstraints(tester);
 
-      // Verify the 4 section cards render with correct titles
+      // Verify the 5 section cards render with correct titles
       expect(find.text('Photos'), findsOneWidget);
       expect(find.text('Notes'), findsOneWidget);
       expect(find.text('Audio'), findsOneWidget);
+      expect(find.text('Videos'), findsOneWidget);
       expect(find.text('Documents'), findsOneWidget);
 
       // Verify lock button clears key and navigates to PIN screen
@@ -563,7 +653,7 @@ void main() {
       expect(find.text('Lock Vault'), findsOneWidget);
 
       // Scroll to render lower settings options
-      await tester.drag(find.byType(ListView), const Offset(0, -300));
+      await tester.drag(find.byType(ListView), const Offset(0, -800));
       await tester.pumpAndSettle();
 
       expect(find.text('Intruder Logs'), findsOneWidget);
@@ -617,7 +707,7 @@ void main() {
       // Verify shared screen wrappers and theme constraints
       verifySharedConstraints(tester);
 
-      expect(find.text('No intrusion attempts detected'), findsOneWidget);
+      expect(find.text('No intrusion attempts recorded'), findsOneWidget);
 
       // 2. Verify the BreakInLog model renders the correct text format.
       //    Since sqflite static DB caching makes re-pump unreliable,
@@ -641,4 +731,14 @@ void main() {
       verifyNoPlaintextWritten(fakePlatform, ['Failed PIN code string']);
     });
   });
+}
+
+class MockPathProviderPlatform extends PathProviderPlatform {
+  final String path;
+  MockPathProviderPlatform(this.path);
+
+  @override
+  Future<String?> getApplicationDocumentsPath() async {
+    return path;
+  }
 }

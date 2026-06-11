@@ -15,6 +15,7 @@ class PhotoVaultScreen extends ConsumerStatefulWidget {
 
 class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   List<PhotoMeta> _photos = [];
+  Map<String, Uint8List?> _photoCache = {};
   bool _isLoading = true;
 
   @override
@@ -27,21 +28,130 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     setState(() => _isLoading = true);
     final photos = await ref.read(fileVaultServiceProvider).getAllPhotos();
     if (mounted) {
+      final cache = <String, Uint8List?>{};
+      for (final photo in photos) {
+        cache[photo.id] = await ref.read(fileVaultServiceProvider).getPhoto(photo.id);
+      }
       setState(() {
         _photos = photos;
+        _photoCache = cache;
         _isLoading = false;
       });
     }
   }
 
   Future<void> _importFromGallery() async {
-    final id = await ref.read(fileVaultServiceProvider).pickAndEncryptImage();
-    if (id != null) await _loadPhotos();
+    final ids = await ref.read(fileVaultServiceProvider).pickAndEncryptImage(context);
+    if (ids.isNotEmpty) await _loadPhotos();
   }
 
   Future<void> _captureFromCamera() async {
     final id = await ref.read(fileVaultServiceProvider).captureAndEncryptImage();
     if (id != null) await _loadPhotos();
+  }
+
+  Future<void> _showOptions(PhotoMeta photo) async {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Material(
+              color: Colors.transparent,
+              child: ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: VaultColors.accent.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.unarchive, color: VaultColors.accent),
+                ),
+                title: const Text('Restore to Gallery', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _restorePhoto(photo);
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            Material(
+              color: Colors.transparent,
+              child: ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: VaultColors.error.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.delete, color: VaultColors.error),
+                ),
+                title: const Text('Delete Permanently', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600, color: VaultColors.error)),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _deletePhoto(photo);
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _restorePhoto(PhotoMeta photo) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Restore to Gallery',
+          style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+        ),
+        content: const Text(
+          'Move this photo back to the device gallery? It will be removed from the vault.',
+          style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Restore', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      try {
+        await ref.read(fileVaultServiceProvider).restorePhotoToGallery(photo.id);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Photo restored to gallery successfully.')),
+          );
+          await _loadPhotos();
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to restore photo: $e')),
+          );
+        }
+      }
+    }
   }
 
   Future<void> _deletePhoto(PhotoMeta photo) async {
@@ -206,41 +316,20 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                   itemCount: _photos.length,
                   itemBuilder: (context, index) {
                     final photo = _photos[index];
-                    return FutureBuilder<Uint8List?>(
-                      future: ref.read(fileVaultServiceProvider).getPhoto(photo.id),
-                      builder: (context, snapshot) {
-                        if (snapshot.connectionState == ConnectionState.waiting) {
-                          return Container(
-                            color: Colors.white,
-                            child: const Center(
-                              child: SizedBox(
-                                width: 24,
-                                height: 24,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: VaultColors.accent),
-                              ),
-                            ),
-                          );
-                        }
-
-                        final bytes = snapshot.data;
-                        if (bytes == null) {
-                          return Container(
-                            color: Colors.white,
-                            child: const Icon(Icons.broken_image, color: VaultColors.textTertiary),
-                          );
-                        }
-
-                        return GestureDetector(
-                          onTap: () => _openViewer(index),
-                          onLongPress: () => _deletePhoto(photo),
-                          child: Image.memory(
-                            bytes,
-                            fit: BoxFit.cover,
-                            cacheWidth: 300,
-                            cacheHeight: 300,
-                          ),
-                        );
-                      },
+                    final bytes = _photoCache[photo.id];
+                    if (bytes == null) {
+                      return Container(
+                        color: Colors.white,
+                        child: const Icon(Icons.broken_image, color: VaultColors.textTertiary),
+                      );
+                    }
+                    return GestureDetector(
+                      onTap: () => _openViewer(index),
+                      onLongPress: () => _showOptions(photo),
+                      child: Image.memory(
+                        bytes,
+                        fit: BoxFit.cover,
+                      ),
                     );
                   },
                 ),

@@ -11,12 +11,15 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:mimic/vault/trigger/trigger_detector.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/security/auto_lock.dart';
 import 'package:mimic/vault/security/breakin_log.dart';
 import 'package:mimic/core/services/platform_service.dart';
+import 'package:mimic/vault/security/shake_wipe_service.dart';
+import 'package:mimic/vault/screens/vault_home_screen.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Fakes
@@ -475,7 +478,7 @@ void main() {
           // We can't just check length — the pin hash is also 44 chars.
           // Instead verify the key name is one of the expected keys.
           expect(
-            ['vault_salt', 'vault_pin_hash'].contains(entry.key),
+            ['vault_salt', 'vault_pin_hash', 'vault_setup_completed', 'vault_wiped'].contains(entry.key),
             isTrue,
             reason:
                 'Unexpected key "${entry.key}" found in secure storage — '
@@ -937,4 +940,99 @@ void main() {
           reason: 'clearKey must set isUnlocked to false (alias for lock)');
     });
   });
+
+  group('ShakeToHide Integration', () {
+    testWidgets(
+      'Shake gesture clears memory keys and redirects to game home without deleting data',
+      (WidgetTester tester) async {
+        final fakePlatform = FakePlatformService();
+        final fakeShakeService = FakeShakeWipeService();
+
+        // SharedPreferences needs to be seeded with shake_wipe_enabled
+        SharedPreferences.setMockInitialValues({'shake_wipe_enabled': true});
+
+        final scope = ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+            shakeWipeServiceProvider.overrideWithValue(fakeShakeService),
+          ],
+          child: MaterialApp(
+            initialRoute: '/vault-home',
+            routes: {
+              '/vault-home': (_) => const VaultHomeScreen(),
+              '/': (_) => const Scaffold(body: Text('GAME_HOME')),
+              '/vault-pin': (_) => const Scaffold(body: Text('PIN_SCREEN')),
+            },
+          ),
+        );
+
+        await tester.pumpWidget(scope);
+
+        // The vault initially starts locked and redirects to PIN screen
+        await tester.pumpAndSettle();
+        expect(find.text('PIN_SCREEN'), findsOneWidget);
+
+        // Find the container of the app to initialize the crypto key
+        final container = ProviderScope.containerOf(
+            tester.element(find.text('PIN_SCREEN')));
+        final crypto = container.read(vaultCryptoProvider);
+        await crypto.initialize('1234');
+
+        // Verify keys were generated in platform storage
+        final actualHash = await fakePlatform.secureRead('vault_pin_hash');
+        final actualSalt = await fakePlatform.secureRead('vault_salt');
+        expect(actualHash, isNotNull);
+        expect(actualSalt, isNotNull);
+
+        // Navigate back to vault-home now that it is unlocked
+        Navigator.of(tester.element(find.text('PIN_SCREEN'))).pushReplacementNamed('/vault-home');
+        await tester.pumpAndSettle();
+
+        expect(find.text('My Vault'), findsOneWidget);
+        expect(fakeShakeService.isListening, isTrue,
+            reason: 'Shake listener must be registered when settings are enabled');
+
+        // Simulate shake gesture
+        fakeShakeService.simulateShake();
+        await tester.pumpAndSettle();
+
+        // 1. Key must be locked
+        expect(crypto.isUnlocked, isFalse,
+            reason: 'Shake hide must lock/clear the in-memory keys');
+
+        // 2. Redirected to game home screen
+        expect(find.text('GAME_HOME'), findsOneWidget,
+            reason: 'Shake hide must navigate back to the game home screen');
+
+        // 3. Storage keys must be PRESERVED
+        expect(await fakePlatform.secureRead('vault_pin_hash'), equals(actualHash),
+            reason: 'Shake hide must NOT delete vault_pin_hash');
+        expect(await fakePlatform.secureRead('vault_salt'), equals(actualSalt),
+            reason: 'Shake hide must NOT delete vault_salt');
+        expect(await fakePlatform.secureRead('vault_setup_completed'), equals('true'),
+            reason: 'Shake hide must NOT delete vault_setup_completed');
+      },
+    );
+  });
+}
+
+class FakeShakeWipeService extends ShakeWipeService {
+  VoidCallback? callback;
+
+  @override
+  void startListening(VoidCallback onWipeTriggered) {
+    callback = onWipeTriggered;
+  }
+
+  @override
+  void stopListening() {
+    callback = null;
+  }
+
+  @override
+  bool get isListening => callback != null;
+
+  void simulateShake() {
+    callback?.call();
+  }
 }

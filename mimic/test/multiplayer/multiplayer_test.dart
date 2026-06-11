@@ -16,6 +16,7 @@ import 'package:mimic/game/state/game_state.dart';
 import 'package:mimic/multiplayer/network/network_service.dart';
 import 'package:mimic/multiplayer/network/disconnect_handler.dart';
 import 'package:mimic/multiplayer/state/game_state_sync_notifier.dart';
+import 'package:mimic/core/providers/provider_registration.dart';
 import 'package:mimic/multiplayer/screens/network_word_reveal_screen.dart';
 import 'package:mimic/multiplayer/screens/network_voting_screen.dart';
 import 'package:mimic/multiplayer/screens/rejoin_screen.dart';

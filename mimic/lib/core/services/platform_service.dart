@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 
 abstract class PlatformService {
   Future<String?> secureRead(String key);
@@ -17,7 +19,16 @@ abstract class PlatformService {
 }
 
 class AndroidPlatformService implements PlatformService {
-  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage(
+    aOptions: AndroidOptions(encryptedSharedPreferences: true),
+  );
+
+  Future<String> _resolveVaultFilePath(String name) async {
+    final base = await getApplicationDocumentsDirectory();
+    final dir = Directory(p.join(base.path, 'vault_files'));
+    if (!await dir.exists()) await dir.create(recursive: true);
+    return p.join(dir.path, name);
+  }
 
   @override
   bool isWeb() => false;
@@ -39,13 +50,15 @@ class AndroidPlatformService implements PlatformService {
 
   @override
   Future<void> saveEncryptedFile(String path, Uint8List data) async {
-    final file = File(path);
+    final resolved = await _resolveVaultFilePath(path);
+    final file = File(resolved);
     await file.writeAsBytes(data);
   }
 
   @override
   Future<Uint8List?> readEncryptedFile(String path) async {
-    final file = File(path);
+    final resolved = await _resolveVaultFilePath(path);
+    final file = File(resolved);
     if (await file.exists()) {
       return await file.readAsBytes();
     }
@@ -54,7 +67,8 @@ class AndroidPlatformService implements PlatformService {
 
   @override
   Future<void> deleteFile(String path) async {
-    final file = File(path);
+    final resolved = await _resolveVaultFilePath(path);
+    final file = File(resolved);
     if (await file.exists()) {
       await file.delete();
     }

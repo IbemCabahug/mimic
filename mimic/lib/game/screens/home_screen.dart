@@ -1,6 +1,5 @@
 // lib/game/screens/home_screen.dart
 import 'dart:math' as math;
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -8,10 +7,6 @@ import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/core/animations/horror_animations.dart';
 import 'package:mimic/game/game.dart';
 import 'package:mimic/multiplayer/network/network_service.dart';
-import 'package:mimic/vault/services/backup_reminder_service.dart';
-import 'package:mimic/vault/security/shake_wipe_service.dart';
-import 'package:mimic/vault/security/pin_wipe_service.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -79,30 +74,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStat
         phaseOffset: math.pi * 1.5,
       ),
     ];
-
-    Future.delayed(const Duration(seconds: 1), () {
-      if (mounted) {
-        BackupReminderService.checkAndShowReminder(context);
-      }
-    });
-
-    _setupShakeWipeListener();
-  }
-
-  Future<void> _setupShakeWipeListener() async {
-    if (kIsWeb) return;
-    final prefs = await SharedPreferences.getInstance();
-    final shakeEnabled = prefs.getBool('shake_wipe_enabled') ?? false;
-    if (shakeEnabled) {
-      ref.read(shakeWipeServiceProvider).startListening(() async {
-        await ref.read(pinWipeServiceProvider).wipePin();
-      });
-    }
   }
 
   @override
   void dispose() {
-    ref.read(shakeWipeServiceProvider).stopListening();
     _fogController.dispose();
     _pulseController.dispose();
     super.dispose();

@@ -40,9 +40,9 @@ final disconnectHandlerProvider = Provider.autoDispose<DisconnectHandler>((ref) 
 /// Provider for the [GameStateSyncNotifier] state.
 /// Depends on [networkServiceProvider] and the existing [gameStateProvider].
 /// Auto-disposes and cleans up inner network stream subscriptions when disposed.
-final gameStateSyncProvider = StateNotifierProvider.autoDispose<GameStateSyncNotifier, GameSyncState>((ref) {
-  final networkService = ref.watch(networkServiceProvider);
-  final gameStateNotifier = ref.watch(gameStateProvider.notifier);
+final gameStateSyncProvider = StateNotifierProvider<GameStateSyncNotifier, GameSyncState>((ref) {
+  final networkService = ref.read(networkServiceProvider);
+  final gameStateNotifier = ref.read(gameStateProvider.notifier);
   return GameStateSyncNotifier(networkService, gameStateNotifier);
 });
 

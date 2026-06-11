@@ -1,12 +1,18 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/theme/app_theme.dart';
 import '../crypto/vault_crypto.dart';
 import '../services/file_vault_service.dart';
 import '../services/notes_service.dart';
 import '../services/audio_vault_service.dart';
+import '../services/video_vault_service.dart';
 import '../services/backup_reminder_service.dart';
 import '../widgets/vault_scaffold.dart';
+import '../security/shake_wipe_service.dart';
+import '../widgets/blood_splatter_overlay.dart';
 
 class VaultHomeScreen extends ConsumerStatefulWidget {
   const VaultHomeScreen({super.key});
@@ -18,28 +24,68 @@ class VaultHomeScreen extends ConsumerStatefulWidget {
 class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
     with SingleTickerProviderStateMixin {
   late AnimationController _fadeController;
+  late final ShakeWipeService _shakeWipeService;
+  Timer? _reminderTimer;
   int _photoCount = 0;
   int _noteCount = 0;
   int _audioCount = 0;
+  int _videoCount = 0;
+  bool _isHiding = false;
 
   @override
   void initState() {
     super.initState();
+    _shakeWipeService = ref.read(shakeWipeServiceProvider);
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 600),
       vsync: this,
     )..forward();
     _loadCounts();
+    _setupShakeListener();
 
-    Future.delayed(const Duration(seconds: 1), () {
+    _reminderTimer = Timer(const Duration(seconds: 1), () {
       if (mounted) {
         BackupReminderService.checkAndShowReminder(context);
       }
     });
   }
 
+  Future<void> _setupShakeListener() async {
+    if (kIsWeb) return;
+    final prefs = await SharedPreferences.getInstance();
+    final shakeEnabled = prefs.getBool('shake_wipe_enabled') ?? false;
+    if (shakeEnabled && mounted) {
+      _shakeWipeService.startListening(() {
+        _handleShakeToHide();
+      });
+    }
+  }
+
+  void _handleShakeToHide() {
+    if (!mounted) return;
+    setState(() {
+      _isHiding = true;
+    });
+
+    // Capture the root overlay state BEFORE pushNamedAndRemoveUntil disposes this screen
+    final overlay = Navigator.of(context, rootNavigator: true).overlay;
+
+    // Lock the vault in memory
+    ref.read(vaultCryptoProvider).clearKey();
+
+    // Navigate to the game home on the root navigator
+    Navigator.of(context, rootNavigator: true).pushNamedAndRemoveUntil('/', (r) => false);
+
+    // Trigger the blood-splatter cue on the root overlay
+    if (overlay != null) {
+      showBloodSplatter(overlay);
+    }
+  }
+
   @override
   void dispose() {
+    _reminderTimer?.cancel();
+    _shakeWipeService.stopListening();
     _fadeController.dispose();
     super.dispose();
   }
@@ -49,11 +95,13 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
       final photos = await ref.read(fileVaultServiceProvider).getAllPhotos();
       final notes = await ref.read(notesServiceProvider).getAllNotes();
       final audio = await ref.read(audioVaultServiceProvider).getAllAudio();
+      final videos = await ref.read(videoVaultServiceProvider).getAllVideos();
       if (mounted) {
         setState(() {
           _photoCount = photos.length;
           _noteCount = notes.length;
           _audioCount = audio.length;
+          _videoCount = videos.length;
         });
       }
     } catch (_) {
@@ -64,7 +112,7 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
   @override
   Widget build(BuildContext context) {
     final crypto = ref.watch(vaultCryptoProvider);
-    if (!crypto.isUnlocked) {
+    if (!crypto.isUnlocked && !_isHiding) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         Navigator.of(context).pushReplacementNamed('/vault-pin');
       });
@@ -172,6 +220,16 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
                           count: _audioCount,
                           onTap: () async {
                             await Navigator.of(context).pushNamed('/vault-audio');
+                            _loadCounts();
+                          },
+                        ),
+                        _VaultSectionCard(
+                          title: 'Videos',
+                          icon: Icons.video_library_outlined,
+                          color: const Color(0xFF8E24AA),
+                          count: _videoCount,
+                          onTap: () async {
+                            await Navigator.of(context).pushNamed('/vault-videos');
                             _loadCounts();
                           },
                         ),
