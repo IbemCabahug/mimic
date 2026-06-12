@@ -6,6 +6,7 @@
 
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
@@ -76,6 +77,7 @@ class _NetworkVotingScreenState extends ConsumerState<NetworkVotingScreen>
   @override
   void initState() {
     super.initState();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
 
     // Pulsing animation for waiting states
     _pulseController = AnimationController(
@@ -123,6 +125,7 @@ class _NetworkVotingScreenState extends ConsumerState<NetworkVotingScreen>
 
   @override
   void dispose() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge, overlays: SystemUiOverlay.values);
     _messageSub?.cancel();
     _pulseController.dispose();
     _revealScaleController.dispose();

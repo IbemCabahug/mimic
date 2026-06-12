@@ -11,7 +11,10 @@ import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
 import '../security/duress_service.dart';
 import '../security/pin_wipe_service.dart';
+import '../security/vault_conceal_service.dart';
 import 'wiped_vault_screen.dart';
+import 'package:mimic/core/providers/provider_registration.dart'
+    show vaultConcealServiceProvider;
 
 class PinScreen extends ConsumerStatefulWidget {
   const PinScreen({super.key});
@@ -23,6 +26,7 @@ class PinScreen extends ConsumerStatefulWidget {
 class _PinScreenState extends ConsumerState<PinScreen> {
   final TextEditingController _pinController = TextEditingController();
   late final VaultCrypto _crypto;
+  late final VaultConcealService _concealService;
   final IntruderService _intruderService = IntruderService();
   String? _error;
   bool _isLoading = false;
@@ -35,6 +39,10 @@ class _PinScreenState extends ConsumerState<PinScreen> {
   void initState() {
     super.initState();
     _crypto = ref.read(vaultCryptoProvider);
+    // Pause the global conceal shake listener while the PIN screen is active
+    // to avoid toggling conceal state during PIN entry.
+    _concealService = ref.read(vaultConcealServiceProvider);
+    _concealService.pauseShakeListening();
     _checkCreateMode();
     _checkIfWiped();
     _loadWrongAttempts();
@@ -122,9 +130,20 @@ class _PinScreenState extends ConsumerState<PinScreen> {
               _error = null;
               _wrongAttempts = 0;
             });
+            navigator.pushReplacementNamed('/admin-panel');
           }
-          navigator.pushReplacementNamed('/admin-panel');
           return;
+        }
+
+        // Conceal check runs AFTER duress so the decoy PIN still opens the
+        // admin panel while concealed. Real PIN is denied silently.
+        if (!_isCreateMode) {
+          final concealed = await _concealService.isConcealed();
+          if (concealed) {
+            _pinController.clear();
+            if (mounted) setState(() => _error = 'Invalid PIN');
+            return;
+          }
         }
 
         await _crypto.initialize(pin);
@@ -188,6 +207,8 @@ class _PinScreenState extends ConsumerState<PinScreen> {
 
   @override
   void dispose() {
+    // Resume the global conceal shake listener when leaving the PIN screen.
+    _concealService.resumeShakeListening();
     _pinController.dispose();
     super.dispose();
   }

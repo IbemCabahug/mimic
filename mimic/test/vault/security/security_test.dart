@@ -20,6 +20,9 @@ import 'package:mimic/vault/security/breakin_log.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/security/shake_wipe_service.dart';
 import 'package:mimic/vault/screens/vault_home_screen.dart';
+import 'package:mimic/vault/screens/pin_screen.dart';
+import 'package:mimic/vault/security/duress_service.dart';
+import 'package:mimic/vault/security/vault_conceal_service.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Fakes
@@ -941,78 +944,117 @@ void main() {
     });
   });
 
-  group('ShakeToHide Integration', () {
+  group('VaultConcealService & PinScreen Integration', () {
     testWidgets(
-      'Shake gesture clears memory keys and redirects to game home without deleting data',
+      'Concealed vault denies access silently with Invalid PIN and without initializing crypto',
       (WidgetTester tester) async {
         final fakePlatform = FakePlatformService();
         final fakeShakeService = FakeShakeWipeService();
-
-        // SharedPreferences needs to be seeded with shake_wipe_enabled
         SharedPreferences.setMockInitialValues({'shake_wipe_enabled': true});
 
-        final scope = ProviderScope(
-          overrides: [
-            platformServiceProvider.overrideWithValue(fakePlatform),
-            shakeWipeServiceProvider.overrideWithValue(fakeShakeService),
-          ],
-          child: MaterialApp(
-            initialRoute: '/vault-home',
-            routes: {
-              '/vault-home': (_) => const VaultHomeScreen(),
-              '/': (_) => const Scaffold(body: Text('GAME_HOME')),
-              '/vault-pin': (_) => const Scaffold(body: Text('PIN_SCREEN')),
-            },
+        // Seed an already-set-up, concealed vault. Seed the PIN hash/salt DIRECTLY so
+        // PinScreen is in UNLOCK mode; do NOT call crypto.initialize (would unlock crypto).
+        await fakePlatform.secureWrite('vault_pin_hash', 'dummy_hash');
+        await fakePlatform.secureWrite('vault_salt', 'dummy_salt');
+        await fakePlatform.secureWrite('vault_setup_completed', 'true');
+        await fakePlatform.secureWrite('vault_concealed', 'true');
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              platformServiceProvider.overrideWithValue(fakePlatform),
+              shakeWipeServiceProvider.overrideWithValue(fakeShakeService),
+            ],
+            child: MaterialApp(
+              initialRoute: '/vault-pin',
+              routes: {
+                '/': (_) => const Scaffold(body: Text('GAME_HOME')),
+                '/vault-home': (_) => const Scaffold(body: Text('VAULT_HOME')),
+                '/vault-pin': (_) => const PinScreen(),
+              },
+            ),
           ),
         );
-
-        await tester.pumpWidget(scope);
-
-        // The vault initially starts locked and redirects to PIN screen
         await tester.pumpAndSettle();
-        expect(find.text('PIN_SCREEN'), findsOneWidget);
 
-        // Find the container of the app to initialize the crypto key
+        expect(find.text('Enter Vault PIN'), findsOneWidget);
+
         final container = ProviderScope.containerOf(
-            tester.element(find.text('PIN_SCREEN')));
+          tester.element(find.text('Enter Vault PIN')),
+        );
         final crypto = container.read(vaultCryptoProvider);
-        await crypto.initialize('1234');
 
-        // Verify keys were generated in platform storage
-        final actualHash = await fakePlatform.secureRead('vault_pin_hash');
-        final actualSalt = await fakePlatform.secureRead('vault_salt');
-        expect(actualHash, isNotNull);
-        expect(actualSalt, isNotNull);
-
-        // Navigate back to vault-home now that it is unlocked
-        Navigator.of(tester.element(find.text('PIN_SCREEN'))).pushReplacementNamed('/vault-home');
+        await tester.enterText(find.byType(TextField), '1234');
+        await tester.pump();
+        await tester.tap(find.text('Unlock'));
         await tester.pumpAndSettle();
 
-        expect(find.text('My Vault'), findsOneWidget);
-        expect(fakeShakeService.isListening, isTrue,
-            reason: 'Shake listener must be registered when settings are enabled');
-
-        // Simulate shake gesture
-        fakeShakeService.simulateShake();
-        await tester.pumpAndSettle();
-
-        // 1. Key must be locked
+        expect(find.text('Invalid PIN'), findsOneWidget,
+            reason: 'Concealed vault must reject the real PIN with Invalid PIN');
         expect(crypto.isUnlocked, isFalse,
-            reason: 'Shake hide must lock/clear the in-memory keys');
-
-        // 2. Redirected to game home screen
-        expect(find.text('GAME_HOME'), findsOneWidget,
-            reason: 'Shake hide must navigate back to the game home screen');
-
-        // 3. Storage keys must be PRESERVED
-        expect(await fakePlatform.secureRead('vault_pin_hash'), equals(actualHash),
-            reason: 'Shake hide must NOT delete vault_pin_hash');
-        expect(await fakePlatform.secureRead('vault_salt'), equals(actualSalt),
-            reason: 'Shake hide must NOT delete vault_salt');
-        expect(await fakePlatform.secureRead('vault_setup_completed'), equals('true'),
-            reason: 'Shake hide must NOT delete vault_setup_completed');
+            reason: 'Concealed vault must not initialize crypto');
+        expect(find.text('VAULT_HOME'), findsNothing,
+            reason: 'Concealed vault must not navigate to vault home');
       },
     );
+
+    testWidgets(
+      'Concealed vault still opens the decoy admin panel for the duress PIN',
+      (WidgetTester tester) async {
+        final fakePlatform = FakePlatformService();
+        final fakeShakeService = FakeShakeWipeService();
+        final fakeDuress = FakeDuressService({'0000': true});
+
+        SharedPreferences.setMockInitialValues({'shake_wipe_enabled': true});
+        await fakePlatform.secureWrite('vault_pin_hash', 'dummy_hash');
+        await fakePlatform.secureWrite('vault_salt', 'dummy_salt');
+        await fakePlatform.secureWrite('vault_setup_completed', 'true');
+        await fakePlatform.secureWrite('vault_concealed', 'true');
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              platformServiceProvider.overrideWithValue(fakePlatform),
+              shakeWipeServiceProvider.overrideWithValue(fakeShakeService),
+              duressServiceProvider.overrideWithValue(fakeDuress),
+            ],
+            child: MaterialApp(
+              initialRoute: '/vault-pin',
+              routes: {
+                '/': (_) => const Scaffold(body: Text('GAME_HOME')),
+                '/vault-home': (_) => const Scaffold(body: Text('VAULT_HOME')),
+                '/admin-panel': (_) => const Scaffold(body: Text('ADMIN_PANEL')),
+                '/vault-pin': (_) => const PinScreen(),
+              },
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.text('Enter Vault PIN'), findsOneWidget);
+
+        await tester.enterText(find.byType(TextField), '0000');
+        await tester.pump();
+        await tester.tap(find.text('Unlock'));
+        await tester.pumpAndSettle();
+
+        expect(find.text('ADMIN_PANEL'), findsOneWidget,
+            reason: 'Duress PIN must open the decoy admin panel even while concealed');
+        expect(find.text('Invalid PIN'), findsNothing);
+      },
+    );
+
+    test('VaultConcealService.setConcealed persists and isConcealed reads from storage', () async {
+      final fakePlatform = FakePlatformService();
+      final service = VaultConcealService(null, fakePlatform);
+
+      await service.setConcealed(true);
+      expect(await fakePlatform.secureRead('vault_concealed'), 'true');
+      expect(await service.isConcealed(), isTrue);
+
+      await service.setConcealed(false);
+      expect(await fakePlatform.secureRead('vault_concealed'), 'false');
+      expect(await service.isConcealed(), isFalse);
+    });
   });
 }
 
@@ -1035,4 +1077,30 @@ class FakeShakeWipeService extends ShakeWipeService {
   void simulateShake() {
     callback?.call();
   }
+}
+
+/// Fake DuressService that returns pre-configured answers without touching storage.
+class FakeDuressService extends DuressService {
+  final Map<String, bool> _fakeResults;
+
+  FakeDuressService(this._fakeResults)
+      : super(const _NoOpPlatformService());
+
+  @override
+  Future<bool> isFakePin(String pin) async => _fakeResults[pin] ?? false;
+
+  @override
+  Future<bool> isFakePinEnabled() async => _fakeResults.isNotEmpty;
+}
+
+/// Minimal no-op PlatformService used by FakeDuressService (never called).
+class _NoOpPlatformService implements PlatformService {
+  const _NoOpPlatformService();
+  @override bool isWeb() => false;
+  @override Future<String?> secureRead(String key) async => null;
+  @override Future<void> secureWrite(String key, String value) async {}
+  @override Future<void> secureDelete(String key) async {}
+  @override Future<void> saveEncryptedFile(String path, Uint8List data) async {}
+  @override Future<Uint8List?> readEncryptedFile(String path) async => null;
+  @override Future<void> deleteFile(String path) async {}
 }

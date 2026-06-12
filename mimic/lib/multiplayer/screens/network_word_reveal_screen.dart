@@ -6,6 +6,7 @@
 
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
@@ -45,6 +46,7 @@ class _NetworkWordRevealScreenState
   @override
   void initState() {
     super.initState();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     WidgetsBinding.instance.addObserver(this);
 
     // Pulsing opacity: 0.3 → 1.0 → 0.3 (smooth sine-like curve)
@@ -64,6 +66,7 @@ class _NetworkWordRevealScreenState
 
   @override
   void dispose() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge, overlays: SystemUiOverlay.values);
     WidgetsBinding.instance.removeObserver(this);
     _messageSub?.cancel();
     _pulseController.dispose();

@@ -2,6 +2,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
@@ -43,6 +44,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
   @override
   void initState() {
     super.initState();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _particlesController = AnimationController(
       duration: const Duration(seconds: 3),
       vsync: this,
@@ -77,6 +79,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
 
   @override
   void dispose() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge, overlays: SystemUiOverlay.values);
     _messageSub?.cancel();
     _pulseController.dispose();
     _particlesController.dispose();

@@ -1,5 +1,6 @@
 // lib/game/screens/voting_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
@@ -24,10 +25,17 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
   @override
   void initState() {
     super.initState();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     final gameState = ref.read(gameStateProvider);
     for (final player in gameState.players) {
       _voteCounts[player.id] = 0;
     }
+  }
+
+  @override
+  void dispose() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge, overlays: SystemUiOverlay.values);
+    super.dispose();
   }
 
   void _submitVote(int targetIndex, String targetPlayerId) {

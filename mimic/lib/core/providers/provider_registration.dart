@@ -9,6 +9,8 @@ import 'package:mimic/multiplayer/network/network_service.dart';
 import 'package:mimic/multiplayer/network/disconnect_handler.dart';
 import 'package:mimic/multiplayer/state/game_state_sync_notifier.dart';
 import 'package:mimic/game/state/game_state.dart';
+import 'package:mimic/core/services/platform_service.dart';
+import 'package:mimic/vault/security/vault_conceal_service.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Multiplayer Providers
@@ -44,6 +46,17 @@ final gameStateSyncProvider = StateNotifierProvider<GameStateSyncNotifier, GameS
   final networkService = ref.read(networkServiceProvider);
   final gameStateNotifier = ref.read(gameStateProvider.notifier);
   return GameStateSyncNotifier(networkService, gameStateNotifier);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Vault Conceal Service
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Provider for the global [VaultConcealService].
+/// Singleton — persists for the lifetime of the app.
+final vaultConcealServiceProvider = Provider<VaultConcealService>((ref) {
+  final platformService = ref.read(platformServiceProvider);
+  return VaultConcealService(ref, platformService);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

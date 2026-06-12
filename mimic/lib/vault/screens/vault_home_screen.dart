@@ -74,7 +74,10 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
     ref.read(vaultCryptoProvider).clearKey();
 
     // Navigate to the game home on the root navigator
-    Navigator.of(context, rootNavigator: true).pushNamedAndRemoveUntil('/', (r) => false);
+    Navigator.of(
+      context,
+      rootNavigator: true,
+    ).pushNamedAndRemoveUntil('/', (r) => false);
 
     // Trigger the blood-splatter cue on the root overlay
     if (overlay != null) {
@@ -116,9 +119,7 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
       WidgetsBinding.instance.addPostFrameCallback((_) {
         Navigator.of(context).pushReplacementNamed('/vault-pin');
       });
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     return VaultScaffold(
@@ -167,11 +168,12 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
                     padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
                     child: Text(
                       'My Vault',
-                      style: Theme.of(context).textTheme.headlineLarge?.copyWith(
-                        color: VaultColors.textPrimary,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 32,
-                      ),
+                      style: Theme.of(context).textTheme.headlineLarge
+                          ?.copyWith(
+                            color: VaultColors.textPrimary,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 32,
+                          ),
                     ),
                   ),
                   Padding(
@@ -199,7 +201,9 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
                           color: const Color(0xFF534AB7),
                           count: _photoCount,
                           onTap: () async {
-                            await Navigator.of(context).pushNamed('/vault-photos');
+                            await Navigator.of(
+                              context,
+                            ).pushNamed('/vault-photos');
                             _loadCounts();
                           },
                         ),
@@ -209,7 +213,9 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
                           color: const Color(0xFF1D9E75),
                           count: _noteCount,
                           onTap: () async {
-                            await Navigator.of(context).pushNamed('/vault-notes');
+                            await Navigator.of(
+                              context,
+                            ).pushNamed('/vault-notes');
                             _loadCounts();
                           },
                         ),
@@ -219,7 +225,9 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
                           color: const Color(0xFFD85A30),
                           count: _audioCount,
                           onTap: () async {
-                            await Navigator.of(context).pushNamed('/vault-audio');
+                            await Navigator.of(
+                              context,
+                            ).pushNamed('/vault-audio');
                             _loadCounts();
                           },
                         ),
@@ -229,7 +237,9 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
                           color: const Color(0xFF8E24AA),
                           count: _videoCount,
                           onTap: () async {
-                            await Navigator.of(context).pushNamed('/vault-videos');
+                            await Navigator.of(
+                              context,
+                            ).pushNamed('/vault-videos');
                             _loadCounts();
                           },
                         ),
@@ -239,7 +249,9 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
                           color: const Color(0xFF378ADD),
                           count: 0,
                           onTap: () async {
-                            await Navigator.of(context).pushNamed('/vault-documents');
+                            await Navigator.of(
+                              context,
+                            ).pushNamed('/vault-documents');
                             _loadCounts();
                           },
                         ),
@@ -285,11 +297,7 @@ class _VaultSectionCard extends StatelessWidget {
               color: color.withValues(alpha: 0.1),
               shape: BoxShape.circle,
             ),
-            child: Icon(
-              icon,
-              size: 28,
-              color: color,
-            ),
+            child: Icon(icon, size: 28, color: color),
           ),
           const SizedBox(height: 14),
           Text(

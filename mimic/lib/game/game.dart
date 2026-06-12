@@ -4,6 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/core/router/app_router.dart' as router;
 import 'package:mimic/multiplayer/network/disconnect_handler.dart';
+import 'package:mimic/core/providers/provider_registration.dart'
+    show vaultConcealServiceProvider, disconnectHandlerProvider;
+import 'package:mimic/vault/security/vault_conceal_service.dart';
 
 
 
@@ -44,29 +47,63 @@ class MimicGame extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ProviderScope(
-      child: Consumer(
-        builder: (context, ref, _) {
-          // Listen to disconnectHandlerProvider globally to instantiate it and route disconnect events
-          ref.listen<DisconnectHandler>(disconnectHandlerProvider, (previous, next) {
-            // The disconnect handler is now initialized and listening.
-            // Any routing of DisconnectEvents is handled globally via this controller.
-          });
-
-          return MaterialApp(
-            title: 'Mimic Game',
-            navigatorKey: router.navigatorKey,
-            debugShowCheckedModeBanner: false,
-            theme: HorrorTheme.themeData,
-            themeMode: ThemeMode.dark, // Keep theme consistently in dark horror mode
-            initialRoute: homeRoute,
-            onGenerateRoute: router.AppRouter.onGenerateRoute,
-            navigatorObservers: [
-              ref.watch(router.networkNavigatorObserverProvider),
-            ],
-          );
-        },
-      ),
+      child: _VaultConcealWrapper(),
     );
   }
 }
 
+/// Global wrapper that initializes VaultConcealService and starts the shake
+/// listener at app startup. Sits above MaterialApp so the listener is active
+/// on every screen. Uses [router.navigatorKey] for overlay + navigation.
+class _VaultConcealWrapper extends ConsumerStatefulWidget {
+  @override
+  ConsumerState<_VaultConcealWrapper> createState() =>
+      _VaultConcealWrapperState();
+}
+
+class _VaultConcealWrapperState extends ConsumerState<_VaultConcealWrapper> {
+  late final VaultConcealService _concealService;
+
+  @override
+  void initState() {
+    super.initState();
+    // Initialize and start the global conceal shake listener.
+    _concealService = ref.read(vaultConcealServiceProvider);
+    _concealService.init().then((_) {
+      _concealService.start();
+    });
+  }
+
+  @override
+  void dispose() {
+    // Stop the accelerometer subscription when the app root is torn down.
+    _concealService.stop();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Consumer(
+      builder: (context, ref, _) {
+        // Listen to disconnectHandlerProvider globally to instantiate it and route disconnect events
+        ref.listen<DisconnectHandler>(disconnectHandlerProvider, (previous, next) {
+          // The disconnect handler is now initialized and listening.
+          // Any routing of DisconnectEvents is handled globally via this controller.
+        });
+
+        return MaterialApp(
+          title: 'Mimic Game',
+          navigatorKey: router.navigatorKey,
+          debugShowCheckedModeBanner: false,
+          theme: HorrorTheme.themeData,
+          themeMode: ThemeMode.dark, // Keep theme consistently in dark horror mode
+          initialRoute: MimicGame.homeRoute,
+          onGenerateRoute: router.AppRouter.onGenerateRoute,
+          navigatorObservers: [
+            ref.watch(router.networkNavigatorObserverProvider),
+          ],
+        );
+      },
+    );
+  }
+}

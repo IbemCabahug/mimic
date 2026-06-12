@@ -1,6 +1,7 @@
 // lib/game/screens/word_reveal_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
@@ -24,7 +25,14 @@ class _WordRevealScreenState extends ConsumerState<WordRevealScreen> {
   Timer? _timer;
 
   @override
+  void initState() {
+    super.initState();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  @override
   void dispose() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge, overlays: SystemUiOverlay.values);
     _timer?.cancel();
     super.dispose();
   }
@@ -325,6 +333,7 @@ class _DiscussionScreenState extends ConsumerState<DiscussionScreen> {
   @override
   void initState() {
     super.initState();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_secondsRemaining > 0) {
         setState(() {
@@ -353,6 +362,7 @@ class _DiscussionScreenState extends ConsumerState<DiscussionScreen> {
 
   @override
   void dispose() {
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge, overlays: SystemUiOverlay.values);
     _timer.cancel();
     super.dispose();
   }
