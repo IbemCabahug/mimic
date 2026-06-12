@@ -14,8 +14,10 @@ import '../../core/theme/app_theme.dart';
 import '../../core/providers/biometric_providers.dart';
 import '../../core/services/biometric_service.dart';
 import '../../core/services/biometric_unlock_store.dart';
+import '../../core/providers/provider_registration.dart' show vaultConcealServiceProvider;
 import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
+import '../security/vault_conceal_service.dart';
 import '../widgets/vault_scaffold.dart';
 
 class VaultSettingsScreen extends ConsumerStatefulWidget {
@@ -29,6 +31,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   bool _hasRecoveryBlob = false;
   bool _isLoadingBiometric = false;
   bool _shakeEnabled = false;
+  ShakeSensitivity _shakeSensitivity = ShakeSensitivity.medium;
 
   @override
   void initState() {
@@ -40,7 +43,12 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   Future<void> _loadShakePref() async {
     final prefs = await SharedPreferences.getInstance();
     if (mounted) {
-      setState(() => _shakeEnabled = prefs.getBool('shake_wipe_enabled') ?? false);
+      setState(() {
+        _shakeEnabled = prefs.getBool('shake_wipe_enabled') ?? false;
+        _shakeSensitivity = ShakeSensitivity.fromName(
+          prefs.getString('shake_sensitivity'),
+        );
+      });
     }
   }
 
@@ -79,6 +87,14 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     await prefs.setBool('shake_wipe_enabled', value);
     if (mounted) {
       setState(() => _shakeEnabled = value);
+    }
+  }
+
+  Future<void> _onSensitivityChanged(ShakeSensitivity sensitivity) async {
+    final concealService = ref.read(vaultConcealServiceProvider);
+    await concealService.setSensitivity(sensitivity);
+    if (mounted) {
+      setState(() => _shakeSensitivity = sensitivity);
     }
   }
 
@@ -395,6 +411,62 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
               value: _shakeEnabled,
               onChanged: (value) => _onShakeToggle(value),
               activeThumbColor: VaultColors.accent,
+            ),
+          ),
+          // Shake Sensitivity selector — only active when shake is enabled
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Shake Sensitivity',
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: VaultColors.textPrimary,
+                    fontFamily: 'Inter',
+                  ),
+                ),
+                const SizedBox(height: 6),
+                SegmentedButton<ShakeSensitivity>(
+                  segments: const [
+                    ButtonSegment(
+                      value: ShakeSensitivity.low,
+                      label: Text('Low'),
+                    ),
+                    ButtonSegment(
+                      value: ShakeSensitivity.medium,
+                      label: Text('Med'),
+                    ),
+                    ButtonSegment(
+                      value: ShakeSensitivity.high,
+                      label: Text('High'),
+                    ),
+                  ],
+                  selected: {_shakeSensitivity},
+                  onSelectionChanged: _shakeEnabled
+                      ? (selected) => _onSensitivityChanged(selected.first)
+                      : null,
+                  style: ButtonStyle(
+                    textStyle: WidgetStatePropertyAll(
+                      const TextStyle(fontSize: 13, fontFamily: 'Inter', fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Higher = easier to trigger; Lower = fewer accidental hides.',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: _shakeEnabled
+                        ? VaultColors.textTertiary
+                        : VaultColors.textTertiary.withValues(alpha: 0.5),
+                    fontFamily: 'Inter',
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ],
             ),
           ),
           _buildSettingsTile(

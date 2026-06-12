@@ -4,10 +4,9 @@
 // 1. VaultHomeScreen
 // 2. PhotoVaultScreen
 // 3. NotesScreen
-// 4. AudioVaultScreen
-// 5. DocumentVaultScreen
-// 6. VaultSettingsScreen
-// 7. BreakInLogScreen
+// 4. DocumentVaultScreen
+// 5. VaultSettingsScreen
+// 6. BreakInLogScreen
 //
 // Also verifies shared wrapper constraints:
 // - VaultScaffold is used as the wrapper
@@ -29,7 +28,6 @@ import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/services/notes_service.dart';
 import 'package:mimic/vault/services/file_vault_service.dart';
-import 'package:mimic/vault/services/audio_vault_service.dart';
 import 'package:mimic/vault/widgets/vault_scaffold.dart';
 import 'package:mimic/vault/security/auto_lock.dart';
 import 'package:mimic/vault/security/breakin_log.dart';
@@ -38,12 +36,12 @@ import 'package:mimic/vault/security/breakin_log.dart';
 import 'package:mimic/vault/screens/vault_home_screen.dart';
 import 'package:mimic/vault/screens/photo_vault_screen.dart';
 import 'package:mimic/vault/screens/notes_screen.dart';
-import 'package:mimic/vault/screens/audio_vault_screen.dart';
 import 'package:mimic/vault/screens/document_vault_screen.dart';
 import 'package:mimic/vault/screens/vault_settings_screen.dart';
 import 'package:mimic/vault/screens/breakin_log_screen.dart';
 import 'package:mimic/vault/services/video_vault_service.dart';
 import 'package:mimic/vault/screens/video_vault_screen.dart';
+import 'package:mimic/vault/services/document_vault_service.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Fakes & In-Memory Mocks
@@ -182,45 +180,6 @@ class FakeFileVaultService extends FileVaultService {
   }
 }
 
-/// Fake implementation of AudioVaultService that stores audio in memory.
-class FakeAudioVaultService extends AudioVaultService {
-  final List<AudioMeta> recordings = [];
-  final Map<String, Uint8List> audioData = {};
-
-  FakeAudioVaultService(super.platformService, super.crypto);
-
-  @override
-  Future<String> saveAudio(Uint8List bytes, String mimeType, {String? title, int? durationMs}) async {
-    final id = 'audio_${recordings.length + 1}';
-    final meta = AudioMeta(
-      id: id,
-      title: title ?? 'Recording ${recordings.length + 1}',
-      durationMs: durationMs ?? 3000,
-      mimeType: mimeType,
-      size: bytes.length,
-      createdAt: DateTime.now(),
-    );
-    recordings.add(meta);
-    audioData[id] = bytes;
-    return id;
-  }
-
-  @override
-  Future<Uint8List?> getAudio(String id) async {
-    return audioData[id];
-  }
-
-  @override
-  Future<void> deleteAudio(String id) async {
-    recordings.removeWhere((r) => r.id == id);
-    audioData.remove(id);
-  }
-
-  @override
-  Future<List<AudioMeta>> getAllAudio() async {
-    return recordings;
-  }
-}
 
 /// Fake implementation of VideoVaultService that stores videos in memory.
 class FakeVideoVaultService extends VideoVaultService {
@@ -270,6 +229,71 @@ class FakeVideoVaultService extends VideoVaultService {
   @override
   Future<void> restoreVideoToGallery(String id) async {
     await deleteVideo(id);
+  }
+}
+
+/// Fake implementation of DocumentVaultService that stores documents in memory.
+class FakeDocumentVaultService extends DocumentVaultService {
+  final List<DocumentMeta> documents = [];
+  final Map<String, Uint8List> documentData = {};
+
+  FakeDocumentVaultService(super.platformService, super.crypto);
+
+  @override
+  Future<String> importDocument() async {
+    throw Exception('No file selected');
+  }
+
+  @override
+  Future<String> createTextNote(String title, String text) async {
+    final id = 'doc_${documents.length + 1}';
+    final now = DateTime.now();
+    final bytes = Uint8List.fromList(utf8.encode(text));
+    
+    final meta = DocumentMeta(
+      id: id,
+      fileName: title.isEmpty ? 'Note ${now.day}/${now.month}' : title,
+      fileType: 'txt',
+      sizeBytes: bytes.length,
+      addedAt: now,
+      isTextNote: true,
+    );
+    documents.add(meta);
+    documentData[id] = bytes;
+    return id;
+  }
+
+  @override
+  Future<Uint8List?> getDocumentBytes(String id) async {
+    return documentData[id];
+  }
+
+  @override
+  Future<void> updateTextNote(String id, String text) async {
+    final bytes = Uint8List.fromList(utf8.encode(text));
+    documentData[id] = bytes;
+    final index = documents.indexWhere((d) => d.id == id);
+    if (index != -1) {
+      documents[index] = DocumentMeta(
+        id: id,
+        fileName: documents[index].fileName,
+        fileType: 'txt',
+        sizeBytes: bytes.length,
+        addedAt: documents[index].addedAt,
+        isTextNote: true,
+      );
+    }
+  }
+
+  @override
+  Future<void> deleteDocument(String id) async {
+    documents.removeWhere((d) => d.id == id);
+    documentData.remove(id);
+  }
+
+  @override
+  Future<List<DocumentMeta>> listDocuments() async {
+    return documents;
   }
 }
 
@@ -329,8 +353,8 @@ void main() {
   late VaultCrypto fakeCrypto;
   late FakeNotesService fakeNotes;
   late FakeFileVaultService fakePhotos;
-  late FakeAudioVaultService fakeAudio;
   late FakeVideoVaultService fakeVideos;
+  late FakeDocumentVaultService fakeDocuments;
   late Directory testTempDir;
   List<Map<String, dynamic>> mockLogs = [];
 
@@ -343,8 +367,8 @@ void main() {
     
     fakeNotes = FakeNotesService(fakePlatform, fakeCrypto);
     fakePhotos = FakeFileVaultService(fakePlatform, fakeCrypto);
-    fakeAudio = FakeAudioVaultService(fakePlatform, fakeCrypto);
     fakeVideos = FakeVideoVaultService(fakePlatform, fakeCrypto);
+    fakeDocuments = FakeDocumentVaultService(fakePlatform, fakeCrypto);
     mockLogs = [];
   });
 
@@ -357,8 +381,8 @@ void main() {
         vaultCryptoProvider.overrideWith((ref) => fakeCrypto),
         notesServiceProvider.overrideWithValue(fakeNotes),
         fileVaultServiceProvider.overrideWithValue(fakePhotos),
-        audioVaultServiceProvider.overrideWithValue(fakeAudio),
         videoVaultServiceProvider.overrideWithValue(fakeVideos),
+        documentVaultServiceProvider.overrideWithValue(fakeDocuments),
       ],
       child: MaterialApp(
         theme: vaultTheme,
@@ -369,7 +393,6 @@ void main() {
           '/vault-pin': (_) => const Scaffold(body: Text('PIN_SCREEN')),
           '/vault-photos': (_) => const PhotoVaultScreen(),
           '/vault-notes': (_) => const NotesScreen(),
-          '/vault-audio': (_) => const AudioVaultScreen(),
           '/vault-videos': (_) => const VideoVaultScreen(),
           '/vault-documents': (_) => const DocumentVaultScreen(),
           '/vault-settings': (_) => const VaultSettingsScreen(),
@@ -440,7 +463,6 @@ void main() {
       // Verify the 5 section cards render with correct titles
       expect(find.text('Photos'), findsOneWidget);
       expect(find.text('Notes'), findsOneWidget);
-      expect(find.text('Audio'), findsOneWidget);
       expect(find.text('Videos'), findsOneWidget);
       expect(find.text('Documents'), findsOneWidget);
 
@@ -557,47 +579,11 @@ void main() {
     });
   });
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // 4 · AudioVaultScreen Tests
-  // ═══════════════════════════════════════════════════════════════════════
-  group('4 · AudioVaultScreen', () {
-    testWidgets('Empty state renders, import FAB navigates, and player controls render', (WidgetTester tester) async {
-      // Seed recording BEFORE building the widget so _loadRecordings picks it up
-      final mockAudioBytes = Uint8List.fromList([10, 20, 30]);
-      await fakeAudio.saveAudio(mockAudioBytes, 'audio/m4a', title: 'Voice Note 1', durationMs: 15000);
-
-      await tester.pumpWidget(buildTestApp(const AudioVaultScreen()));
-      await tester.pumpAndSettle();
-
-      // Verify shared screen wrappers and theme constraints
-      verifySharedConstraints(tester);
-
-      // Verify seeded recording renders
-      expect(find.text('Voice Note 1'), findsOneWidget);
-      expect(find.text('0:15'), findsOneWidget); // Duration formatting
-
-      // Tap recording to play — this triggers player controls
-      await tester.tap(find.text('Voice Note 1'));
-      await tester.pump();
-
-      // Verify playback player controls render (LinearProgressIndicator)
-      expect(find.byType(LinearProgressIndicator), findsOneWidget,
-          reason: 'Playing an audio recording must render the progress player bar');
-
-      // Cancel playback by tapping it again, then pump to allow the pending 200ms timer to expire and exit the loop
-      await tester.tap(find.text('Voice Note 1'));
-      await tester.pump(const Duration(milliseconds: 250));
-
-      // Verify no plain-text audio data is written to disk
-      verifyNoPlaintextWritten(fakePlatform, ['Plaintext audio header']);
-    });
-  });
-
-  // ═══════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════
   // 5 · DocumentVaultScreen Tests
   // ═══════════════════════════════════════════════════════════════════════
   group('5 · DocumentVaultScreen', () {
-    testWidgets('Renders correctly, import triggers snackbar, and metadata displays', (WidgetTester tester) async {
+    testWidgets('Renders correctly, FAB shows options, and metadata displays', (WidgetTester tester) async {
       await tester.pumpWidget(buildTestApp(const DocumentVaultScreen()));
       await tester.pumpAndSettle();
 
@@ -607,23 +593,24 @@ void main() {
       // Renders empty state
       expect(find.text('No documents yet'), findsOneWidget);
 
-      // Verify import FAB shows snackbar
+      // Verify FAB opens bottom sheet with import and text note options
       final fabFinder = find.byType(FloatingActionButton);
+      expect(fabFinder, findsOneWidget);
       await tester.tap(fabFinder);
       await tester.pumpAndSettle();
 
-      expect(find.text('Document import coming soon'), findsOneWidget,
-          reason: 'Import FAB must trigger snackbar message on document screen');
+      expect(find.text('Import File'), findsOneWidget);
+      expect(find.text('New Text Note'), findsOneWidget);
 
       // Inject document metadata state directly using Widget state manipulation
       final DocumentVaultScreenState docState = tester.state(find.byType(DocumentVaultScreen));
       docState.setDocumentsForTesting([
         DocumentMeta(
           id: 'doc_99',
-          name: 'Tax_Return_2025.pdf',
-          type: 'pdf',
-          size: 1024 * 128, // 128 KB
-          createdAt: DateTime.now(),
+          fileName: 'Tax_Return_2025.pdf',
+          fileType: 'pdf',
+          sizeBytes: 1024 * 128, // 128 KB
+          addedAt: DateTime.now(),
         )
       ]);
       await tester.pumpAndSettle();
@@ -634,6 +621,53 @@ void main() {
 
       // Verify no plain-text document content written to disk
       verifyNoPlaintextWritten(fakePlatform, ['Confidential Tax File Content']);
+    });
+
+    testWidgets('Create text note adds to list', (WidgetTester tester) async {
+      await tester.pumpWidget(buildTestApp(const DocumentVaultScreen()));
+      await tester.pumpAndSettle();
+
+      // Tap FAB and select "New Text Note"
+      final fabFinder = find.byType(FloatingActionButton);
+      await tester.tap(fabFinder);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('New Text Note'));
+      await tester.pumpAndSettle();
+
+      // Enter title
+      await tester.enterText(find.byType(TextField).first, 'My Note');
+      await tester.pumpAndSettle();
+
+      // Confirm creation
+      await tester.tap(find.text('Create'));
+      await tester.pumpAndSettle();
+
+      // Verify note was created
+      expect(fakeDocuments.documents.length, 1);
+      expect(fakeDocuments.documents.first.fileName, 'My Note');
+    });
+
+    testWidgets('Delete removes document from list', (WidgetTester tester) async {
+      // Seed a document
+      await fakeDocuments.createTextNote('Test Doc', 'Content');
+      
+      await tester.pumpWidget(buildTestApp(const DocumentVaultScreen()));
+      await tester.pumpAndSettle();
+
+      // Verify document is displayed
+      expect(find.text('Test Doc'), findsOneWidget);
+
+      // Swipe to delete
+      await tester.drag(find.byType(Dismissible), const Offset(-800, 0));
+      await tester.pumpAndSettle();
+
+      // Confirm delete
+      await tester.tap(find.text('Delete'));
+      await tester.pumpAndSettle();
+
+      // Verify document was removed
+      expect(fakeDocuments.documents.isEmpty, isTrue);
     });
   });
 
@@ -653,7 +687,7 @@ void main() {
       expect(find.text('Lock Vault'), findsOneWidget);
 
       // Scroll to render lower settings options
-      await tester.drag(find.byType(ListView), const Offset(0, -800));
+      await tester.drag(find.byType(ListView), const Offset(0, -1200));
       await tester.pumpAndSettle();
 
       expect(find.text('Intruder Logs'), findsOneWidget);

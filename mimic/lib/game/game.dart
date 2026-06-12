@@ -4,8 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/core/router/app_router.dart' as router;
 import 'package:mimic/multiplayer/network/disconnect_handler.dart';
+import 'package:mimic/multiplayer/network/network_service.dart';
 import 'package:mimic/core/providers/provider_registration.dart'
-    show vaultConcealServiceProvider, disconnectHandlerProvider;
+    show vaultConcealServiceProvider, disconnectHandlerProvider, networkServiceProvider;
 import 'package:mimic/vault/security/vault_conceal_service.dart';
 
 
@@ -29,13 +30,13 @@ class MimicGame extends StatelessWidget {
   static const String tutorialRoute = router.AppRouter.tutorialRoute;
   static const String profileRoute = router.AppRouter.profileRoute;
   static const String leaderboardRoute = router.AppRouter.leaderboardRoute;
+  static const String finalStandingsRoute = router.AppRouter.finalStandingsRoute;
 
   // Vault routes (forwarded to AppRouter for backward compatibility)
   static const String vaultPinRoute = router.AppRouter.vaultPinRoute;
   static const String vaultHomeRoute = router.AppRouter.vaultHomeRoute;
   static const String vaultPhotosRoute = router.AppRouter.vaultPhotosRoute;
   static const String vaultNotesRoute = router.AppRouter.vaultNotesRoute;
-  static const String vaultAudioRoute = router.AppRouter.vaultAudioRoute;
   static const String vaultDocumentsRoute = router.AppRouter.vaultDocumentsRoute;
   static const String vaultSettingsRoute = router.AppRouter.vaultSettingsRoute;
   static const String vaultBreakinLogsRoute = router.AppRouter.vaultBreakinLogsRoute;
@@ -71,7 +72,11 @@ class _VaultConcealWrapperState extends ConsumerState<_VaultConcealWrapper> {
     // Initialize and start the global conceal shake listener.
     _concealService = ref.read(vaultConcealServiceProvider);
     _concealService.init().then((_) {
-      _concealService.start();
+      // Start immediately only if no active session
+      final netService = ref.read(networkServiceProvider);
+      if (!isMultiplayerSessionActive(netService)) {
+        _concealService.start();
+      }
     });
   }
 
@@ -90,6 +95,15 @@ class _VaultConcealWrapperState extends ConsumerState<_VaultConcealWrapper> {
         ref.listen<DisconnectHandler>(disconnectHandlerProvider, (previous, next) {
           // The disconnect handler is now initialized and listening.
           // Any routing of DisconnectEvents is handled globally via this controller.
+        });
+
+        // Gate shake conceal based on multiplayer session activity
+        ref.listen<NetworkService>(networkServiceProvider, (previous, next) {
+          if (isMultiplayerSessionActive(next)) {
+            _concealService.stop();
+          } else {
+            _concealService.start();
+          }
         });
 
         return MaterialApp(

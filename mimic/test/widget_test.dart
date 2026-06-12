@@ -6,6 +6,10 @@ void main() {
     // Build our app and trigger a frame.
     await tester.pumpWidget(const MimicGame());
     await tester.pump(); // build LoadingScreen
+    
+    // Verify the 'MIMIC' wordmark is visible on the loading screen
+    expect(find.text('MIMIC'), findsOneWidget);
+
     await tester.pump(const Duration(seconds: 2)); // elapse min display + fire navigation
     await tester.pump(); // process pushReplacement
     await tester.pump(const Duration(milliseconds: 500)); // Process home screen particles

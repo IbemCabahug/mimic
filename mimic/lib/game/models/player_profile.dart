@@ -21,6 +21,23 @@ enum RankTier {
   theOriginal,
 }
 
+extension RankTierTitle on RankTier {
+  String get title {
+    switch (this) {
+      case RankTier.bystander:
+        return "Newcomer";
+      case RankTier.suspect:
+        return "Suspicious Mind";
+      case RankTier.investigator:
+        return "The Detective";
+      case RankTier.phantom:
+        return "Shadow";
+      case RankTier.theOriginal:
+        return "The Original";
+    }
+  }
+}
+
 /// Extension to provide display metadata for each rank tier.
 extension RankTierDisplay on RankTier {
   String get displayName {
@@ -198,6 +215,38 @@ extension HorrorAvatarDisplay on HorrorAvatar {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Badges
+// ═══════════════════════════════════════════════════════════════════════════
+
+enum ProfileBadge {
+  firstBlood,
+  masterMimic,
+  sharpEye,
+  survivor,
+  quickDraw,
+  veteran,
+}
+
+extension ProfileBadgeDisplay on ProfileBadge {
+  String get label {
+    switch (this) {
+      case ProfileBadge.firstBlood:
+        return "First Blood";
+      case ProfileBadge.masterMimic:
+        return "Master Mimic";
+      case ProfileBadge.sharpEye:
+        return "Sharp Eye";
+      case ProfileBadge.survivor:
+        return "Survivor";
+      case ProfileBadge.quickDraw:
+        return "Quick Draw";
+      case ProfileBadge.veteran:
+        return "Veteran";
+    }
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Scoring Actions
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -242,6 +291,9 @@ class PlayerProfile {
 
   /// Selected horror avatar.
   final HorrorAvatar avatar;
+
+  /// Selected custom title (if null, displays the highest unlocked rank title).
+  final String? selectedTitle;
 
   /// Cumulative Suspicion Score across all games.
   final int suspicionScore;
@@ -289,14 +341,60 @@ class PlayerProfile {
     this.timesVotedOutInnocent = 0,
     this.roundsSurvivedInnocent = 0,
     this.firstAccusations = 0,
+    this.selectedTitle,
     DateTime? createdAt,
     DateTime? lastPlayedAt,
   })  : createdAt = createdAt ?? DateTime.now(),
         lastPlayedAt = lastPlayedAt ?? DateTime.now();
 
   // ─────────────────────────────────────────────────────────────────────
-  // Computed properties
+  // Computed properties & Cosmetics
   // ─────────────────────────────────────────────────────────────────────
+
+  /// Determines if a specific avatar is unlocked for this profile.
+  bool isAvatarUnlocked(HorrorAvatar a) {
+    if (a == avatar) return true; // Currently equipped is always unlocked
+    switch (a) {
+      case HorrorAvatar.skull:
+      case HorrorAvatar.ghost:
+        return true;
+      case HorrorAvatar.eye:
+      case HorrorAvatar.spider:
+        return suspicionScore >= RankTier.suspect.minScore;
+      case HorrorAvatar.bat:
+      case HorrorAvatar.moon:
+        return suspicionScore >= RankTier.investigator.minScore;
+      case HorrorAvatar.coffin:
+      case HorrorAvatar.potion:
+        return suspicionScore >= RankTier.phantom.minScore;
+      case HorrorAvatar.dagger:
+      case HorrorAvatar.mask:
+        return suspicionScore >= RankTier.theOriginal.minScore;
+    }
+  }
+
+  /// List of all rank titles the user has unlocked based on their score.
+  List<RankTier> get unlockedTitles {
+    return RankTier.values.where((tier) => suspicionScore >= tier.minScore).toList();
+  }
+
+  /// Checks if a badge has been earned based on profile stats.
+  bool hasBadge(ProfileBadge badge) {
+    switch (badge) {
+      case ProfileBadge.firstBlood:
+        return gamesWon >= 1;
+      case ProfileBadge.masterMimic:
+        return timesMimicWon >= 10;
+      case ProfileBadge.sharpEye:
+        return correctIdentifications >= 25;
+      case ProfileBadge.survivor:
+        return roundsSurvivedInnocent >= 50;
+      case ProfileBadge.quickDraw:
+        return firstAccusations >= 10;
+      case ProfileBadge.veteran:
+        return gamesPlayed >= 50;
+    }
+  }
 
   /// Current rank tier based on cumulative Suspicion Score.
   RankTier get rank {
@@ -353,6 +451,8 @@ class PlayerProfile {
   PlayerProfile copyWith({
     String? displayName,
     HorrorAvatar? avatar,
+    String? selectedTitle,
+    bool clearTitle = false,
     int? suspicionScore,
     int? gamesPlayed,
     int? gamesWon,
@@ -368,6 +468,7 @@ class PlayerProfile {
       id: id,
       displayName: displayName ?? this.displayName,
       avatar: avatar ?? this.avatar,
+      selectedTitle: clearTitle ? null : (selectedTitle ?? this.selectedTitle),
       suspicionScore: suspicionScore ?? this.suspicionScore,
       gamesPlayed: gamesPlayed ?? this.gamesPlayed,
       gamesWon: gamesWon ?? this.gamesWon,
@@ -402,6 +503,7 @@ class PlayerProfile {
       'id': id,
       'displayName': displayName,
       'avatar': avatar.name,
+      'selectedTitle': selectedTitle,
       'suspicionScore': suspicionScore,
       'gamesPlayed': gamesPlayed,
       'gamesWon': gamesWon,
@@ -424,6 +526,7 @@ class PlayerProfile {
         (a) => a.name == (json['avatar'] as String?),
         orElse: () => HorrorAvatar.skull,
       ),
+      selectedTitle: json['selectedTitle'] as String?,
       suspicionScore: (json['suspicionScore'] as num?)?.toInt() ?? 0,
       gamesPlayed: (json['gamesPlayed'] as num?)?.toInt() ?? 0,
       gamesWon: (json['gamesWon'] as num?)?.toInt() ?? 0,

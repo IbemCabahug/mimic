@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/core/animations/horror_animations.dart';
 import 'package:mimic/game/state/game_state.dart';
+import 'package:mimic/game/services/stats_service.dart';
 import 'package:mimic/game/game.dart';
 
 class PlayerSetupScreen extends ConsumerStatefulWidget {
@@ -33,6 +34,13 @@ class _PlayerSetupScreenState extends ConsumerState<PlayerSetupScreen> {
     // Initialize with 2 players by default
     _addPlayer();
     _addPlayer();
+
+    // The active profile is usually available because StatsService initializes at app boot.
+    final profile = ref.read(statsServiceProvider).activeProfile;
+    if (profile != null) {
+      _players[0].nameController.text = profile.displayName;
+      _players[0].profileId = profile.id;
+    }
   }
 
   void _addPlayer() {
@@ -62,6 +70,7 @@ class _PlayerSetupScreenState extends ConsumerState<PlayerSetupScreen> {
       gameStateNotifier.addPlayer(
         namedPlayers[i].nameController.text.trim(),
         namedPlayers[i].color,
+        profileId: namedPlayers[i].profileId,
       );
     }
 
@@ -131,16 +140,41 @@ class _PlayerSetupScreenState extends ConsumerState<PlayerSetupScreen> {
                       child: Row(
                         children: [
                           // Blood-colored avatar circle
-                          CircleAvatar(
-                            radius: 18,
-                            backgroundColor: Color(player.color),
-                            child: Text(
-                              (index + 1).toString(),
-                              style: GoogleFonts.creepster(
-                                color: HorrorColors.fogWhite,
-                                fontSize: 18,
+                          Stack(
+                            clipBehavior: Clip.none,
+                            children: [
+                              CircleAvatar(
+                                radius: 18,
+                                backgroundColor: Color(player.color),
+                                child: Text(
+                                  (index + 1).toString(),
+                                  style: GoogleFonts.creepster(
+                                    color: HorrorColors.fogWhite,
+                                    fontSize: 18,
+                                  ),
+                                ),
                               ),
-                            ),
+                              if (player.profileId != null)
+                                Positioned(
+                                  top: -6,
+                                  right: -10,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                                    decoration: BoxDecoration(
+                                      color: HorrorColors.crimson,
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Text(
+                                      'YOU',
+                                      style: GoogleFonts.inter(
+                                        color: HorrorColors.fogWhite,
+                                        fontSize: 8,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                            ],
                           ),
                           const SizedBox(width: 16),
                           // Name input
@@ -279,6 +313,7 @@ class _PlayerSetupScreenState extends ConsumerState<PlayerSetupScreen> {
 class PlayerEntry {
   final TextEditingController nameController;
   final int color;
+  String? profileId;
 
-  PlayerEntry({required this.color}) : nameController = TextEditingController();
+  PlayerEntry({required this.color, this.profileId}) : nameController = TextEditingController();
 }

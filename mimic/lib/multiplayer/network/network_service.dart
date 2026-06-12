@@ -293,4 +293,7 @@ class NetworkService extends ChangeNotifier {
   }
 }
 
-
+/// Helper to check if a multiplayer session is currently active.
+bool isMultiplayerSessionActive(NetworkService netService) {
+  return netService.role != NetworkRole.none;
+}

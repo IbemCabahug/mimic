@@ -128,6 +128,13 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
       gameStateNotifier.toggleEliminated(_accusedPlayerId);
     }
 
+    // Record round outcome exactly once
+    gameStateNotifier.addRoundOutcome(RoundOutcome(
+      round: gameState.currentRound,
+      mimicIds: mimicIds,
+      accusedPlayerId: _accusedPlayerId,
+    ));
+
     // Award scores
     if (gameState.gameMode == GameMode.nightmare) {
       if (accusedIsMimic) {
@@ -217,8 +224,13 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
         Navigator.of(context).pushNamed(MimicGame.wordRevealRoute);
       }
     } else {
-      ref.read(gameStateProvider.notifier).nextRound();
-      Navigator.of(context).pushNamed(MimicGame.wordRevealRoute);
+      final gameState = ref.read(gameStateProvider);
+      if (gameState.isGameOver) {
+        Navigator.of(context).pushReplacementNamed(MimicGame.finalStandingsRoute);
+      } else {
+        ref.read(gameStateProvider.notifier).nextRound();
+        Navigator.of(context).pushNamed(MimicGame.wordRevealRoute);
+      }
     }
   }
 
@@ -270,6 +282,8 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
               tapSequence: const [0, 0, 0],
               timeout: const Duration(seconds: 2),
               onTrigger: () {
+                final net = ref.read(networkServiceProvider);
+                if (isMultiplayerSessionActive(net)) return;
                 Navigator.of(context).push(
                   MaterialPageRoute(
                     builder: (context) => const PinScreen(),

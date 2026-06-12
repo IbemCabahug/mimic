@@ -99,7 +99,7 @@ class _PlayerProfileScreenState extends ConsumerState<PlayerProfileScreen>
               ),
             ),
             const SizedBox(height: 16),
-            _buildAvatarPicker(),
+            _buildAvatarPicker(stats, null),
             const SizedBox(height: 32),
 
             // Name input
@@ -158,44 +158,144 @@ class _PlayerProfileScreenState extends ConsumerState<PlayerProfileScreen>
     );
   }
 
-  Widget _buildAvatarPicker() {
+  Widget _buildAvatarPicker(StatsService stats, PlayerProfile? profile) {
     return Wrap(
       spacing: 12,
       runSpacing: 12,
       alignment: WrapAlignment.center,
       children: HorrorAvatar.values.map((avatar) {
-        final isSelected = avatar == _selectedAvatar;
+        final isSelected = profile != null ? profile.avatar == avatar : avatar == _selectedAvatar;
+        final isUnlocked = profile != null ? profile.isAvatarUnlocked(avatar) : true; // all unlocked during create? Or locked?
+        // Wait, during create, new profiles default to skull, so maybe they can only pick skull/ghost?
+        // Actually, during create, they have 0 points, so only skull/ghost are unlocked anyway.
+        final reallyUnlocked = profile != null ? isUnlocked : (avatar == HorrorAvatar.skull || avatar == HorrorAvatar.ghost);
+
         return GestureDetector(
-          onTap: () => setState(() => _selectedAvatar = avatar),
-          child: AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: 56,
-            height: 56,
+          onTap: () {
+            if (!reallyUnlocked) return;
+            if (profile != null) {
+              stats.saveProfile(profile.copyWith(avatar: avatar));
+            } else {
+              setState(() => _selectedAvatar = avatar);
+            }
+          },
+          child: Opacity(
+            opacity: reallyUnlocked ? 1.0 : 0.5,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              width: 56,
+              height: 56,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: isSelected
+                    ? HorrorColors.crimson.withValues(alpha: 0.3)
+                    : HorrorColors.cardSurface,
+                border: Border.all(
+                  color: isSelected
+                      ? HorrorColors.crimson
+                      : HorrorColors.ashGray.withValues(alpha: 0.3),
+                  width: isSelected ? 2 : 1,
+                ),
+                boxShadow: isSelected
+                    ? [
+                        BoxShadow(
+                          color: HorrorColors.crimson.withValues(alpha: 0.4),
+                          blurRadius: 10,
+                        ),
+                      ]
+                    : null,
+              ),
+              child: Center(
+                child: reallyUnlocked 
+                  ? Text(avatar.emoji, style: const TextStyle(fontSize: 24))
+                  : Tooltip(
+                      message: _getUnlockCondition(avatar),
+                      child: const Icon(Icons.lock, color: HorrorColors.ashGray, size: 20),
+                    ),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  String _getUnlockCondition(HorrorAvatar avatar) {
+    switch (avatar) {
+      case HorrorAvatar.skull:
+      case HorrorAvatar.ghost:
+        return 'Default';
+      case HorrorAvatar.eye:
+      case HorrorAvatar.spider:
+        return 'Reach Suspect';
+      case HorrorAvatar.bat:
+      case HorrorAvatar.moon:
+        return 'Reach Investigator';
+      case HorrorAvatar.coffin:
+      case HorrorAvatar.potion:
+        return 'Reach Phantom';
+      case HorrorAvatar.dagger:
+      case HorrorAvatar.mask:
+        return 'Reach The Original';
+    }
+  }
+
+  Widget _buildTitleSelector(StatsService stats, PlayerProfile profile) {
+    final activeTitle = profile.selectedTitle ?? profile.unlockedTitles.last.title;
+    
+    return Column(
+      children: RankTier.values.map((tier) {
+        final isUnlocked = profile.suspicionScore >= tier.minScore;
+        final isSelected = activeTitle == tier.title;
+
+        return GestureDetector(
+          onTap: () {
+            if (!isUnlocked) return;
+            stats.saveProfile(profile.copyWith(selectedTitle: tier.title));
+          },
+          child: Container(
+            margin: const EdgeInsets.only(bottom: 8),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: isSelected
-                  ? HorrorColors.crimson.withValues(alpha: 0.3)
+              color: isSelected 
+                  ? HorrorColors.crimson.withValues(alpha: 0.2)
                   : HorrorColors.cardSurface,
+              borderRadius: BorderRadius.circular(8),
               border: Border.all(
                 color: isSelected
                     ? HorrorColors.crimson
-                    : HorrorColors.ashGray.withValues(alpha: 0.3),
-                width: isSelected ? 2 : 1,
+                    : HorrorColors.crimson.withValues(alpha: 0.1),
               ),
-              boxShadow: isSelected
-                  ? [
-                      BoxShadow(
-                        color: HorrorColors.crimson.withValues(alpha: 0.4),
-                        blurRadius: 10,
-                      ),
-                    ]
-                  : null,
             ),
-            child: Center(
-              child: Text(
-                avatar.emoji,
-                style: const TextStyle(fontSize: 24),
-              ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    tier.title,
+                    style: GoogleFonts.inter(
+                      color: isUnlocked ? HorrorColors.fogWhite : HorrorColors.ashGray.withValues(alpha: 0.5),
+                      fontSize: 14,
+                      fontWeight: isSelected ? FontWeight.w700 : FontWeight.w500,
+                    ),
+                  ),
+                ),
+                if (!isUnlocked)
+                  Row(
+                    children: [
+                      const Icon(Icons.lock, color: HorrorColors.ashGray, size: 14),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Reach ${tier.displayName}',
+                        style: GoogleFonts.inter(
+                          color: HorrorColors.ashGray,
+                          fontSize: 11,
+                        ),
+                      ),
+                    ],
+                  )
+                else if (isSelected)
+                  const Icon(Icons.check, color: HorrorColors.crimson, size: 18),
+              ],
             ),
           ),
         );
@@ -234,6 +334,38 @@ class _PlayerProfileScreenState extends ConsumerState<PlayerProfileScreen>
           _buildRankProgress(profile),
           const SizedBox(height: 24),
 
+          // Avatar Picker (Cosmetics)
+          Text(
+            'COSMETICS',
+            style: GoogleFonts.creepster(
+              color: HorrorColors.crimson,
+              fontSize: 18,
+              letterSpacing: 2.0,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: _buildAvatarPicker(stats, profile),
+          ),
+          const SizedBox(height: 24),
+
+          // Title Selector
+          Text(
+            'TITLE',
+            style: GoogleFonts.creepster(
+              color: HorrorColors.crimson,
+              fontSize: 18,
+              letterSpacing: 2.0,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: _buildTitleSelector(stats, profile),
+          ),
+          const SizedBox(height: 32),
+
           // Stats Grid
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -245,6 +377,13 @@ class _PlayerProfileScreenState extends ConsumerState<PlayerProfileScreen>
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 24),
             child: _buildPerformanceCard(profile),
+          ),
+          const SizedBox(height: 24),
+
+          // Badges Grid
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24),
+            child: _buildBadgesGrid(profile),
           ),
           const SizedBox(height: 24),
 
@@ -361,13 +500,23 @@ class _PlayerProfileScreenState extends ConsumerState<PlayerProfileScreen>
         ),
         const SizedBox(height: 8),
 
-        // Suspicion Score
+        // Suspicion Score & Active Title
         Text(
           '${profile.suspicionScore} POINTS',
           style: GoogleFonts.inter(
             color: HorrorColors.ashGray,
             fontSize: 13,
             fontWeight: FontWeight.w500,
+            letterSpacing: 1.0,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          '"${profile.selectedTitle ?? profile.unlockedTitles.last.title}"',
+          style: GoogleFonts.inter(
+            color: HorrorColors.fogWhite.withValues(alpha: 0.8),
+            fontSize: 14,
+            fontStyle: FontStyle.italic,
             letterSpacing: 1.0,
           ),
         ),
@@ -546,6 +695,101 @@ class _PlayerProfileScreenState extends ConsumerState<PlayerProfileScreen>
         ],
       ),
     );
+  }
+
+  Widget _buildBadgesGrid(PlayerProfile profile) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'BADGES',
+          style: GoogleFonts.creepster(
+            color: HorrorColors.crimson,
+            fontSize: 18,
+            letterSpacing: 2.0,
+          ),
+        ),
+        const SizedBox(height: 16),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            childAspectRatio: 0.85,
+          ),
+          itemCount: ProfileBadge.values.length,
+          itemBuilder: (context, index) {
+            final badge = ProfileBadge.values[index];
+            final hasBadge = profile.hasBadge(badge);
+
+            return Tooltip(
+              message: hasBadge ? badge.label : '${badge.label}\n(${_getBadgeUnlockCondition(badge)})',
+              textAlign: TextAlign.center,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: hasBadge 
+                      ? HorrorColors.crimson.withValues(alpha: 0.15) 
+                      : HorrorColors.cardSurface,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: hasBadge
+                        ? HorrorColors.crimson.withValues(alpha: 0.5)
+                        : HorrorColors.ashGray.withValues(alpha: 0.2),
+                  ),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      _getBadgeIcon(badge),
+                      size: 32,
+                      color: hasBadge ? HorrorColors.crimson : HorrorColors.ashGray.withValues(alpha: 0.3),
+                    ),
+                    const SizedBox(height: 8),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Text(
+                        badge.label,
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.inter(
+                          color: hasBadge ? HorrorColors.fogWhite : HorrorColors.ashGray.withValues(alpha: 0.5),
+                          fontSize: 10,
+                          fontWeight: hasBadge ? FontWeight.w700 : FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  IconData _getBadgeIcon(ProfileBadge badge) {
+    switch (badge) {
+      case ProfileBadge.firstBlood: return Icons.bloodtype;
+      case ProfileBadge.masterMimic: return Icons.theater_comedy;
+      case ProfileBadge.sharpEye: return Icons.visibility;
+      case ProfileBadge.survivor: return Icons.shield;
+      case ProfileBadge.quickDraw: return Icons.flash_on;
+      case ProfileBadge.veteran: return Icons.military_tech;
+    }
+  }
+
+  String _getBadgeUnlockCondition(ProfileBadge badge) {
+    switch (badge) {
+      case ProfileBadge.firstBlood: return 'Win 1 Game';
+      case ProfileBadge.masterMimic: return 'Win as Mimic 10 Times';
+      case ProfileBadge.sharpEye: return 'Correct ID 25 Times';
+      case ProfileBadge.survivor: return 'Survive 50 Rounds';
+      case ProfileBadge.quickDraw: return '10 First Accusations';
+      case ProfileBadge.veteran: return 'Play 50 Games';
+    }
   }
 
   Widget _buildLeaderboardRank(PlayerProfile profile, StatsService stats) {

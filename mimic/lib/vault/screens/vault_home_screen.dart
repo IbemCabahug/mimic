@@ -7,8 +7,8 @@ import '../../core/theme/app_theme.dart';
 import '../crypto/vault_crypto.dart';
 import '../services/file_vault_service.dart';
 import '../services/notes_service.dart';
-import '../services/audio_vault_service.dart';
 import '../services/video_vault_service.dart';
+import '../services/document_vault_service.dart';
 import '../services/backup_reminder_service.dart';
 import '../widgets/vault_scaffold.dart';
 import '../security/shake_wipe_service.dart';
@@ -28,8 +28,8 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
   Timer? _reminderTimer;
   int _photoCount = 0;
   int _noteCount = 0;
-  int _audioCount = 0;
   int _videoCount = 0;
+  int _documentCount = 0;
   bool _isHiding = false;
 
   @override
@@ -97,14 +97,14 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
     try {
       final photos = await ref.read(fileVaultServiceProvider).getAllPhotos();
       final notes = await ref.read(notesServiceProvider).getAllNotes();
-      final audio = await ref.read(audioVaultServiceProvider).getAllAudio();
       final videos = await ref.read(videoVaultServiceProvider).getAllVideos();
+      final documents = await ref.read(documentVaultServiceProvider).listDocuments();
       if (mounted) {
         setState(() {
           _photoCount = photos.length;
           _noteCount = notes.length;
-          _audioCount = audio.length;
           _videoCount = videos.length;
+          _documentCount = documents.length;
         });
       }
     } catch (_) {
@@ -220,18 +220,6 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
                           },
                         ),
                         _VaultSectionCard(
-                          title: 'Audio',
-                          icon: Icons.audio_file_outlined,
-                          color: const Color(0xFFD85A30),
-                          count: _audioCount,
-                          onTap: () async {
-                            await Navigator.of(
-                              context,
-                            ).pushNamed('/vault-audio');
-                            _loadCounts();
-                          },
-                        ),
-                        _VaultSectionCard(
                           title: 'Videos',
                           icon: Icons.video_library_outlined,
                           color: const Color(0xFF8E24AA),
@@ -245,9 +233,9 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
                         ),
                         _VaultSectionCard(
                           title: 'Documents',
-                          icon: Icons.folder_outlined,
+                          icon: Icons.description_outlined,
                           color: const Color(0xFF378ADD),
-                          count: 0,
+                          count: _documentCount,
                           onTap: () async {
                             await Navigator.of(
                               context,

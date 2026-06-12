@@ -15,6 +15,7 @@ import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/core/animations/horror_animations.dart';
 import 'package:mimic/core/services/stealth_mode_service.dart';
 import 'package:mimic/vault/trigger/trigger_detector.dart';
+import 'package:mimic/multiplayer/network/network_service.dart';
 import 'package:mimic/game/game.dart';
 
 class TutorialScreen extends ConsumerStatefulWidget {
@@ -138,6 +139,8 @@ class _TutorialScreenState extends ConsumerState<TutorialScreen>
 
   /// The secret vault trigger — only available on step 3.
   void _onVaultTriggered() {
+    final net = ref.read(networkServiceProvider);
+    if (isMultiplayerSessionActive(net)) return;
     // Navigate to the PIN screen with glitch transition
     Navigator.of(context).push(
       GlitchTransition.pageRoute(

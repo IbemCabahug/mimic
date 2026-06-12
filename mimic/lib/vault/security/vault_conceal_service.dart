@@ -13,6 +13,27 @@ import 'package:mimic/core/router/app_router.dart' show navigatorKey;
 import 'package:mimic/vault/crypto/vault_crypto.dart' show vaultCryptoProvider;
 import 'package:mimic/vault/widgets/blood_splatter_overlay.dart' show showBloodSplatter;
 
+/// Shake sensitivity levels for the shake-to-hide feature.
+/// Low = hardest to trigger (requires a harder shake).
+/// High = easiest to trigger (light shake suffices).
+enum ShakeSensitivity {
+  low(24.0),
+  medium(18.0),
+  high(13.0);
+
+  final double threshold;
+  const ShakeSensitivity(this.threshold);
+
+  /// Resolve a [ShakeSensitivity] from its persisted name, defaulting to [medium].
+  static ShakeSensitivity fromName(String? name) {
+    if (name == null) return ShakeSensitivity.medium;
+    return ShakeSensitivity.values.firstWhere(
+      (s) => s.name == name,
+      orElse: () => ShakeSensitivity.medium,
+    );
+  }
+}
+
 class VaultConcealService {
   final Ref? _ref;
   final PlatformService _platformService;
@@ -26,6 +47,13 @@ class VaultConcealService {
   final List<DateTime> _shakeTimestamps = [];
   DateTime? _lastTriggerTime;
 
+  /// Current shake threshold — defaults to medium (18.0).
+  double _shakeThreshold = ShakeSensitivity.medium.threshold;
+
+  /// The currently configured sensitivity level.
+  ShakeSensitivity _sensitivity = ShakeSensitivity.medium;
+  ShakeSensitivity get sensitivity => _sensitivity;
+
   VaultConcealService([this._ref, PlatformService? platformService])
       : _platformService = platformService ?? const PlatformServicePlaceholder();
 
@@ -33,6 +61,12 @@ class VaultConcealService {
     final val = await _platformService.secureRead('vault_concealed');
     _isConcealed = val == 'true';
     concealNotifier.value = _isConcealed;
+
+    // Load persisted shake sensitivity
+    final prefs = await SharedPreferences.getInstance();
+    final sensName = prefs.getString('shake_sensitivity');
+    _sensitivity = ShakeSensitivity.fromName(sensName);
+    _shakeThreshold = _sensitivity.threshold;
   }
 
   Future<bool> isConcealed() async {
@@ -48,6 +82,14 @@ class VaultConcealService {
     _isConcealed = concealed;
     concealNotifier.value = concealed;
     await _platformService.secureWrite('vault_concealed', concealed ? 'true' : 'false');
+  }
+
+  /// Update the shake sensitivity and persist the choice.
+  Future<void> setSensitivity(ShakeSensitivity sensitivity) async {
+    _sensitivity = sensitivity;
+    _shakeThreshold = sensitivity.threshold;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('shake_sensitivity', sensitivity.name);
   }
 
   void start() {
@@ -86,8 +128,7 @@ class VaultConcealService {
     }
 
     final magnitude = sqrt(event.x * event.x + event.y * event.y + event.z * event.z);
-    // Threshold 18.0
-    if (magnitude < 18.0) return;
+    if (magnitude < _shakeThreshold) return;
 
     // Enforce minimum interval of 200ms between counted shakes
     if (_shakeTimestamps.isNotEmpty &&
@@ -114,11 +155,12 @@ class VaultConcealService {
     await setConcealed(nextState);
 
     if (nextState) {
-      // Toggle ON: show blood splatter overlay on root navigator's overlay
+      // Toggle ON: show blood splatter overlay on root navigator's overlay, and haptic confirmation
       final overlay = navigatorKey.currentState?.overlay;
       if (overlay != null) {
         showBloodSplatter(overlay);
       }
+      await HapticFeedback.heavyImpact();
 
       // If vault is currently unlocked, clear the key and navigate to game home '/'
       final ref = _ref;

@@ -91,7 +91,6 @@ extension AmbienceTrackDisplay on AmbienceTrack {
 /// without overpowering discussion. Automatically pauses during voting/reveal
 /// and resumes during discussion.
 ///
-/// Note: Actual audio playback requires `just_audio` package to be added.
 /// This service provides the control layer and state management.
 /// On web (kIsWeb), audio is disabled to avoid autoplay restrictions.
 ///
@@ -115,9 +114,7 @@ class AmbienceService extends ChangeNotifier {
   bool _isPlaying = false;
   bool _isEnabled = true;
 
-  // Note: AudioPlayer instance would be created here with just_audio.
   // For now, state management is provided without the actual audio player
-  // until the just_audio dependency is confirmed working on the target platform.
 
   // ─────────────────────────────────────────────────────────────────────
   // Getters

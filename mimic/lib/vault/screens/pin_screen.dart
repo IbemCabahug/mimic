@@ -39,10 +39,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
   void initState() {
     super.initState();
     _crypto = ref.read(vaultCryptoProvider);
-    // Pause the global conceal shake listener while the PIN screen is active
-    // to avoid toggling conceal state during PIN entry.
     _concealService = ref.read(vaultConcealServiceProvider);
-    _concealService.pauseShakeListening();
     _checkCreateMode();
     _checkIfWiped();
     _loadWrongAttempts();
@@ -207,8 +204,6 @@ class _PinScreenState extends ConsumerState<PinScreen> {
 
   @override
   void dispose() {
-    // Resume the global conceal shake listener when leaving the PIN screen.
-    _concealService.resumeShakeListening();
     _pinController.dispose();
     super.dispose();
   }
@@ -279,7 +274,6 @@ class _PinScreenState extends ConsumerState<PinScreen> {
             if (!kIsWeb && !_isCreateMode)
               BiometricVaultUnlock(
                 onUnlockedVault: (secret) => _authenticateWithSecret(secret),
-                onUnlockedAdmin: (secret) => _authenticateWithSecret(secret),
                 onError: (result) {
                   if (mounted) setState(() => _error = _biometricResultToMessage(result));
                 },

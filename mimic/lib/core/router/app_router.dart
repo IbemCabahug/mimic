@@ -20,12 +20,12 @@ import 'package:mimic/game/screens/tutorial_screen.dart';
 import 'package:mimic/game/screens/player_profile_screen.dart';
 import 'package:mimic/game/screens/leaderboard_screen.dart';
 import 'package:mimic/game/screens/admin_panel_screen.dart';
+import 'package:mimic/game/screens/final_standings_screen.dart';
 import 'package:mimic/core/screens/loading_screen.dart';
 import 'package:mimic/vault/screens/pin_screen.dart';
 import 'package:mimic/vault/screens/vault_home_screen.dart';
 import 'package:mimic/vault/screens/photo_vault_screen.dart';
 import 'package:mimic/vault/screens/notes_screen.dart';
-import 'package:mimic/vault/screens/audio_vault_screen.dart';
 import 'package:mimic/vault/screens/document_vault_screen.dart';
 import 'package:mimic/vault/screens/vault_settings_screen.dart';
 import 'package:mimic/vault/screens/breakin_log_screen.dart';
@@ -70,13 +70,13 @@ class AppRouter {
   static const String tutorialRoute = '/tutorial';
   static const String profileRoute = '/profile';
   static const String leaderboardRoute = '/leaderboard';
+  static const String finalStandingsRoute = '/final-standings';
 
   // Vault route names
   static const String vaultPinRoute = '/vault-pin';
   static const String vaultHomeRoute = '/vault-home';
   static const String vaultPhotosRoute = '/vault-photos';
   static const String vaultNotesRoute = '/vault-notes';
-  static const String vaultAudioRoute = '/vault-audio';
   static const String vaultDocumentsRoute = '/vault-documents';
   static const String vaultSettingsRoute = '/vault-settings';
   static const String vaultBreakinLogsRoute = '/vault-breakin-logs';
@@ -119,7 +119,11 @@ class AppRouter {
         );
       case '/admin-panel':
         return MaterialPageRoute(
-          builder: (_) => const AdminPanelScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const AdminPanelScreen(),
+          ),
           settings: settings,
         );
       case modeSelectRoute:
@@ -195,81 +199,138 @@ class AppRouter {
           builder: (_) => const LeaderboardScreen(),
           settings: settings,
         );
+      case finalStandingsRoute:
+        return MaterialPageRoute(
+          builder: (_) => const FinalStandingsScreen(),
+          settings: settings,
+        );
 
       // ─── Vault Screens ─────────────────────────────────────────────────────
       case vaultPinRoute:
         return MaterialPageRoute(
-          builder: (_) => const PinScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const PinScreen(),
+          ),
           settings: settings,
         );
       case vaultHomeRoute:
         return MaterialPageRoute(
-          builder: (_) => const VaultHomeScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const VaultHomeScreen(),
+          ),
           settings: settings,
         );
       case vaultPhotosRoute:
         return MaterialPageRoute(
-          builder: (_) => const PhotoVaultScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const PhotoVaultScreen(),
+          ),
           settings: settings,
         );
       case vaultNotesRoute:
         return MaterialPageRoute(
-          builder: (_) => const NotesScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const NotesScreen(),
+          ),
           settings: settings,
         );
-      case vaultAudioRoute:
-        return MaterialPageRoute(
-          builder: (_) => const AudioVaultScreen(),
-          settings: settings,
-        );
+
       case vaultDocumentsRoute:
         return MaterialPageRoute(
-          builder: (_) => const DocumentVaultScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const DocumentVaultScreen(),
+          ),
           settings: settings,
         );
       case vaultSettingsRoute:
         return MaterialPageRoute(
-          builder: (_) => const VaultSettingsScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const VaultSettingsScreen(),
+          ),
           settings: settings,
         );
       case vaultBreakinLogsRoute:
         return MaterialPageRoute(
-          builder: (_) => const BreakInLogScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const BreakInLogScreen(),
+          ),
           settings: settings,
         );
       case vaultRecoveryPhraseRoute:
         return MaterialPageRoute(
-          builder: (_) => const RecoveryPhraseScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const RecoveryPhraseScreen(),
+          ),
           settings: settings,
         );
       case vaultEnterRecoveryRoute:
         return MaterialPageRoute(
-          builder: (_) => const EnterRecoveryScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const EnterRecoveryScreen(),
+          ),
           settings: settings,
         );
       case vaultResetPinRoute:
         return MaterialPageRoute(
-          builder: (_) => const ResetPinScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const ResetPinScreen(),
+          ),
           settings: settings,
         );
       case vaultSetDuressPinRoute:
         return MaterialPageRoute(
-          builder: (_) => const SetDuressPinScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const SetDuressPinScreen(),
+          ),
           settings: settings,
         );
       case vaultExportRoute:
         return MaterialPageRoute(
-          builder: (_) => const ExportVaultScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const ExportVaultScreen(),
+          ),
           settings: settings,
         );
       case vaultImportRoute:
         return MaterialPageRoute(
-          builder: (_) => const ImportVaultScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const ImportVaultScreen(),
+          ),
           settings: settings,
         );
       case vaultVideosRoute:
         return MaterialPageRoute(
-          builder: (_) => const VideoVaultScreen(),
+          builder: (_) => RouteGuard(
+            guard: (net) => !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const VideoVaultScreen(),
+          ),
           settings: settings,
         );
 
@@ -358,11 +419,13 @@ class AppRouter {
 class RouteGuard extends ConsumerWidget {
   final Widget child;
   final bool Function(NetworkService) guard;
+  final String redirectRoute;
 
   const RouteGuard({
     super.key,
     required this.child,
     required this.guard,
+    this.redirectRoute = AppRouter.multiplayerRoute,
   });
 
   @override
@@ -371,9 +434,9 @@ class RouteGuard extends ConsumerWidget {
 
     if (!guard(netService)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        // Pop or remove routes until we reach the main route, and push multiplayer menu.
+        // Pop or remove routes until we reach the main route, and push redirectRoute.
         Navigator.of(context).pushNamedAndRemoveUntil(
-          AppRouter.multiplayerRoute,
+          redirectRoute,
           (route) => route.isFirst,
         );
       });

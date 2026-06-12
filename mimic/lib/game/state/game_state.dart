@@ -5,6 +5,18 @@ import 'package:mimic/game/data/word_packs.dart';
 
 enum GameMode { classic, nightmare, survival }
 
+class RoundOutcome {
+  final int round;
+  final List<String> mimicIds;
+  final String? accusedPlayerId;
+
+  RoundOutcome({
+    required this.round,
+    required this.mimicIds,
+    this.accusedPlayerId,
+  });
+}
+
 class Player {
   final String id;
   final String name;
@@ -12,6 +24,7 @@ class Player {
   final bool isAlive;
   final bool isGhost;
   final double suspicion; // range 0.0 to 1.0 (for UI compatibility)
+  final String? profileId;
 
   Player({
     required this.id,
@@ -20,6 +33,7 @@ class Player {
     this.isAlive = true,
     this.isGhost = false,
     this.suspicion = 0.0,
+    this.profileId,
   });
 
   bool get isEliminated => !isAlive;
@@ -29,6 +43,7 @@ class Player {
     bool? isAlive,
     bool? isGhost,
     double? suspicion,
+    String? profileId,
   }) {
     return Player(
       id: id,
@@ -37,6 +52,7 @@ class Player {
       isAlive: isAlive ?? this.isAlive,
       isGhost: isGhost ?? this.isGhost,
       suspicion: suspicion ?? this.suspicion,
+      profileId: profileId ?? this.profileId,
     );
   }
 }
@@ -55,12 +71,23 @@ class GameState {
   final String? secondMimicWord;          // Store second mimic's fake word in Nightmare mode
   final Map<String, int> scores;          // Map of playerId to int
   final String currentCategory;           // WordPack category/name for this round
+  final List<RoundOutcome> roundOutcomes; // History of outcomes per round
 
   // Legacy field support for old files
   GameMode get gameMode => selectedMode;
   String? get mimicId => mimicIds.isNotEmpty ? mimicIds.first : null;
   String? get currentWord => currentWordPair?.realWord;
   List<String> get selectedPackIds => selectedPacks;
+
+  bool get isFinalRound => currentRound >= maxRounds - 1;
+
+  bool get isGameOver {
+    if (selectedMode == GameMode.survival) {
+      final survivors = players.where((p) => p.isAlive).length;
+      return survivors <= 1 || isFinalRound;
+    }
+    return isFinalRound;
+  }
 
   GameState({
     this.selectedMode = GameMode.classic,
@@ -76,6 +103,7 @@ class GameState {
     this.secondMimicWord,
     this.scores = const {},
     this.currentCategory = '',
+    this.roundOutcomes = const [],
   });
 
   GameState copyWith({
@@ -92,6 +120,7 @@ class GameState {
     String? secondMimicWord,
     Map<String, int>? scores,
     String? currentCategory,
+    List<RoundOutcome>? roundOutcomes,
   }) {
     return GameState(
       selectedMode: selectedMode ?? this.selectedMode,
@@ -107,6 +136,7 @@ class GameState {
       secondMimicWord: secondMimicWord ?? this.secondMimicWord,
       scores: scores ?? this.scores,
       currentCategory: currentCategory ?? this.currentCategory,
+      roundOutcomes: roundOutcomes ?? this.roundOutcomes,
     );
   }
 
@@ -138,13 +168,14 @@ class GameStateNotifier extends StateNotifier<GameState> {
     state = state.copyWith(selectedPacks: ids);
   }
 
-  void addPlayer(String name, int color) {
+  void addPlayer(String name, int color, {String? profileId}) {
     if (state.players.length >= 8) return;
     
     final newPlayer = Player(
       id: DateTime.now().millisecondsSinceEpoch.toString() + state.players.length.toString(),
       name: name,
       color: color,
+      profileId: profileId,
     );
     
     state = state.copyWith(
@@ -345,6 +376,12 @@ class GameStateNotifier extends StateNotifier<GameState> {
     );
   }
 
+  void addRoundOutcome(RoundOutcome outcome) {
+    state = state.copyWith(
+      roundOutcomes: [...state.roundOutcomes, outcome],
+    );
+  }
+
   void restartRound() {
     state = state.copyWith(
       currentRound: 0,
@@ -357,6 +394,7 @@ class GameStateNotifier extends StateNotifier<GameState> {
       players: state.players.map((p) => p.copyWith(isAlive: true, isGhost: false, suspicion: 0.0)).toList(),
       eliminatedPlayers: const [],
       ghostPlayers: const [],
+      roundOutcomes: const [],
     );
   }
 
@@ -375,6 +413,7 @@ class GameStateNotifier extends StateNotifier<GameState> {
       secondMimicWord: null,
       currentCategory: '',
       players: state.players.map((p) => p.copyWith(isAlive: true, isGhost: false, suspicion: 0.0)).toList(),
+      roundOutcomes: const [],
     );
   }
 
