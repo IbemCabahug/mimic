@@ -16,6 +16,7 @@ class MimicGame extends StatelessWidget {
   static GlobalKey<NavigatorState> get navigatorKey => router.navigatorKey;
 
   // Game routes (forwarded to AppRouter for backward compatibility)
+  static const String loadingRoute = router.AppRouter.loadingRoute;
   static const String homeRoute = router.AppRouter.homeRoute;
   static const String modeSelectRoute = router.AppRouter.modeSelectRoute;
   static const String playerSetupRoute = router.AppRouter.playerSetupRoute;
@@ -97,7 +98,7 @@ class _VaultConcealWrapperState extends ConsumerState<_VaultConcealWrapper> {
           debugShowCheckedModeBanner: false,
           theme: HorrorTheme.themeData,
           themeMode: ThemeMode.dark, // Keep theme consistently in dark horror mode
-          initialRoute: MimicGame.homeRoute,
+          initialRoute: MimicGame.loadingRoute,
           onGenerateRoute: router.AppRouter.onGenerateRoute,
           navigatorObservers: [
             ref.watch(router.networkNavigatorObserverProvider),

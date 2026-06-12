@@ -75,6 +75,15 @@ Future<void> pumpFrames(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 500));
 }
 
+/// Pump past the initial LoadingScreen 2-second delay.
+Future<void> pumpBootSequence(WidgetTester tester) async {
+  await tester.pump(); // build LoadingScreen
+  await tester.pump(const Duration(seconds: 2)); // elapse LoadingScreen timer
+  await tester.pump(); // process pushReplacement
+  await tester.pump(const Duration(milliseconds: 500)); // route transition
+  await tester.pump(); // finalize route disposal and unmount LoadingScreen
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Test Entry Point
 // ═══════════════════════════════════════════════════════════════════════════
@@ -136,7 +145,7 @@ void main() {
     );
 
     await tester.pumpWidget(buildIntegrationApp(container));
-    await pumpFrames(tester);
+    await pumpBootSequence(tester);
 
     // Navigate into the Vault (Unlock)
     await fakeCrypto.initialize('1234');
@@ -178,7 +187,7 @@ void main() {
     );
 
     await tester.pumpWidget(buildIntegrationApp(container));
-    await pumpFrames(tester);
+    await pumpBootSequence(tester);
 
     // Unlock the vault
     await fakeCrypto.initialize('1234');
@@ -207,7 +216,7 @@ void main() {
     );
 
     await tester.pumpWidget(buildIntegrationApp(container));
-    await pumpFrames(tester);
+    await pumpBootSequence(tester);
 
     // Normal game screen is open, vault is locked
     expect(fakeCrypto.isUnlocked, isFalse);
@@ -236,7 +245,7 @@ void main() {
     );
 
     await tester.pumpWidget(buildIntegrationApp(container));
-    await pumpFrames(tester);
+    await pumpBootSequence(tester);
 
     // Unlock and navigate to vault
     await fakeCrypto.initialize('1234');
@@ -276,7 +285,7 @@ void main() {
     );
 
     await tester.pumpWidget(buildIntegrationApp(container));
-    await pumpFrames(tester);
+    await pumpBootSequence(tester);
 
     await fakeCrypto.initialize('1234');
     expect(fakeCrypto.isUnlocked, isTrue);
@@ -305,7 +314,7 @@ void main() {
     );
 
     await tester.pumpWidget(buildIntegrationApp(container));
-    await pumpFrames(tester);
+    await pumpBootSequence(tester);
 
     await fakeCrypto.initialize('1234');
     expect(fakeCrypto.isUnlocked, isTrue);
@@ -333,7 +342,7 @@ void main() {
     );
 
     await tester.pumpWidget(buildIntegrationApp(container));
-    await pumpFrames(tester);
+    await pumpBootSequence(tester);
 
     // 1. Open Vault
     await fakeCrypto.initialize('1234');

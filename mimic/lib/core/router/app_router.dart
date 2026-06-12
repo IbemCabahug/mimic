@@ -20,6 +20,7 @@ import 'package:mimic/game/screens/tutorial_screen.dart';
 import 'package:mimic/game/screens/player_profile_screen.dart';
 import 'package:mimic/game/screens/leaderboard_screen.dart';
 import 'package:mimic/game/screens/admin_panel_screen.dart';
+import 'package:mimic/core/screens/loading_screen.dart';
 import 'package:mimic/vault/screens/pin_screen.dart';
 import 'package:mimic/vault/screens/vault_home_screen.dart';
 import 'package:mimic/vault/screens/photo_vault_screen.dart';
@@ -56,6 +57,7 @@ final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 /// Application routing map and dynamic route generator.
 class AppRouter {
   // Game route names
+  static const String loadingRoute = 'loading';
   static const String homeRoute = '/';
   static const String modeSelectRoute = '/mode-select';
   static const String playerSetupRoute = '/player-setup';
@@ -100,6 +102,11 @@ class AppRouter {
 
     switch (settings.name) {
       // ─── Game Screens ──────────────────────────────────────────────────────
+      case loadingRoute:
+        return MaterialPageRoute(
+          builder: (_) => const LoadingScreen(),
+          settings: settings,
+        );
       case homeRoute:
         return MaterialPageRoute(
           builder: (_) => const HomeScreen(),
