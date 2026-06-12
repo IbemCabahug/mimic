@@ -5,11 +5,13 @@
              so only LauncherAlias (controlled by runtime code) appears in launcher -->
         <activity
             android:name=".MainActivity"
-            tools:node="merge"
-            tools:replace="android:enabled">
+            tools:node="merge">
             <intent-filter
                 android:autoVerify="true"
-                tools:node="remove" />
+                tools:node="remove">
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
         </activity>
     </application>
 </manifest>
