@@ -26,6 +26,7 @@ class VaultCrypto extends ChangeNotifier {
   static const int _pbkdf2Iterations = 100000;
   static const String _storageKeySalt = 'vault_salt';
   static const String _storageKeyPinHash = 'vault_pin_hash';
+  static const List<int> _mediaMagic = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x76, 0x31, 0x00]; // "MVKEYv1\0"
 
   Uint8List? _derivedKey;
   bool _isUnlocked = false;
@@ -241,17 +242,32 @@ class VaultCrypto extends ChangeNotifier {
 
   Future<Uint8List> encryptSystem(Uint8List plaintext) async {
     if (plaintext.isEmpty) return Uint8List(0);
-    final key = await _getSystemKey();
-    final iv = _generateSecureRandomBytes(_ivLength);
-    final cipher = _createCipher(key, iv, true);
-    final encrypted = cipher.process(plaintext);
-    final result = Uint8List(iv.length + encrypted.length);
-    result.setRange(0, iv.length, iv);
-    result.setRange(iv.length, result.length, encrypted);
+    final encrypted = encrypt(plaintext);
+    final result = Uint8List(_mediaMagic.length + encrypted.length);
+    result.setRange(0, _mediaMagic.length, _mediaMagic);
+    result.setRange(_mediaMagic.length, result.length, encrypted);
     return result;
   }
 
+  bool isLegacySystemBlob(Uint8List cipher) {
+    if (cipher.length < _mediaMagic.length) return true;
+    for (int i = 0; i < _mediaMagic.length; i++) {
+      if (cipher[i] != _mediaMagic[i]) return true;
+    }
+    return false;
+  }
+
   Future<Uint8List> decryptSystem(Uint8List ciphertext) async {
+    if (ciphertext.isEmpty) return Uint8List(0);
+    if (!isLegacySystemBlob(ciphertext)) {
+      final actualCiphertext = ciphertext.sublist(_mediaMagic.length);
+      return decrypt(actualCiphertext);
+    } else {
+      return _decryptLegacySystem(ciphertext);
+    }
+  }
+
+  Future<Uint8List> _decryptLegacySystem(Uint8List ciphertext) async {
     if (ciphertext.isEmpty) return Uint8List(0);
     final key = await _getSystemKey();
     if (ciphertext.length < _ivLength) throw Exception('Invalid ciphertext');

@@ -37,14 +37,14 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
   }
 
   void _inputDigit(String digit) {
-    if (_isLoading || _currentInput.length >= 6) return;
+    if (_isLoading || _currentInput.length >= 8) return;
 
     setState(() {
       _currentInput += digit;
       _error = null;
     });
 
-    if (_currentInput.length == 6) {
+    if (_currentInput.length == 8) {
       Future.delayed(const Duration(milliseconds: 200), () {
         if (!mounted) return;
         _handlePinSubmission();
@@ -249,7 +249,7 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
                   child: Text(
                     _isConfirmStep
                         ? 'Re-enter your new PIN to confirm'
-                        : 'Choose a new 6-digit PIN for your vault',
+                        : 'Choose a new 8-digit PIN for your vault',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontFamily: 'Inter',
@@ -269,7 +269,7 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
                   },
                   child: PinDotIndicator(
                     filledCount: _currentInput.length,
-                    totalDots: 6,
+                    totalDots: 8,
                   ),
                 ),
                 if (_error != null) ...[

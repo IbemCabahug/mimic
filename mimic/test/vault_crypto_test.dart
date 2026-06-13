@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/core/services/platform_service.dart';
+import 'package:pointycastle/export.dart';
 
 class FakePlatformService implements PlatformService {
   final Map<String, String> _store = {};
@@ -87,6 +88,74 @@ void main() {
 
       vaultCrypto.lock();
       expect(vaultCrypto.isUnlocked, isFalse);
+    });
+
+    test('Phase B: encryptSystem -> decryptSystem round-trips a payload', () async {
+      final vaultCrypto = VaultCrypto(FakePlatformService());
+      await vaultCrypto.initialize('1234');
+      final payload = Uint8List.fromList([10, 20, 30]);
+      final cipher = await vaultCrypto.encryptSystem(payload);
+      final decrypted = await vaultCrypto.decryptSystem(cipher);
+      expect(decrypted, equals(payload));
+    });
+
+    test('Phase B: CROSS-INSTALL simulate fresh install decrypts media', () async {
+      final oldService = FakePlatformService();
+      final oldCrypto = VaultCrypto(oldService);
+      await oldCrypto.initialize('1234');
+      final recoveryWords = [
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'about'
+      ];
+      await oldCrypto.storeRecoveryBlob(recoveryWords);
+      
+      final payload = Uint8List.fromList([10, 20, 30]);
+      final cipher = await oldCrypto.encryptSystem(payload);
+
+      // Simulate a fresh install: new service (no old system_key in storage), 
+      // but master key is recovered.
+      final newService = FakePlatformService();
+      final blobStr = await oldService.secureRead('recovery_blob');
+      final saltStr = await oldService.secureRead('recovery_salt');
+      await newService.secureWrite('recovery_blob', blobStr!);
+      await newService.secureWrite('recovery_salt', saltStr!);
+
+      final newCrypto = VaultCrypto(newService);
+      final recovered = await newCrypto.recoverWithPhrase(recoveryWords);
+      expect(recovered, isTrue);
+
+      final decrypted = await newCrypto.decryptSystem(cipher);
+      expect(decrypted, equals(payload));
+    });
+
+    test('Phase B: LEGACY COMPAT decrypts old system_key blob', () async {
+      final oldService = FakePlatformService();
+      // Emulate the old encryptSystem directly to craft a legacy blob
+      final systemKeyBytes = Uint8List.fromList(List.filled(32, 7)); // dummy key
+      await oldService.secureWrite('system_key', base64Encode(systemKeyBytes));
+
+      final payload = Uint8List.fromList([99, 88, 77]);
+      final iv = Uint8List.fromList(List.filled(16, 1));
+      
+      final cipher = CBCBlockCipher(AESEngine());
+      final paddedCipher = PaddedBlockCipherImpl(PKCS7Padding(), cipher);
+      paddedCipher.init(
+        true,
+        PaddedBlockCipherParameters(ParametersWithIV(KeyParameter(systemKeyBytes), iv), null),
+      );
+      final encrypted = paddedCipher.process(payload);
+      
+      final legacyBlob = Uint8List(iv.length + encrypted.length);
+      legacyBlob.setRange(0, iv.length, iv);
+      legacyBlob.setRange(iv.length, legacyBlob.length, encrypted);
+
+      // Now use the NEW vault crypto
+      final vaultCrypto = VaultCrypto(oldService); // Same service so it reads system_key
+      await vaultCrypto.initialize('1234');
+      
+      final decrypted = await vaultCrypto.decryptSystem(legacyBlob);
+      expect(decrypted, equals(payload));
     });
   });
 }

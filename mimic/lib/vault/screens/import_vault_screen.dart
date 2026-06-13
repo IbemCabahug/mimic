@@ -169,7 +169,7 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
       if (success) {
         if (mounted) {
           Navigator.of(context).pushNamedAndRemoveUntil(
-            '/vault-reset-pin',
+            '/vault-pin',
             (route) => false,
           );
         }
@@ -193,7 +193,7 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Import failed: $e',
+              e.toString().replaceAll('Exception: ', ''),
               style: const TextStyle(fontFamily: 'Inter'),
             ),
             backgroundColor: VaultColors.error,

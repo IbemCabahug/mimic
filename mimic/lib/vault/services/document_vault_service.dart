@@ -159,7 +159,21 @@ class DocumentVaultService {
   Future<Uint8List?> getDocumentBytes(String id) async {
     final encrypted = await _platformService.readEncryptedFile(id);
     if (encrypted == null) return null;
-    return await _crypto.decryptSystem(encrypted);
+    
+    Uint8List? decrypted;
+    try {
+      decrypted = await _crypto.decryptSystem(encrypted);
+    } catch (e) {
+      return null;
+    }
+
+    if (_crypto.isLegacySystemBlob(encrypted)) {
+      try {
+        final reEncrypted = await _crypto.encryptSystem(decrypted);
+        await _platformService.saveEncryptedFile(id, reEncrypted);
+      } catch (_) {}
+    }
+    return decrypted;
   }
 
   Future<String?> getTextNote(String id) async {

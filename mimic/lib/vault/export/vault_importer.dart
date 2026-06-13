@@ -5,13 +5,18 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pointycastle/export.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import '../../core/services/platform_service.dart';
+import '../services/file_vault_service.dart';
+import '../services/video_vault_service.dart';
+import '../services/notes_service.dart';
 
 import '../crypto/recovery_phrase.dart';
 import '../crypto/vault_crypto.dart';
@@ -94,10 +99,13 @@ class VaultImporter {
   /// If successful, writes all encrypted vault data back to local storage and
   /// secure storage/databases, and loads the master key into [VaultCrypto].
   static Future<bool> importWithPhrase(File file, List<String> recoveryWords) async {
+
     final validationResult = await validateFile(file);
     if (!validationResult.isValid) {
       return false;
     }
+
+    bool phraseVerified = false;
 
     try {
       final bytes = await file.readAsBytes();
@@ -132,13 +140,15 @@ class VaultImporter {
       Uint8List masterKey;
       try {
         masterKey = paddedCipher.process(encryptedMasterKey);
-      } catch (_) {
-        return false; // Decryption failed: wrong phrase
+      } catch (e) {
+        return false; // Wrong phrase
       }
 
       if (masterKey.length != 32) {
         return false; // Invalid master key length: wrong phrase
       }
+
+      phraseVerified = true;
 
       // ─── Phrase verified successfully. Restoring data ─────────────────
 
@@ -146,6 +156,12 @@ class VaultImporter {
       const storage = FlutterSecureStorage(
         aOptions: AndroidOptions(encryptedSharedPreferences: true),
       );
+      
+      final platformService = kIsWeb ? WebPlatformService() : AndroidPlatformService();
+      final fileService = FileVaultService(platformService, VaultCrypto.instance);
+      final videoService = VideoVaultService(platformService, VaultCrypto.instance);
+      final notesService = NotesService(platformService, VaultCrypto.instance);
+      
       final List<String> oldFileIds = [];
       if (kIsWeb) {
         final oldPhotosMeta = await storage.read(key: 'vault_photos_meta');
@@ -155,24 +171,16 @@ class VaultImporter {
         oldFileIds.addAll(_extractIds(oldVideosMeta));
         oldFileIds.addAll(_extractIds(oldDocsMeta));
       } else {
-        final filesDbPath = p.join(await getDatabasesPath(), 'vault_files.db');
-        if (await File(filesDbPath).exists()) {
-          final db = await openDatabase(filesDbPath);
-          try {
-            final maps = await db.query('photos');
-            oldFileIds.addAll(maps.map((m) => m['id'] as String));
-          } catch (_) {}
-          await db.close();
-        }
-        final videosDbPath = p.join(await getDatabasesPath(), 'vault_videos.db');
-        if (await File(videosDbPath).exists()) {
-          final db = await openDatabase(videosDbPath);
-          try {
-            final maps = await db.query('videos');
-            oldFileIds.addAll(maps.map((m) => m['id'] as String));
-          } catch (_) {}
-          await db.close();
-        }
+        try {
+          final photos = await fileService.getAllPhotos();
+          oldFileIds.addAll(photos.map((p) => p.id));
+        } catch (_) {}
+        
+        try {
+          final videos = await videoService.getAllVideos();
+          oldFileIds.addAll(videos.map((v) => v.id));
+        } catch (_) {}
+        
         final oldDocsMeta = await storage.read(key: 'vault_documents_meta');
         oldFileIds.addAll(_extractIds(oldDocsMeta));
       }
@@ -187,12 +195,17 @@ class VaultImporter {
 
       // 2. Restore new encrypted files to disk
       if (payload.containsKey('encrypted_files')) {
+        final vaultDir = Directory('${appDir.path}/vault_files');
+        if (!await vaultDir.exists()) {
+          await vaultDir.create(recursive: true);
+        }
+        
         final encryptedFiles = payload['encrypted_files'] as Map<String, dynamic>;
         for (final entry in encryptedFiles.entries) {
           final id = entry.key;
           final base64Data = entry.value as String;
           final fileBytes = base64Decode(base64Data);
-          final f = File('${appDir.path}/vault_files/$id');
+          final f = File('${vaultDir.path}/$id');
           await f.writeAsBytes(fileBytes, flush: true);
         }
       }
@@ -211,7 +224,13 @@ class VaultImporter {
       for (final key in secureKeys) {
         final val = payload[key] as String?;
         if (val != null) {
-          await storage.write(key: key, value: val);
+          try {
+            await storage.write(key: key, value: val);
+            debugPrint('IMPORT: WRITE $key OK');
+          } catch (e) {
+            debugPrint('IMPORT: WRITE $key FAILED: ${e.runtimeType}: $e');
+            rethrow;
+          }
           if (key == 'vault_documents_meta' && !kIsWeb) {
             final prefs = await SharedPreferences.getInstance();
             await prefs.setString(key, val);
@@ -231,99 +250,67 @@ class VaultImporter {
         final photosMetaStr = payload['vault_photos_meta'] as String?;
         if (photosMetaStr != null && photosMetaStr.isNotEmpty) {
           final List<dynamic> decodedPhotos = jsonDecode(photosMetaStr);
-          final dbPath = p.join(await getDatabasesPath(), 'vault_files.db');
-          final db = await openDatabase(
-            dbPath,
-            version: 1,
-            onCreate: (db, version) async {
-              await db.execute('''
-                CREATE TABLE photos(
-                  id TEXT PRIMARY KEY,
-                  mimeType TEXT,
-                  size INTEGER,
-                  createdAt TEXT
-                )
-              ''');
-            },
-          );
-          await db.delete('photos');
-          for (final photo in decodedPhotos) {
-            final map = Map<String, dynamic>.from(photo);
-            await db.insert('photos', map, conflictAlgorithm: ConflictAlgorithm.replace);
-          }
-          await db.close();
+          await fileService.restorePhotos(decodedPhotos);
         }
 
         // Restore videos db
         final videosMetaStr = payload['vault_videos_meta'] as String?;
         if (videosMetaStr != null && videosMetaStr.isNotEmpty) {
           final List<dynamic> decodedVideos = jsonDecode(videosMetaStr);
-          final dbPath = p.join(await getDatabasesPath(), 'vault_videos.db');
-          final db = await openDatabase(
-            dbPath,
-            version: 1,
-            onCreate: (db, version) async {
-              await db.execute('''
-                CREATE TABLE videos(
-                  id TEXT PRIMARY KEY,
-                  mimeType TEXT,
-                  size INTEGER,
-                  durationS INTEGER,
-                  createdAt TEXT,
-                  originalName TEXT
-                )
-              ''');
-            },
-          );
-          await db.delete('videos');
-          for (final video in decodedVideos) {
-            final map = Map<String, dynamic>.from(video);
-            await db.insert('videos', map, conflictAlgorithm: ConflictAlgorithm.replace);
-          }
-          await db.close();
+          await videoService.restoreVideos(decodedVideos);
         }
 
         // Restore notes db
         final notesStr = payload['vault_notes'] as String?;
         if (notesStr != null && notesStr.isNotEmpty) {
           final List<dynamic> decodedNotes = jsonDecode(notesStr);
-          final dbPath = p.join(await getDatabasesPath(), 'vault_notes.db');
-          final db = await openDatabase(
-            dbPath,
-            version: 1,
-            onCreate: (db, version) async {
-              await db.execute('''
-                CREATE TABLE notes(
-                  id TEXT PRIMARY KEY,
-                  title TEXT,
-                  encryptedBody TEXT,
-                  created_at TEXT,
-                  updated_at TEXT
-                )
-              ''');
-            },
-          );
-          await db.delete('notes');
-          for (final note in decodedNotes) {
-            final map = Map<String, dynamic>.from(note);
-            final dbMap = {
-              'id': map['id'],
-              'title': map['title'],
-              'encryptedBody': map['encryptedBody'],
-              'created_at': map['createdAt'],
-              'updated_at': map['updatedAt'],
-            };
-            await db.insert('notes', dbMap, conflictAlgorithm: ConflictAlgorithm.replace);
-          }
-          await db.close();
+          await notesService.restoreNotes(decodedNotes);
         }
       }
 
       // 5. Load derived key into VaultCrypto singleton
       final cryptoSuccess = await VaultCrypto.instance.recoverWithPhrase(recoveryWords);
+      // Validate blob existence
+      final missingIds = <String>[];
+      final vaultDir = Directory(p.join((await getApplicationDocumentsDirectory()).path, 'vault_files'));
+      
+      List<String> extractIds(String? jsonStr) {
+        if (jsonStr == null || jsonStr.isEmpty) return [];
+        try {
+          final decoded = jsonDecode(jsonStr) as List<dynamic>;
+          return decoded.map((e) => (e as Map)['id'] as String?).whereType<String>().toList();
+        } catch (_) { return []; }
+      }
+      
+      final allExpectedIds = [
+        ...extractIds(payload['vault_photos_meta'] as String?),
+        ...extractIds(payload['vault_videos_meta'] as String?),
+      ];
+      
+      for (final id in allExpectedIds) {
+        if (!File('${vaultDir.path}/$id').existsSync()) {
+          missingIds.add(id);
+        }
+      }
+
+      // STEP 4: explicitly write vault_setup_completed flag
+      try {
+        await storage.write(key: 'vault_setup_completed', value: 'true');
+      } catch (_) {}
+
+      if (missingIds.isNotEmpty) {
+        throw Exception('Restore incomplete: ${missingIds.length} media file(s) could not be restored');
+      }
+
       return cryptoSuccess;
-    } catch (_) {
-      return false;
+    } catch (e, st) {
+      // Since we got past the phrase check, any other error shouldn't report "Incorrect phrase".
+      if (!phraseVerified) return false;
+      debugPrint('RESTORE FAIL: $e');
+      if (e is Exception && e.toString().contains('Restore incomplete')) {
+        throw e;
+      }
+      throw Exception('Restore failed: $e');
     }
   }
 

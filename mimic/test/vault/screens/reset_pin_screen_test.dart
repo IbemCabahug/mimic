@@ -71,14 +71,14 @@ void main() {
     // Verify initial layout
     expect(find.text('Set New PIN'), findsOneWidget);
     expect(find.text('Create New PIN'), findsOneWidget);
-    expect(find.text('Choose a new 6-digit PIN for your vault'), findsOneWidget);
+    expect(find.text('Choose a new 8-digit PIN for your vault'), findsOneWidget);
     
     // Find PinDotIndicator
     final dotFinder = find.byType(PinDotIndicator);
     expect(dotFinder, findsOneWidget);
     PinDotIndicator indicator = tester.widget<PinDotIndicator>(dotFinder);
     expect(indicator.filledCount, equals(0));
-    expect(indicator.totalDots, equals(6));
+    expect(indicator.totalDots, equals(8));
 
     // Tap digits: 1, 2, 3
     await tester.tap(find.text('1'));
@@ -103,8 +103,8 @@ void main() {
     indicator = tester.widget<PinDotIndicator>(dotFinder);
     expect(indicator.filledCount, equals(0));
 
-    // Input first PIN: 1, 1, 1, 1, 1, 1
-    for (int i = 0; i < 6; i++) {
+    // Input first PIN: 1, 1, 1, 1, 1, 1, 1, 1
+    for (int i = 0; i < 8; i++) {
       await tester.tap(find.text('1'));
       await tester.pump();
     }
@@ -117,8 +117,8 @@ void main() {
     indicator = tester.widget<PinDotIndicator>(dotFinder);
     expect(indicator.filledCount, equals(0));
 
-    // Enter incorrect PIN to confirm: 1, 1, 1, 1, 1, 2
-    for (int i = 0; i < 5; i++) {
+    // Enter incorrect PIN to confirm: 1, 1, 1, 1, 1, 1, 1, 2
+    for (int i = 0; i < 7; i++) {
       await tester.tap(find.text('1'));
       await tester.pump();
     }
@@ -129,20 +129,20 @@ void main() {
 
     // Verify error and reset to Step 1
     expect(find.text('PINs do not match. Please try again.'), findsOneWidget);
-    expect(find.text('Choose a new 6-digit PIN for your vault'), findsOneWidget);
+    expect(find.text('Choose a new 8-digit PIN for your vault'), findsOneWidget);
     indicator = tester.widget<PinDotIndicator>(dotFinder);
     expect(indicator.filledCount, equals(0));
 
-    // Enter first PIN again: 2, 2, 2, 2, 2, 2
-    for (int i = 0; i < 6; i++) {
+    // Enter first PIN again: 2, 2, 2, 2, 2, 2, 2, 2
+    for (int i = 0; i < 8; i++) {
       await tester.tap(find.text('2'));
       await tester.pump();
     }
     await tester.pump(const Duration(milliseconds: 250));
     await tester.pumpAndSettle();
 
-    // Confirm with correct PIN: 2, 2, 2, 2, 2, 2
-    for (int i = 0; i < 6; i++) {
+    // Confirm with correct PIN: 2, 2, 2, 2, 2, 2, 2, 2
+    for (int i = 0; i < 8; i++) {
       await tester.tap(find.text('2'));
       await tester.pump();
     }
@@ -153,7 +153,7 @@ void main() {
     expect(find.text('HOME_SCREEN'), findsOneWidget);
     
     // Verify changes in storage
-    expect(fakePlatform.store['vault_pin'], equals('222222'));
+    expect(fakePlatform.store['vault_pin'], equals('22222222'));
     expect(fakePlatform.store['wrong_attempts'], equals('0'));
     expect(fakePlatform.store['recovery_blob'], isNotNull);
   });

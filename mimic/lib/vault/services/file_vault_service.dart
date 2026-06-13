@@ -86,10 +86,24 @@ class FileVaultService {
     await _platformService.saveEncryptedFile(filename, encrypted);
   }
 
-  Future<Uint8List?> readFile(String filename) async {
-    final encrypted = await _platformService.readEncryptedFile(filename);
+  Future<Uint8List?> readFile(String id) async {
+    final encrypted = await _platformService.readEncryptedFile(id);
     if (encrypted == null) return null;
-    return await _crypto.decryptSystem(encrypted);
+    
+    Uint8List? decrypted;
+    try {
+      decrypted = await _crypto.decryptSystem(encrypted);
+    } catch (e) {
+      return null;
+    }
+
+    if (_crypto.isLegacySystemBlob(encrypted)) {
+      try {
+        final reEncrypted = await _crypto.encryptSystem(decrypted);
+        await _platformService.saveEncryptedFile(id, reEncrypted);
+      } catch (_) {}
+    }
+    return decrypted;
   }
 
   Future<String> savePhoto(Uint8List bytes, String mimeType, {String? originalName}) async {
@@ -114,7 +128,21 @@ class FileVaultService {
   Future<Uint8List?> getPhoto(String id) async {
     final encrypted = await _platformService.readEncryptedFile(id);
     if (encrypted == null) return null;
-    return await _crypto.decryptSystem(encrypted);
+
+    Uint8List? decrypted;
+    try {
+      decrypted = await _crypto.decryptSystem(encrypted);
+    } catch (e) {
+      return null;
+    }
+
+    if (_crypto.isLegacySystemBlob(encrypted)) {
+      try {
+        final reEncrypted = await _crypto.encryptSystem(decrypted);
+        await _platformService.saveEncryptedFile(id, reEncrypted);
+      } catch (_) {}
+    }
+    return decrypted;
   }
 
   Future<void> deletePhoto(String id) async {
@@ -133,8 +161,18 @@ class FileVaultService {
     }
 
     await _ensureDb();
-    final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
-    return maps.map((map) => PhotoMeta.fromMap(map)).toList();
+    try {
+      final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
+      return maps.map((map) => PhotoMeta.fromMap(map)).toList();
+    } catch (e) {
+      if (e is DatabaseException && e.toString().contains('database_closed')) {
+        _db = null;
+        await _ensureDb();
+        final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
+        return maps.map((map) => PhotoMeta.fromMap(map)).toList();
+      }
+      rethrow;
+    }
   }
 
   Future<void> _saveMeta(PhotoMeta meta) async {
@@ -250,6 +288,25 @@ class FileVaultService {
       filename: originalName,
     );
     await deletePhoto(id);
+  }
+
+  Future<void> restorePhotos(List<dynamic> decodedPhotos) async {
+    if (kIsWeb) return;
+    await _ensureDb();
+    await _db!.execute('''
+      CREATE TABLE IF NOT EXISTS $_tableName(
+        id TEXT PRIMARY KEY,
+        mimeType TEXT,
+        size INTEGER,
+        createdAt TEXT,
+        originalName TEXT
+      )
+    ''');
+    await _db!.delete(_tableName);
+    for (final photo in decodedPhotos) {
+      final map = Map<String, dynamic>.from(photo);
+      await _db!.insert(_tableName, map, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
   }
 }
 

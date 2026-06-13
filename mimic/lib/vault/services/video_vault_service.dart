@@ -101,7 +101,21 @@ class VideoVaultService {
   Future<Uint8List?> getVideo(String id) async {
     final encrypted = await _platformService.readEncryptedFile(id);
     if (encrypted == null) return null;
-    return await _crypto.decryptSystem(encrypted);
+
+    Uint8List? decrypted;
+    try {
+      decrypted = await _crypto.decryptSystem(encrypted);
+    } catch (e) {
+      return null;
+    }
+
+    if (_crypto.isLegacySystemBlob(encrypted)) {
+      try {
+        final reEncrypted = await _crypto.encryptSystem(decrypted);
+        await _platformService.saveEncryptedFile(id, reEncrypted);
+      } catch (_) {}
+    }
+    return decrypted;
   }
 
   Future<void> deleteVideo(String id) async {
@@ -120,8 +134,18 @@ class VideoVaultService {
     }
 
     await _ensureDb();
-    final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
-    return maps.map((map) => VideoMeta.fromMap(map)).toList();
+    try {
+      final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
+      return maps.map((map) => VideoMeta.fromMap(map)).toList();
+    } catch (e) {
+      if (e is DatabaseException && e.toString().contains('database_closed')) {
+        _db = null;
+        await _ensureDb();
+        final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
+        return maps.map((map) => VideoMeta.fromMap(map)).toList();
+      }
+      rethrow;
+    }
   }
 
   Future<void> _saveMeta(VideoMeta meta) async {
@@ -227,6 +251,26 @@ class VideoVaultService {
       if (await tempFile.exists()) {
         await tempFile.delete();
       }
+    }
+  }
+
+  Future<void> restoreVideos(List<dynamic> decodedVideos) async {
+    if (kIsWeb) return;
+    await _ensureDb();
+    await _db!.execute('''
+      CREATE TABLE IF NOT EXISTS $_tableName(
+        id TEXT PRIMARY KEY,
+        mimeType TEXT,
+        size INTEGER,
+        durationS INTEGER,
+        createdAt TEXT,
+        originalName TEXT
+      )
+    ''');
+    await _db!.delete(_tableName);
+    for (final video in decodedVideos) {
+      final map = Map<String, dynamic>.from(video);
+      await _db!.insert(_tableName, map, conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }
 }

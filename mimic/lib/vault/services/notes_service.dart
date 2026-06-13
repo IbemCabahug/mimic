@@ -155,7 +155,19 @@ class NotesService {
     }
 
     await _ensureDb();
-    final maps = await _db!.query('notes', orderBy: 'updated_at DESC');
+    List<Map<String, dynamic>> maps;
+    try {
+      maps = await _db!.query('notes', orderBy: 'updated_at DESC');
+    } catch (e) {
+      if (e is DatabaseException && e.toString().contains('database_closed')) {
+        _db = null;
+        await _ensureDb();
+        maps = await _db!.query('notes', orderBy: 'updated_at DESC');
+      } else {
+        rethrow;
+      }
+    }
+
     return maps.map((map) {
       String decrypted = '';
       try {
@@ -176,6 +188,32 @@ class NotesService {
     if (raw == null || raw.isEmpty) return [];
     final decoded = jsonDecode(raw);
     return List<Map<String, dynamic>>.from(decoded);
+  }
+
+  Future<void> restoreNotes(List<dynamic> decodedNotes) async {
+    if (kIsWeb) return;
+    await _ensureDb();
+    await _db!.execute('''
+      CREATE TABLE IF NOT EXISTS notes(
+        id TEXT PRIMARY KEY,
+        title TEXT,
+        encryptedBody TEXT,
+        created_at TEXT,
+        updated_at TEXT
+      )
+    ''');
+    await _db!.delete('notes');
+    for (final note in decodedNotes) {
+      final map = Map<String, dynamic>.from(note);
+      final dbMap = {
+        'id': map['id'],
+        'title': map['title'],
+        'encryptedBody': map['encryptedBody'],
+        'created_at': map['createdAt'],
+        'updated_at': map['updatedAt'],
+      };
+      await _db!.insert('notes', dbMap, conflictAlgorithm: ConflictAlgorithm.replace);
+    }
   }
 }
 

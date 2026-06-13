@@ -10,6 +10,7 @@ import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/export/vault_exporter.dart';
 import 'package:mimic/vault/export/vault_importer.dart';
+import 'package:mimic/vault/services/file_vault_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -539,6 +540,213 @@ void main() {
       expect(restoredPhotos.length, equals(1));
       expect(restoredPhotos[0]['id'], equals('photo_sim'));
       expect(await photoFile.exists(), isTrue);
+    });
+
+    test('FRESH install simulation: vault_files directory does not exist on import', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService);
+      await crypto.initialize('123456');
+      await crypto.storeRecoveryBlob(recoveryWords);
+
+      // Add a real photo via FileVaultService to get full live schema (incl. originalName)
+      final fileService = FileVaultService(platformService, crypto);
+      final photoBytes = Uint8List.fromList(utf8.encode('real_photo_bytes'));
+      final photoId = await fileService.savePhoto(
+        photoBytes,
+        'image/jpeg',
+        originalName: 'test.jpg',
+      );
+
+      final exportedFile = await VaultExporter.buildExportFile();
+      expect(await exportedFile.exists(), isTrue);
+
+      // Simulate FRESH install: wipe storage, delete database, delete vault_files dir
+      secureStorageData.clear();
+      SharedPreferences.setMockInitialValues({});
+      final photosDbPath = '$dbDirPath/vault_files.db';
+      if (await File(photosDbPath).exists()) await File(photosDbPath).delete();
+      final vaultFilesDir = Directory('$appDocsPath/vault_files');
+      if (await vaultFilesDir.exists()) await vaultFilesDir.delete(recursive: true);
+
+      expect(await vaultFilesDir.exists(), isFalse);
+
+      VaultCrypto(AndroidPlatformService());
+
+      // Perform import
+      final importSuccess = await VaultImporter.importWithPhrase(exportedFile, recoveryWords);
+      expect(importSuccess, isTrue, reason: 'Import should succeed');
+
+      // Verify the live service can read the restored metadata
+      final newFileService = FileVaultService(AndroidPlatformService(), VaultCrypto.instance);
+      final photos = await newFileService.getAllPhotos();
+      expect(photos.length, equals(1));
+      expect(photos.first.id, equals(photoId));
+      expect(photos.first.originalName, equals('test.jpg'));
+
+      // Verify blob file was restored
+      final photoFile = File('${vaultFilesDir.path}/$photoId');
+      expect(await photoFile.exists(), isTrue, reason: 'photo file should have been written');
+    });
+
+    test('EXISTING db simulation: DB exists but with NO tables (gating bug reproduction)', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService);
+      await crypto.initialize('123456');
+      await crypto.storeRecoveryBlob(recoveryWords);
+
+      final fileService = FileVaultService(platformService, crypto);
+      final photoBytes = Uint8List.fromList(utf8.encode('real_photo_bytes'));
+      final photoId = await fileService.savePhoto(
+        photoBytes,
+        'image/jpeg',
+        originalName: 'test.jpg',
+      );
+
+      final exportedFile = await VaultExporter.buildExportFile();
+      expect(await exportedFile.exists(), isTrue);
+
+      secureStorageData.clear();
+      SharedPreferences.setMockInitialValues({});
+      final vaultFilesDir = Directory('$appDocsPath/vault_files');
+      if (await vaultFilesDir.exists()) await vaultFilesDir.delete(recursive: true);
+
+      final photosDbPath = '$dbDirPath/vault_files.db';
+      if (await File(photosDbPath).exists()) {
+        await File(photosDbPath).delete();
+      }
+      final emptyDb = await openDatabase(photosDbPath, version: 1);
+      await emptyDb.close();
+
+      VaultCrypto(AndroidPlatformService());
+
+      final importSuccess = await VaultImporter.importWithPhrase(exportedFile, recoveryWords);
+      expect(importSuccess, isTrue, reason: 'Import should succeed');
+
+      final newFileService = FileVaultService(AndroidPlatformService(), VaultCrypto.instance);
+      final photos = await newFileService.getAllPhotos();
+      expect(photos.length, equals(1));
+      expect(photos.first.id, equals(photoId));
+      expect(photos.first.originalName, equals('test.jpg'));
+    });
+
+    test('EXISTING db simulation: DB exists WITH empty table (FileVaultService actual behavior)', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService);
+      await crypto.initialize('123456');
+      await crypto.storeRecoveryBlob(recoveryWords);
+
+      final fileService = FileVaultService(platformService, crypto);
+      final photoBytes = Uint8List.fromList(utf8.encode('real_photo_bytes'));
+      final photoId = await fileService.savePhoto(
+        photoBytes,
+        'image/jpeg',
+        originalName: 'test.jpg',
+      );
+
+      final exportedFile = await VaultExporter.buildExportFile();
+      expect(await exportedFile.exists(), isTrue);
+
+      secureStorageData.clear();
+      SharedPreferences.setMockInitialValues({});
+      final vaultFilesDir = Directory('$appDocsPath/vault_files');
+      if (await vaultFilesDir.exists()) await vaultFilesDir.delete(recursive: true);
+
+      // Create DB WITH the empty schema (which is what FileVaultService would actually leave)
+      final photosDbPath = '$dbDirPath/vault_files.db';
+      if (await File(photosDbPath).exists()) {
+        await File(photosDbPath).delete();
+      }
+      final db = await openDatabase(
+        photosDbPath,
+        version: 1,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE photos(
+              id TEXT PRIMARY KEY,
+              mimeType TEXT,
+              size INTEGER,
+              createdAt TEXT,
+              originalName TEXT
+            )
+          ''');
+        },
+      );
+      await db.close();
+
+      VaultCrypto(AndroidPlatformService());
+
+      final importSuccess = await VaultImporter.importWithPhrase(exportedFile, recoveryWords);
+      expect(importSuccess, isTrue, reason: 'Import should succeed');
+
+      final newFileService = FileVaultService(AndroidPlatformService(), VaultCrypto.instance);
+      final photos = await newFileService.getAllPhotos();
+      expect(photos.length, equals(1));
+      expect(photos.first.id, equals(photoId));
+      expect(photos.first.originalName, equals('test.jpg'));
+    });
+
+    test('SHARED DB HANDLE simulation: database_closed error on getAllPhotos after import', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService);
+      await crypto.initialize('123456');
+      await crypto.storeRecoveryBlob(recoveryWords);
+
+      // (1) Get the SAME FileVaultService the app uses, open its DB
+      final fileService = FileVaultService(platformService, crypto);
+      final photoBytes = Uint8List.fromList(utf8.encode('real_photo_bytes'));
+      final photoId = await fileService.savePhoto(
+        photoBytes,
+        'image/jpeg',
+        originalName: 'test.jpg',
+      );
+      
+      // Ensure the _db handle is cached
+      await fileService.getAllPhotos();
+
+      final exportedFile = await VaultExporter.buildExportFile();
+      expect(await exportedFile.exists(), isTrue);
+
+      secureStorageData.clear();
+      SharedPreferences.setMockInitialValues({});
+      final vaultFilesDir = Directory('$appDocsPath/vault_files');
+      if (await vaultFilesDir.exists()) await vaultFilesDir.delete(recursive: true);
+
+      final photosDbPath = '$dbDirPath/vault_files.db';
+      if (await File(photosDbPath).exists()) {
+        await File(photosDbPath).delete();
+      }
+      final db = await openDatabase(
+        photosDbPath,
+        version: 1,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE photos(
+              id TEXT PRIMARY KEY,
+              mimeType TEXT,
+              size INTEGER,
+              createdAt TEXT,
+              originalName TEXT
+            )
+          ''');
+        },
+      );
+      await db.close();
+
+      VaultCrypto(AndroidPlatformService());
+
+      // (2) Run importWithPhrase
+      final importSuccess = await VaultImporter.importWithPhrase(exportedFile, recoveryWords);
+      expect(importSuccess, isTrue, reason: 'Import should succeed');
+
+      // (3) Call getAllPhotos() AGAIN on that same service instance and assert NO exception
+      try {
+        final photos = await fileService.getAllPhotos();
+        expect(photos.length, equals(1));
+        expect(photos.first.id, equals(photoId));
+        expect(photos.first.originalName, equals('test.jpg'));
+      } catch (e) {
+        fail('Exception thrown on getAllPhotos after import: $e');
+      }
     });
   });
 }
