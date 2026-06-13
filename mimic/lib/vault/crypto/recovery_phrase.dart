@@ -15,9 +15,20 @@ class RecoveryPhrase {
     });
   }
 
+  static String normalizeWord(String w) {
+    var normalized = w.replaceAll(RegExp(r'[\u200B\u200C\u200D\uFEFF]'), '');
+    normalized = normalized.replaceAll(RegExp(r'\s+'), '');
+    return normalized.trim().toLowerCase();
+  }
+
+  static List<String> normalizeWords(List<String> words) {
+    return words.map((w) => normalizeWord(w)).toList();
+  }
+
   /// Joins words with a space separator and derives a 32-byte key using PBKDF2-HMAC-SHA256
   static Uint8List deriveKey(List<String> words, Uint8List salt) {
-    final mnemonic = words.join(' ');
+    final cleanWords = normalizeWords(words);
+    final mnemonic = cleanWords.join(' ');
     final mnemonicBytes = Uint8List.fromList(utf8.encode(mnemonic));
     
     final pbkdf2 = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64));
@@ -28,6 +39,6 @@ class RecoveryPhrase {
 
   /// Returns true if the word exists in kBip39Wordlist
   static bool isValidWord(String word) {
-    return kBip39Wordlist.contains(word.trim().toLowerCase());
+    return kBip39Wordlist.contains(normalizeWord(word));
   }
 }

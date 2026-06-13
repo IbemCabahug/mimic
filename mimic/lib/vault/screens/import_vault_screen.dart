@@ -20,6 +20,7 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
   File? _selectedFile;
   String? _validationError;
   bool _isLoading = false;
+  List<File>? _scannedFiles;
   
   final List<TextEditingController> _controllers = List.generate(12, (_) => TextEditingController());
   final ScrollController _scrollController = ScrollController();
@@ -29,6 +30,74 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
     super.initState();
     for (var controller in _controllers) {
       controller.addListener(_onFieldChanged);
+    }
+    _scanDownloads();
+  }
+
+  Future<void> _scanDownloads() async {
+    try {
+      final dir = Directory('/storage/emulated/0/Download');
+      if (await dir.exists()) {
+        final files = dir.listSync()
+            .whereType<File>()
+            .where((f) => f.path.endsWith('.mimic'))
+            .toList();
+            
+        if (files.isNotEmpty) {
+          files.sort((a, b) => b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+          if (mounted) {
+            setState(() {
+              _scannedFiles = files;
+            });
+            if (files.length == 1) {
+              _handleFileSelected(files.first);
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // Permission denied or other error, ignore gracefully
+    }
+  }
+
+  Future<void> _handleFileSelected(File file) async {
+    setState(() {
+      _isLoading = true;
+      _validationError = null;
+    });
+
+    try {
+      final validation = await VaultImporter.validateFile(file);
+
+      if (mounted) {
+        if (validation.isValid) {
+          setState(() {
+            _selectedFile = file;
+          });
+          await Future.delayed(const Duration(milliseconds: 600));
+          if (mounted) {
+            setState(() {
+              _step = 2;
+            });
+          }
+        } else {
+          setState(() {
+            _validationError = validation.reason ?? 'Invalid backup file';
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _validationError = 'Failed to validate file: $e';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -49,7 +118,10 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
   }
 
   bool get _isImportButtonEnabled {
-    return _controllers.every((c) => c.text.trim().isNotEmpty);
+    return _controllers.every((c) {
+      final text = c.text;
+      return text.isNotEmpty && RecoveryPhrase.isValidWord(text);
+    });
   }
 
   Future<void> _pickFile() async {
@@ -60,31 +132,12 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
 
     try {
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.any,
+        type: FileType.custom,
+        allowedExtensions: ['mimic'],
       );
 
       if (result != null && result.files.single.path != null) {
-        final file = File(result.files.single.path!);
-        final validation = await VaultImporter.validateFile(file);
-
-        if (mounted) {
-          if (validation.isValid) {
-            setState(() {
-              _selectedFile = file;
-            });
-            // Show checkmark briefly before transitioning
-            await Future.delayed(const Duration(milliseconds: 600));
-            if (mounted) {
-              setState(() {
-                _step = 2;
-              });
-            }
-          } else {
-            setState(() {
-              _validationError = validation.reason ?? 'Invalid backup file';
-            });
-          }
-        }
+        await _handleFileSelected(File(result.files.single.path!));
       }
     } catch (e) {
       if (mounted) {
@@ -108,7 +161,7 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
       _isLoading = true;
     });
 
-    final words = _controllers.map((c) => c.text.trim().toLowerCase()).toList();
+    final words = RecoveryPhrase.normalizeWords(_controllers.map((c) => c.text).toList());
 
     try {
       final success = await VaultImporter.importWithPhrase(_selectedFile!, words);
@@ -230,6 +283,56 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
           ),
         ),
         const SizedBox(height: 32),
+        if (_scannedFiles != null && _scannedFiles!.isNotEmpty && fileName == null) ...[
+          const Text(
+            'Found Backups',
+            style: TextStyle(
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+              color: VaultColors.textSecondary,
+              fontFamily: 'Inter',
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 12),
+          ..._scannedFiles!.map((f) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: InkWell(
+                  onTap: _isLoading ? null : () => _handleFileSelected(f),
+                  borderRadius: BorderRadius.circular(16),
+                  child: Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: VaultColors.surface,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: const Color(0xFFE0E0E0)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.insert_drive_file_outlined, color: VaultColors.accent, size: 24),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            p.basename(f.path),
+                            style: const TextStyle(
+                              color: VaultColors.textPrimary,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                              fontFamily: 'Inter',
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        const Icon(Icons.chevron_right, color: VaultColors.textTertiary),
+                      ],
+                    ),
+                  ),
+                ),
+              )),
+          const SizedBox(height: 24),
+          const Divider(),
+          const SizedBox(height: 24),
+        ],
         if (fileName != null) ...[
           Container(
             padding: const EdgeInsets.all(16),
@@ -387,8 +490,8 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
             ),
             const SizedBox(height: 24),
             ...List.generate(12, (index) {
-              final text = _controllers[index].text.trim().toLowerCase();
-              final bool isEmpty = text.isEmpty;
+              final text = _controllers[index].text;
+              final bool isEmpty = text.trim().isEmpty;
               final bool isValid = !isEmpty && RecoveryPhrase.isValidWord(text);
 
               final Color borderValColor = isEmpty
@@ -399,8 +502,18 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
                 padding: const EdgeInsets.only(bottom: 16),
                 child: TextField(
                   controller: _controllers[index],
+                  textCapitalization: TextCapitalization.none,
+                  keyboardType: TextInputType.visiblePassword,
                   autocorrect: false,
                   enableSuggestions: false,
+                  onChanged: (value) {
+                    final tokens = value.trim().split(RegExp(r'\s+'));
+                    if (tokens.length > 1) {
+                      for (int i = 0; i < tokens.length && index + i < 12; i++) {
+                        _controllers[index + i].text = tokens[i];
+                      }
+                    }
+                  },
                   style: const TextStyle(color: VaultColors.textPrimary, fontFamily: 'Inter'),
                   decoration: InputDecoration(
                     labelText: 'Word ${index + 1}',

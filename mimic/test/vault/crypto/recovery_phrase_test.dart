@@ -39,5 +39,26 @@ void main() {
       final key3 = RecoveryPhrase.deriveKey(words, differentSalt);
       expect(key3, isNot(equals(key1)));
     });
+
+    test('deriveKey() rescues dirty phrase via canonicalization', () {
+      final clean = [
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'about'
+      ];
+      final dirty = [
+        'abandon\u200B',    // zero-width space
+        ' ABANDON\u00A0 ',  // non-breaking space + uppercase
+        'abandon ',         // trailing space
+        'abandon', 'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'about'
+      ];
+      final salt = Uint8List.fromList(List.generate(16, (i) => i));
+
+      final cleanKey = RecoveryPhrase.deriveKey(clean, salt);
+      final dirtyKey = RecoveryPhrase.deriveKey(dirty, salt);
+
+      expect(dirtyKey, equals(cleanKey));
+    });
   });
 }

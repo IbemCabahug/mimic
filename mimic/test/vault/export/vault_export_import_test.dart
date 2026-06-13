@@ -451,5 +451,94 @@ void main() {
       expect(notes[0]['title'], equals('Active Vault Note'),
           reason: 'Existing active vault data must not be affected by failed recovery phrase import');
     }, timeout: const Timeout(Duration(minutes: 2)));
+
+    test('validateFile() correctly identifies valid and corrupted files', () async {
+      await VaultCrypto.instance.initialize('123456');
+      await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
+
+      final exportedFile = await VaultExporter.buildExportFile();
+      expect(await exportedFile.exists(), isTrue);
+
+      // Good file
+      final goodResult = await VaultImporter.validateFile(exportedFile);
+      expect(goodResult.isValid, isTrue);
+
+      // Corrupted file (flip one byte in payload)
+      final bytes = await exportedFile.readAsBytes();
+      final corruptedBytes = Uint8List.fromList(bytes);
+      if (corruptedBytes.length > 50) {
+        corruptedBytes[corruptedBytes.length - 10] ^= 0xFF; // Flip a byte
+      }
+      final corruptedFile = File('${exportedFile.path}_corrupted.mimic');
+      await corruptedFile.writeAsBytes(corruptedBytes);
+
+      final badResult = await VaultImporter.validateFile(corruptedFile);
+      expect(badResult.isValid, isFalse);
+      expect(badResult.reason, isNotNull);
+    });
+
+    test('TRUE uninstall-simulation: export -> wipe -> import with dirty phrase', () async {
+      await VaultCrypto.instance.initialize('123456');
+      await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
+
+      final photosDbPath = '$dbDirPath/vault_files.db';
+      final photosDb = await openDatabase(
+        photosDbPath,
+        version: 1,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE photos(
+              id TEXT PRIMARY KEY,
+              mimeType TEXT,
+              size INTEGER,
+              createdAt TEXT
+            )
+          ''');
+        },
+      );
+      final now = DateTime.now().toIso8601String();
+      await photosDb.insert('photos', {
+        'id': 'photo_sim',
+        'mimeType': 'image/jpeg',
+        'size': 1024,
+        'createdAt': now,
+      });
+      await photosDb.close();
+
+      final photoFile = File('$appDocsPath/vault_files/photo_sim');
+      await Directory('$appDocsPath/vault_files').create(recursive: true);
+      await photoFile.writeAsBytes(utf8.encode('photo_sim_bytes'));
+
+      final exportedFile = await VaultExporter.buildExportFile();
+      expect(await exportedFile.exists(), isTrue);
+
+      secureStorageData.clear();
+      SharedPreferences.setMockInitialValues({});
+      if (await File(photosDbPath).exists()) await File(photosDbPath).delete();
+      if (await photoFile.exists()) await photoFile.delete();
+
+      final platformService = AndroidPlatformService();
+      VaultCrypto(platformService);
+
+      final dirtyWords = [
+        'abandon\u200B',    // zero-width space
+        ' ABANDON\u00A0 ',  // non-breaking space + uppercase
+        'abandon ',         // trailing space
+        'abandon', 'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'about'
+      ];
+
+      final importSuccess = await VaultImporter.importWithPhrase(exportedFile, dirtyWords);
+      expect(importSuccess, isTrue, reason: 'Import should succeed despite injected artifacts in phrase');
+
+      expect(VaultCrypto.instance.isUnlocked, isTrue);
+      
+      final restoredPhotosDb = await openDatabase(photosDbPath);
+      final restoredPhotos = await restoredPhotosDb.query('photos');
+      await restoredPhotosDb.close();
+      expect(restoredPhotos.length, equals(1));
+      expect(restoredPhotos[0]['id'], equals('photo_sim'));
+      expect(await photoFile.exists(), isTrue);
+    });
   });
 }
