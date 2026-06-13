@@ -2,8 +2,10 @@
 
 import 'dart:convert';
 import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/export/vault_exporter.dart';
@@ -94,6 +96,7 @@ void main() {
     Directory(dbDirPath).createSync(recursive: true);
 
     secureStorageData.clear();
+    SharedPreferences.setMockInitialValues({});
 
     // Point sqflite's getDatabasesPath to our temp directory so that
     // VaultExporter/VaultImporter create real SQLite databases there.
@@ -219,10 +222,51 @@ void main() {
       });
       await photosDb.close();
 
-      // Write a mock encrypted photo file to the app-docs directory
+      final videosDbPath = '$dbDirPath/vault_videos.db';
+      final videosDb = await openDatabase(
+        videosDbPath,
+        version: 1,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE videos(
+              id TEXT PRIMARY KEY,
+              mimeType TEXT,
+              size INTEGER,
+              durationS INTEGER,
+              createdAt TEXT,
+              originalName TEXT
+            )
+          ''');
+        },
+      );
+      await videosDb.insert('videos', {
+        'id': 'video1',
+        'mimeType': 'video/mp4',
+        'size': 2048,
+        'durationS': 120,
+        'createdAt': now,
+        'originalName': 'test.mp4',
+      });
+      await videosDb.close();
+
+      secureStorageData['vault_documents_meta'] = jsonEncode([
+        {
+          'id': 'doc1',
+          'originalName': 'secret.pdf',
+          'mimeType': 'application/pdf',
+          'size': 1024,
+          'createdAt': now,
+        }
+      ]);
+
+      // Write mock encrypted files to the app-docs directory
       final photoFile = File('$appDocsPath/vault_files/photo1');
+      final videoFile = File('$appDocsPath/vault_files/video1');
+      final docFile = File('$appDocsPath/vault_files/doc1');
       await Directory('$appDocsPath/vault_files').create(recursive: true);
       await photoFile.writeAsBytes(utf8.encode('photo_bytes'));
+      await videoFile.writeAsBytes(utf8.encode('video_bytes'));
+      await docFile.writeAsBytes(utf8.encode('doc_bytes'));
 
       // 3. Perform export
       final exportedFile = await VaultExporter.buildExportFile();
@@ -232,15 +276,27 @@ void main() {
       final validation = await VaultImporter.validateFile(exportedFile);
       expect(validation.isValid, isTrue);
 
+      // Verify payload doesn't contain audio meta
+      final exportBytes = await exportedFile.readAsBytes();
+      final payloadBytes = exportBytes.sublist(45);
+      final jsonString = utf8.decode(payloadBytes);
+      final Map<String, dynamic> payload = jsonDecode(jsonString);
+      expect(payload.containsKey('vault_audio_meta'), isFalse);
+      expect(payload.containsKey('vault_videos_meta'), isTrue);
+      expect(payload.containsKey('vault_documents_meta'), isTrue);
+
       // 4. Clear data to simulate a fresh state / new device
       secureStorageData.clear();
 
       // Delete the database files
       if (await File(notesDbPath).exists()) await File(notesDbPath).delete();
       if (await File(photosDbPath).exists()) await File(photosDbPath).delete();
+      if (await File(videosDbPath).exists()) await File(videosDbPath).delete();
 
-      // Delete the photo file
+      // Delete the encrypted files
       if (await photoFile.exists()) await photoFile.delete();
+      if (await videoFile.exists()) await videoFile.delete();
+      if (await docFile.exists()) await docFile.delete();
 
       // Reinitialize VaultCrypto to locked state
       final platformService = AndroidPlatformService();
@@ -276,10 +332,62 @@ void main() {
       expect(restoredPhotos.length, equals(1));
       expect(restoredPhotos[0]['id'], equals('photo1'));
 
-      // Verify the encrypted file was restored on disk
+      // Verify videos database was restored
+      final restoredVideosDb = await openDatabase(videosDbPath);
+      final restoredVideos = await restoredVideosDb.query('videos');
+      await restoredVideosDb.close();
+
+      expect(restoredVideos.length, equals(1));
+      expect(restoredVideos[0]['id'], equals('video1'));
+
+      // Verify documents metadata was restored
+      expect(secureStorageData['vault_documents_meta'], isNotNull);
+
+      // Verify the encrypted files were restored on disk
       expect(await photoFile.exists(), isTrue);
       expect(utf8.decode(await photoFile.readAsBytes()), equals('photo_bytes'));
+      expect(await videoFile.exists(), isTrue);
+      expect(utf8.decode(await videoFile.readAsBytes()), equals('video_bytes'));
+      expect(await docFile.exists(), isTrue);
+      expect(utf8.decode(await docFile.readAsBytes()), equals('doc_bytes'));
     }, timeout: const Timeout(Duration(minutes: 2)));
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Backward compatibility: old backups without new keys
+    // ─────────────────────────────────────────────────────────────────
+
+    test('Import backward-compat payload WITHOUT video/document keys', () async {
+      await VaultCrypto.instance.initialize('123456');
+      await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
+
+      // Export a backup
+      final backupFile = await VaultExporter.buildExportFile();
+
+      // Tamper with the backup to simulate an old backup that has no video/document keys
+      final exportBytes = await backupFile.readAsBytes();
+      final payloadBytes = exportBytes.sublist(45);
+      final jsonString = utf8.decode(payloadBytes);
+      final Map<String, dynamic> payload = jsonDecode(jsonString);
+      
+      payload.remove('vault_videos_meta');
+      payload.remove('vault_documents_meta');
+      
+      final tamperedJsonBytes = utf8.encode(jsonEncode(payload));
+      final checksum = sha256.convert(tamperedJsonBytes).bytes;
+      
+      final builder = BytesBuilder();
+      builder.add(exportBytes.sublist(0, 5)); // magic + version
+      builder.add(checksum);
+      builder.add(exportBytes.sublist(37, 45)); // timestamp
+      builder.add(tamperedJsonBytes);
+      
+      final tamperedFile = File('$downloadsPath/tampered.mimic');
+      await tamperedFile.writeAsBytes(builder.toBytes());
+
+      // Attempt import
+      final importSuccess = await VaultImporter.importWithPhrase(tamperedFile, recoveryWords);
+      expect(importSuccess, isTrue, reason: 'Import should succeed even if new keys are missing');
+    });
 
     // ─────────────────────────────────────────────────────────────────
     //  Wrong recovery phrase must fail without overwriting existing data

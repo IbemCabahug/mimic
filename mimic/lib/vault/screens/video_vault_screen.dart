@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path/path.dart' as p;
 import '../services/video_vault_service.dart';
 import '../widgets/vault_scaffold.dart';
@@ -39,6 +40,74 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
   }
 
   Future<void> _importFromGallery() async {
+    final prefs = await SharedPreferences.getInstance();
+    final ack = prefs.getBool('import_move_warning_ack') ?? false;
+
+    if (!ack && mounted) {
+      bool dontShowAgain = false;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) {
+          return StatefulBuilder(
+            builder: (context, setState) {
+              return AlertDialog(
+                backgroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                title: const Text(
+                  'Important Warning',
+                  style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+                ),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'Media originals are REMOVED from the gallery and are permanently lost if the app is uninstalled or its data is cleared before restoring — back up via Settings → Export and keep the 12-word recovery phrase.',
+                      style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Checkbox(
+                          value: dontShowAgain,
+                          onChanged: (val) {
+                            setState(() => dontShowAgain = val ?? false);
+                          },
+                          activeColor: VaultColors.accent,
+                        ),
+                        const Expanded(
+                          child: Text(
+                            "Don't show again",
+                            style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      if (dontShowAgain) {
+                        await prefs.setBool('import_move_warning_ack', true);
+                      }
+                      if (context.mounted) Navigator.of(context).pop(true);
+                    },
+                    child: const Text('Continue', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+
+      if (confirmed != true) return;
+    }
+
     final ids = await ref.read(videoVaultServiceProvider).pickAndEncryptVideo(context);
     if (ids.isNotEmpty) await _loadVideos();
   }

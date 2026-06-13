@@ -22,6 +22,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:mimic/core/theme/app_theme.dart';
 import 'package:mimic/core/services/platform_service.dart';
@@ -370,6 +371,7 @@ void main() {
     fakeVideos = FakeVideoVaultService(fakePlatform, fakeCrypto);
     fakeDocuments = FakeDocumentVaultService(fakePlatform, fakeCrypto);
     mockLogs = [];
+    SharedPreferences.setMockInitialValues({});
   });
 
   /// Build a standard MaterialApp containing Riverpod overrides for all vault providers and routing tables.
@@ -515,6 +517,11 @@ void main() {
 
       // Tap 'Choose from Gallery' and verify pickAndEncryptImage is invoked
       await tester.tap(find.text('Choose from Gallery'));
+      await tester.pumpAndSettle();
+
+      // Tap 'Continue' on the warning dialog
+      expect(find.text('Continue'), findsOneWidget);
+      await tester.tap(find.text('Continue'));
       await tester.pumpAndSettle();
 
       // Fake file service creates a photo with bytes [1, 2, 3] on pick

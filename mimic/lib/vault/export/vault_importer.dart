@@ -11,6 +11,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pointycastle/export.dart';
 import 'package:sqflite/sqflite.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../crypto/recovery_phrase.dart';
 import '../crypto/vault_crypto.dart';
@@ -148,9 +149,11 @@ class VaultImporter {
       final List<String> oldFileIds = [];
       if (kIsWeb) {
         final oldPhotosMeta = await storage.read(key: 'vault_photos_meta');
-        final oldAudioMeta = await storage.read(key: 'vault_audio_meta');
+        final oldVideosMeta = await storage.read(key: 'vault_videos_meta');
+        final oldDocsMeta = await storage.read(key: 'vault_documents_meta');
         oldFileIds.addAll(_extractIds(oldPhotosMeta));
-        oldFileIds.addAll(_extractIds(oldAudioMeta));
+        oldFileIds.addAll(_extractIds(oldVideosMeta));
+        oldFileIds.addAll(_extractIds(oldDocsMeta));
       } else {
         final filesDbPath = p.join(await getDatabasesPath(), 'vault_files.db');
         if (await File(filesDbPath).exists()) {
@@ -161,15 +164,17 @@ class VaultImporter {
           } catch (_) {}
           await db.close();
         }
-        final audioDbPath = p.join(await getDatabasesPath(), 'vault_audio.db');
-        if (await File(audioDbPath).exists()) {
-          final db = await openDatabase(audioDbPath);
+        final videosDbPath = p.join(await getDatabasesPath(), 'vault_videos.db');
+        if (await File(videosDbPath).exists()) {
+          final db = await openDatabase(videosDbPath);
           try {
-            final maps = await db.query('audio');
+            final maps = await db.query('videos');
             oldFileIds.addAll(maps.map((m) => m['id'] as String));
           } catch (_) {}
           await db.close();
         }
+        final oldDocsMeta = await storage.read(key: 'vault_documents_meta');
+        oldFileIds.addAll(_extractIds(oldDocsMeta));
       }
 
       final appDir = await getApplicationDocumentsDirectory();
@@ -195,7 +200,8 @@ class VaultImporter {
       // 3. Overwrite secure storage keys
       final secureKeys = [
         'vault_photos_meta',
-        'vault_audio_meta',
+        'vault_videos_meta',
+        'vault_documents_meta',
         'vault_notes',
         'recovery_blob',
         'recovery_salt',
@@ -206,8 +212,16 @@ class VaultImporter {
         final val = payload[key] as String?;
         if (val != null) {
           await storage.write(key: key, value: val);
+          if (key == 'vault_documents_meta' && !kIsWeb) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setString(key, val);
+          }
         } else {
           await storage.delete(key: key);
+          if (key == 'vault_documents_meta' && !kIsWeb) {
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.remove(key);
+          }
         }
       }
 
@@ -240,31 +254,31 @@ class VaultImporter {
           await db.close();
         }
 
-        // Restore audio db
-        final audioMetaStr = payload['vault_audio_meta'] as String?;
-        if (audioMetaStr != null && audioMetaStr.isNotEmpty) {
-          final List<dynamic> decodedAudio = jsonDecode(audioMetaStr);
-          final dbPath = p.join(await getDatabasesPath(), 'vault_audio.db');
+        // Restore videos db
+        final videosMetaStr = payload['vault_videos_meta'] as String?;
+        if (videosMetaStr != null && videosMetaStr.isNotEmpty) {
+          final List<dynamic> decodedVideos = jsonDecode(videosMetaStr);
+          final dbPath = p.join(await getDatabasesPath(), 'vault_videos.db');
           final db = await openDatabase(
             dbPath,
             version: 1,
             onCreate: (db, version) async {
               await db.execute('''
-                CREATE TABLE audio(
+                CREATE TABLE videos(
                   id TEXT PRIMARY KEY,
-                  title TEXT,
-                  durationMs INTEGER,
                   mimeType TEXT,
                   size INTEGER,
-                  createdAt TEXT
+                  durationS INTEGER,
+                  createdAt TEXT,
+                  originalName TEXT
                 )
               ''');
             },
           );
-          await db.delete('audio');
-          for (final audio in decodedAudio) {
-            final map = Map<String, dynamic>.from(audio);
-            await db.insert('audio', map, conflictAlgorithm: ConflictAlgorithm.replace);
+          await db.delete('videos');
+          for (final video in decodedVideos) {
+            final map = Map<String, dynamic>.from(video);
+            await db.insert('videos', map, conflictAlgorithm: ConflictAlgorithm.replace);
           }
           await db.close();
         }

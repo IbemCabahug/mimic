@@ -32,8 +32,10 @@ class VaultExporter {
   static const List<String> _secureKeys = [
     // Photo metadata (JSON array of PhotoMeta maps)
     'vault_photos_meta',
-    // Audio metadata (JSON array of AudioMeta maps)
-    'vault_audio_meta',
+    // Video metadata (JSON array of VideoMeta maps)
+    'vault_videos_meta',
+    // Document metadata (JSON array of DocumentMeta maps)
+    'vault_documents_meta',
     // Notes (JSON array of Note maps – titles & encrypted bodies)
     'vault_notes',
     // Recovery phrase blob (base64-encoded AES-encrypted mnemonic)
@@ -85,14 +87,14 @@ class VaultExporter {
         await db.close();
       }
 
-      // 2. Audio
-      final audioDbPath = p.join(await getDatabasesPath(), 'vault_audio.db');
-      if (await File(audioDbPath).exists()) {
-        final db = await openDatabase(audioDbPath);
+      // 2. Videos
+      final videosDbPath = p.join(await getDatabasesPath(), 'vault_videos.db');
+      if (await File(videosDbPath).exists()) {
+        final db = await openDatabase(videosDbPath);
         try {
-          final maps = await db.query('audio');
+          final maps = await db.query('videos');
           if (maps.isNotEmpty) {
-            payload['vault_audio_meta'] = jsonEncode(maps);
+            payload['vault_videos_meta'] = jsonEncode(maps);
           }
         } catch (_) {}
         await db.close();
@@ -137,9 +139,19 @@ class VaultExporter {
       }
     }
 
-    // Gather IDs from audio metadata
-    final audioIds = _extractIds(payload['vault_audio_meta']);
-    for (final id in audioIds) {
+    // Gather IDs from video metadata
+    final videoIds = _extractIds(payload['vault_videos_meta']);
+    for (final id in videoIds) {
+      final file = File('${appDir.path}/vault_files/$id');
+      if (await file.exists()) {
+        final bytes = await file.readAsBytes();
+        encryptedFiles[id] = base64Encode(bytes);
+      }
+    }
+
+    // Gather IDs from document metadata
+    final documentIds = _extractIds(payload['vault_documents_meta']);
+    for (final id in documentIds) {
       final file = File('${appDir.path}/vault_files/$id');
       if (await file.exists()) {
         final bytes = await file.readAsBytes();

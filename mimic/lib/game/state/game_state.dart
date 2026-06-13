@@ -339,8 +339,16 @@ class GameStateNotifier extends StateNotifier<GameState> {
     final chosenPack = packsToUse[random.nextInt(packsToUse.length)];
     final pairs = chosenPack.pairs;
     
-    final pair1Index = random.nextInt(pairs.length);
-    final wordPair1 = pairs[pair1Index];
+    int pair1Index = random.nextInt(pairs.length);
+    WordPair wordPair1 = pairs[pair1Index];
+    
+    // Prefer a different pair than the current one if possible
+    if (pairs.length > 1 && state.currentWordPair != null) {
+      while (wordPair1.realWord == state.currentWordPair!.realWord) {
+        pair1Index = random.nextInt(pairs.length);
+        wordPair1 = pairs[pair1Index];
+      }
+    }
 
     // Assign Mimics depending on mode
     if (state.selectedMode == GameMode.nightmare && activeList.length >= 4) {
@@ -419,6 +427,7 @@ class GameStateNotifier extends StateNotifier<GameState> {
   }
 
   void nextRound() {
+    assignMimics();
     state = state.copyWith(currentRound: state.currentRound + 1);
   }
 

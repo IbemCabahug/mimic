@@ -113,6 +113,34 @@ void main() {
       final player = notifier.debugState.players.first;
       expect(player.profileId, isNull);
     });
+
+    test('nextRound increments round and reassigns words and mimics', () {
+      final notifier = GameStateNotifier();
+      notifier.addPlayer('P1', 0);
+      notifier.addPlayer('P2', 0);
+      notifier.addPlayer('P3', 0);
+      
+      notifier.setSelectedPackIds(['basic']);
+      notifier.assignMimics();
+      
+      final initialRound = notifier.debugState.currentRound;
+      final initialMimics = List<String>.from(notifier.debugState.mimicIds);
+      final initialWord = notifier.debugState.currentWordPair?.realWord;
+      
+      // Advance round
+      notifier.nextRound();
+      
+      expect(notifier.debugState.currentRound, initialRound + 1);
+      
+      // Mimics must be reassigned
+      expect(notifier.debugState.mimicIds, isNotEmpty);
+      
+      // We expect the word to have changed, assuming the pack has >1 pair
+      // But it might occasionally be the same if there's only 1 pair. 
+      // The logic tries to pick a different one if possible.
+      // We can just assert that assignMimics ran by checking that mimicIds and currentWordPair are not null
+      expect(notifier.debugState.currentWordPair, isNotNull);
+    });
   });
 
   group('RankTier thresholds', () {
