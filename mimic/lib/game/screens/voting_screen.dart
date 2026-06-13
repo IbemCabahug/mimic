@@ -143,7 +143,7 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
                                     onPressed: () {
                                       Navigator.of(context).pushNamed(
                                         MimicGame.resultsRoute,
-                                        arguments: Map.from(_voteCounts),
+                                        arguments: Map<String, int>.from(_voteCounts),
                                       );
                                     },
                                     style: ElevatedButton.styleFrom(

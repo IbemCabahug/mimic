@@ -89,6 +89,26 @@ class GameState {
     return isFinalRound;
   }
 
+  /// Deterministic winner computation for a finished game.
+  /// Returns the set of player IDs who won. Empty set = draw / no winner.
+  static Set<String> winnerIds(GameState state) {
+    if (state.selectedMode == GameMode.survival) {
+      final alive = state.players.where((p) => p.isAlive).toList();
+      if (alive.length == 1) return {alive.first.id};
+      // Round-cap reached with >1 alive: highest-scoring alive player(s)
+      if (alive.isEmpty) return {};
+      final aliveScores = {for (final p in alive) p.id: state.scores[p.id] ?? 0};
+      final max = aliveScores.values.reduce((a, b) => a > b ? a : b);
+      if (max <= 0) return {};
+      return aliveScores.entries.where((e) => e.value == max).map((e) => e.key).toSet();
+    }
+    // Classic / Nightmare: highest cumulative score
+    if (state.scores.isEmpty) return {};
+    final max = state.scores.values.reduce((a, b) => a > b ? a : b);
+    if (max <= 0) return {};
+    return state.scores.entries.where((e) => e.value == max).map((e) => e.key).toSet();
+  }
+
   GameState({
     this.selectedMode = GameMode.classic,
     this.players = const [],

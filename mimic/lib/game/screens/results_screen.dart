@@ -106,19 +106,28 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
     final gameState = ref.read(gameStateProvider);
     final mimicIds = gameState.mimicIds;
 
-    final args = ModalRoute.of(context)?.settings.arguments as Map<String, int>?;
-    final voteCounts = widget.voteCounts ?? args ?? {};
+    final rawArgs = ModalRoute.of(context)?.settings.arguments;
+    final Map<String, int> args = rawArgs is Map
+        ? Map<String, int>.from(rawArgs.map((k, v) => MapEntry('$k', (v as num).toInt())))
+        : <String, int>{};
+    final voteCounts = widget.voteCounts ?? args;
 
-    // Find player with most votes
-    final maxVotes = voteCounts.values.isNotEmpty 
-        ? voteCounts.values.reduce((a, b) => a > b ? a : b) 
-        : 0;
-    
-    _accusedPlayerId = maxVotes > 0
-        ? voteCounts.entries.firstWhere((e) => e.value == maxVotes).key
-        : '';
+    final maxVotes = voteCounts.values.isEmpty
+        ? 0 : voteCounts.values.reduce((a, b) => a > b ? a : b);
+    final topPlayers = voteCounts.entries
+        .where((e) => maxVotes > 0 && e.value == maxVotes)
+        .map((e) => e.key).toList();
+    final bool isDeadlock = topPlayers.length != 1; // tie OR no votes
+    _accusedPlayerId = isDeadlock ? '' : topPlayers.first;
 
-    if (_accusedPlayerId.isEmpty) return;
+    if (_accusedPlayerId.isEmpty) {
+      gameStateNotifier.addRoundOutcome(RoundOutcome(
+        round: gameState.currentRound,
+        mimicIds: mimicIds,
+        accusedPlayerId: null,
+      ));
+      return;
+    }
 
     final accusedIsMimic = mimicIds.contains(_accusedPlayerId);
     _mimicWasCaught = accusedIsMimic;
@@ -421,7 +430,17 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
       children: [
         // Revelation Title
         const SizedBox(height: 20),
-        if (isCorrect)
+        if (_accusedPlayerId.isEmpty)
+          Text(
+            'NO ONE WAS VOTED OUT — THE VOTE WAS A DEADLOCK',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.creepster(
+              color: HorrorColors.fogWhite,
+              fontSize: 24,
+              letterSpacing: 1.0,
+            ),
+          )
+        else if (isCorrect)
           Text(
             'THE MIMIC HAS BEEN FOUND',
             textAlign: TextAlign.center,

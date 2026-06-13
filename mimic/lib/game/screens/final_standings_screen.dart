@@ -6,7 +6,6 @@ import 'package:mimic/game/state/game_state.dart';
 import 'package:mimic/game/services/stats_service.dart';
 import 'package:mimic/game/models/player_profile.dart';
 import 'package:mimic/game/game.dart';
-import 'dart:math' as math;
 
 class FinalStandingsScreen extends ConsumerStatefulWidget {
   const FinalStandingsScreen({super.key});
@@ -54,11 +53,8 @@ class _FinalStandingsScreenState extends ConsumerState<FinalStandingsScreen> {
     final RankTier tierBefore = activeProfile.rank;
 
     // Compute outcomes
-    final maxScore = gameState.scores.values.isNotEmpty 
-        ? gameState.scores.values.reduce(math.max) 
-        : 0;
-    
-    final bool won = (gameState.scores[ownerId] ?? 0) == maxScore && maxScore > 0;
+    final winners = GameState.winnerIds(gameState);
+    final bool won = winners.contains(ownerId);
     
     bool wasMimic = false;
     bool mimicWon = false;
@@ -144,8 +140,8 @@ class _FinalStandingsScreenState extends ConsumerState<FinalStandingsScreen> {
     final gameState = ref.watch(gameStateProvider);
     final sortedScores = gameState.scores.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
-      
-    final maxScore = sortedScores.isNotEmpty ? sortedScores.first.value : 0;
+
+    final winners = GameState.winnerIds(gameState);
 
     // Check if owner is present to show rewards section
     final statsService = ref.read(statsServiceProvider);
@@ -177,7 +173,31 @@ class _FinalStandingsScreenState extends ConsumerState<FinalStandingsScreen> {
                   ],
                 ),
               ),
-              const SizedBox(height: 30),
+              const SizedBox(height: 16),
+
+              // Draw banner when no winner
+              if (winners.isEmpty)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  margin: const EdgeInsets.only(bottom: 16),
+                  decoration: BoxDecoration(
+                    color: HorrorColors.deepSurface,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: HorrorColors.ashGray),
+                  ),
+                  child: Text(
+                    "IT'S A DRAW — NO WINNER THIS GAME",
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.creepster(
+                      color: HorrorColors.ashGray,
+                      fontSize: 18,
+                      letterSpacing: 1.0,
+                    ),
+                  ),
+                ),
+
+              const SizedBox(height: 14),
               
               // Scoreboard
               Expanded(
@@ -190,12 +210,7 @@ class _FinalStandingsScreenState extends ConsumerState<FinalStandingsScreen> {
                       orElse: () => Player(id: entry.key, name: 'Unknown', color: 0xFFFFFFFF),
                     );
                     
-                    bool isWinner = false;
-                    if (gameState.gameMode == GameMode.survival) {
-                       isWinner = player.isAlive && gameState.players.where((p)=>p.isAlive).length == 1;
-                    } else {
-                       isWinner = entry.value == maxScore && maxScore > 0;
-                    }
+                    final bool isWinner = winners.contains(player.id);
 
                     return Container(
                       margin: const EdgeInsets.only(bottom: 12.0),
