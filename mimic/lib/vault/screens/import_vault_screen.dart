@@ -136,8 +136,17 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
         allowedExtensions: ['mimic'],
       );
 
-      if (result != null && result.files.single.path != null) {
-        await _handleFileSelected(File(result.files.single.path!));
+      if (result != null) {
+        final path = result.files.single.path;
+        if (path == null) {
+          if (mounted) {
+            setState(() {
+              _validationError = "Couldn't read that file";
+            });
+          }
+          return;
+        }
+        await _handleFileSelected(File(path));
       }
     } catch (e) {
       if (mounted) {

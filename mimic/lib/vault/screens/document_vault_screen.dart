@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -213,12 +214,16 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
         await _loadDocuments();
       }
     } else if (doc.fileType == 'pdf') {
-      final bytes = await ref.read(documentVaultServiceProvider).getDocumentBytes(doc.id);
-      if (bytes != null && mounted) {
+      final tempFile = await ref.read(documentVaultServiceProvider).getDocumentToTempFile(doc.id);
+      if (tempFile != null && mounted) {
         await Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => PdfViewerScreen(bytes: bytes, title: doc.fileName),
+            builder: (context) => PdfViewerScreen(file: tempFile, title: doc.fileName),
           ),
+        );
+      } else if (tempFile == null && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to load document')),
         );
       }
     } else if (doc.fileType == 'docx' || doc.fileType == 'xlsx') {
@@ -501,18 +506,33 @@ class _DocumentEditorScreenState extends ConsumerState<DocumentEditorScreen> {
   }
 }
 
-class PdfViewerScreen extends StatelessWidget {
-  final Uint8List bytes;
+class PdfViewerScreen extends StatefulWidget {
+  final File file;
   final String title;
 
-  const PdfViewerScreen({super.key, required this.bytes, required this.title});
+  const PdfViewerScreen({super.key, required this.file, required this.title});
+
+  @override
+  State<PdfViewerScreen> createState() => _PdfViewerScreenState();
+}
+
+class _PdfViewerScreenState extends State<PdfViewerScreen> {
+  @override
+  void dispose() {
+    try {
+      if (widget.file.existsSync()) {
+        widget.file.deleteSync();
+      }
+    } catch (_) {}
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return VaultScaffold(
-      title: title,
+      title: widget.title,
       showLockButton: false,
-      body: SfPdfViewer.memory(bytes),
+      body: SfPdfViewer.file(widget.file),
     );
   }
 }

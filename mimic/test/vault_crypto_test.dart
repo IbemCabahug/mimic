@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -33,6 +34,8 @@ class FakePlatformService implements PlatformService {
 
   @override
   Future<void> deleteFile(String path) async {}
+  @override
+  Future<File> resolveVaultFile(String path) async => throw UnimplementedError();
 }
 
 void main() {

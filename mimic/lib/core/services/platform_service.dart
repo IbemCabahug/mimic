@@ -15,6 +15,7 @@ abstract class PlatformService {
   Future<void> saveEncryptedFile(String path, Uint8List data);
   Future<Uint8List?> readEncryptedFile(String path);
   Future<void> deleteFile(String path);
+  Future<File> resolveVaultFile(String path);
   bool isWeb();
 }
 
@@ -73,6 +74,12 @@ class AndroidPlatformService implements PlatformService {
       await file.delete();
     }
   }
+
+  @override
+  Future<File> resolveVaultFile(String path) async {
+    final resolved = await _resolveVaultFilePath(path);
+    return File(resolved);
+  }
 }
 
 class WebPlatformService implements PlatformService {
@@ -123,6 +130,11 @@ class WebPlatformService implements PlatformService {
   Future<void> deleteFile(String path) async {
     await _ensureInitialized();
     await _prefs!.remove('enc_$path');
+  }
+
+  @override
+  Future<File> resolveVaultFile(String path) async {
+    throw UnsupportedError('resolveVaultFile is not supported on web');
   }
 }
 

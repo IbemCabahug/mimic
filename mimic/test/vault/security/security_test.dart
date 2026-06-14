@@ -7,6 +7,9 @@
 // flutter_secure_storage plugin, no camera, no sensors_plus, no sqflite.
 
 import 'dart:typed_data';
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -61,6 +64,9 @@ class FakePlatformService implements PlatformService {
   Future<void> deleteFile(String path) async {
     fileStore.remove(path);
   }
+
+  @override
+  Future<File> resolveVaultFile(String path) async => throw UnimplementedError();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1148,6 +1154,10 @@ class _NoOpPlatformService implements PlatformService {
   @override Future<void> secureWrite(String key, String value) async {}
   @override Future<void> secureDelete(String key) async {}
   @override Future<void> saveEncryptedFile(String path, Uint8List data) async {}
-  @override Future<Uint8List?> readEncryptedFile(String path) async => null;
-  @override Future<void> deleteFile(String path) async {}
+  @override
+  Future<Uint8List?> readEncryptedFile(String path) async => null;
+  @override
+  Future<void> deleteFile(String path) async {}
+  @override
+  Future<File> resolveVaultFile(String path) async => throw UnimplementedError();
 }

@@ -1,11 +1,8 @@
 // lib/vault/screens/video_vault_screen.dart
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:path/path.dart' as p;
 import '../services/video_vault_service.dart';
 import '../widgets/vault_scaffold.dart';
 import '../../core/theme/app_theme.dart';
@@ -108,6 +105,7 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
       if (confirmed != true) return;
     }
 
+    if (!mounted) return;
     final ids = await ref.read(videoVaultServiceProvider).pickAndEncryptVideo(context);
     if (ids.isNotEmpty) await _loadVideos();
   }
@@ -260,13 +258,8 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     );
 
     try {
-      final bytes = await ref.read(videoVaultServiceProvider).getVideo(video.id);
-      if (bytes == null) throw Exception('Video file bytes not found.');
-
-      final tempDir = await getTemporaryDirectory();
-      final originalName = video.originalName ?? '${video.id}.mp4';
-      final tempFile = File(p.join(tempDir.path, 'temp_video_${video.id}_$originalName'));
-      await tempFile.writeAsBytes(bytes);
+      final tempFile = await ref.read(videoVaultServiceProvider).getVideoToTempFile(video.id);
+      if (tempFile == null) throw Exception('Video file not found.');
 
       if (mounted) {
         Navigator.of(context).pop(); // dismiss loading dialog

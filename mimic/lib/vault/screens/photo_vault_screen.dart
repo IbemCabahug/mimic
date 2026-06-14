@@ -110,6 +110,7 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
       if (confirmed != true) return;
     }
 
+    if (!mounted) return;
     final ids = await ref.read(fileVaultServiceProvider).pickAndEncryptImage(context);
     if (ids.isNotEmpty) await _loadPhotos();
   }

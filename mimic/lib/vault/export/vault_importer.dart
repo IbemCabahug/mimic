@@ -20,6 +20,7 @@ import '../services/notes_service.dart';
 
 import '../crypto/recovery_phrase.dart';
 import '../crypto/vault_crypto.dart';
+import 'vault_exporter.dart' show kMaxBackupFileBytes;
 
 /// Represents the result of validating a `.mimic` backup file.
 class ImportValidationResult {
@@ -49,6 +50,9 @@ class VaultImporter {
     try {
       if (!await file.exists()) {
         return ImportValidationResult.invalid("File does not exist");
+      }
+      if (await file.length() > kMaxBackupFileBytes) {
+        throw Exception('Vault too large to back up in this version. Please wait for the next update.');
       }
       final bytes = await file.readAsBytes();
       if (bytes.length < 45) {
@@ -87,6 +91,9 @@ class VaultImporter {
 
       return ImportValidationResult.valid();
     } catch (e) {
+      if (e is Exception && e.toString().contains('too large')) {
+        rethrow;
+      }
       return ImportValidationResult.invalid("Failed to read file: $e");
     }
   }
@@ -102,7 +109,7 @@ class VaultImporter {
 
     final validationResult = await validateFile(file);
     if (!validationResult.isValid) {
-      return false;
+      throw Exception('Corrupt or invalid backup');
     }
 
     bool phraseVerified = false;

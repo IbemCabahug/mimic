@@ -1,3 +1,4 @@
+import 'dart:io';
 // test/vault/screens/reset_pin_screen_test.dart
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -28,6 +29,9 @@ class FakePlatformService implements PlatformService {
   Future<Uint8List?> readEncryptedFile(String path) async => null;
   @override
   Future<void> deleteFile(String path) async {}
+
+  @override
+  Future<File> resolveVaultFile(String path) async => throw UnimplementedError();
 }
 
 void main() {
@@ -158,3 +162,4 @@ void main() {
     expect(fakePlatform.store['recovery_blob'], isNotNull);
   });
 }
+

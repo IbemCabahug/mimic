@@ -1,7 +1,9 @@
 // lib/vault/security/auto_lock.dart
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
 import '../crypto/vault_crypto.dart';
 
 class AutoLock {
@@ -46,6 +48,19 @@ class AutoLock {
     // Clear Vault keys
     final crypto = _ref!.read(vaultCryptoProvider);
     crypto.clearKey();
+
+    try {
+      getTemporaryDirectory().then((tempDir) {
+        final playbackDir = Directory('${tempDir.path}/vault_playback');
+        if (playbackDir.existsSync()) {
+          playbackDir.deleteSync(recursive: true);
+        }
+        final docsDir = Directory('${tempDir.path}/vault_docs');
+        if (docsDir.existsSync()) {
+          docsDir.deleteSync(recursive: true);
+        }
+      });
+    } catch (_) {}
 
     // Navigate back to PIN screen
     if (_context!.mounted) {

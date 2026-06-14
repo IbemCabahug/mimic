@@ -45,3 +45,10 @@ app.*.map.json
 /android/app/release
 test_out.txt
 android/.kotlin/
+
+/android/key.properties
+*.jks
+*.keystore
+
+*.apk
+/app-release.apk

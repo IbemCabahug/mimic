@@ -12,8 +12,11 @@ import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/export/vault_exporter.dart';
 import 'package:mimic/vault/export/vault_importer.dart';
 import 'package:mimic/vault/services/file_vault_service.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -748,6 +751,106 @@ void main() {
         expect(photos.first.originalName, equals('test.jpg'));
       } catch (e) {
         fail('Exception thrown on getAllPhotos after import: $e');
+      }
+    });
+
+    test('Round-trip boundary: vault just under export limit imports successfully despite base64 inflation', () async {
+      final originalCeiling = kMaxBackupFileBytes;
+      kMaxBackupFileBytes = 1024 * 1024; // 1MB limit
+      addTearDown(() => kMaxBackupFileBytes = originalCeiling);
+
+      await VaultCrypto.instance.initialize('123456');
+      await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
+      const storage = FlutterSecureStorage();
+      await storage.write(key: 'vault_photos_meta', value: '[{"id":"boundary_photo"}]');
+
+      final appDocsPath = (await getApplicationDocumentsDirectory()).path;
+      final photosDbPath = p.join(appDocsPath, 'vault_databases', 'vault_photos.db');
+      await Directory(p.dirname(photosDbPath)).create(recursive: true);
+      final photosDb = await databaseFactoryFfi.openDatabase(
+        photosDbPath,
+        options: OpenDatabaseOptions(
+          version: 1,
+          onCreate: (db, version) async {
+            await db.execute('CREATE TABLE photos(id TEXT PRIMARY KEY, mimeType TEXT, size INTEGER, createdAt TEXT, originalName TEXT)');
+          },
+        ),
+      );
+      final now = DateTime.now().toIso8601String();
+      // 1MB = 1048576 bytes. (1048576 / 1.4) = ~748982. We use 748000 bytes.
+      await photosDb.insert('photos', {'id': 'boundary_photo', 'mimeType': 'image/jpeg', 'size': 748000, 'createdAt': now});
+      await photosDb.close();
+
+      final boundaryFile = File('$appDocsPath/vault_files/boundary_photo');
+      await Directory('$appDocsPath/vault_files').create(recursive: true);
+      
+      final randomAccessFile = await boundaryFile.open(mode: FileMode.write);
+      await randomAccessFile.setPosition(748000 - 1);
+      await randomAccessFile.writeByte(0);
+      await randomAccessFile.close();
+
+      final exportFile = await VaultExporter.buildExportFile(ProviderContainer());
+      
+      final result = await VaultImporter.importWithPhrase(exportFile, recoveryWords);
+      expect(result, isTrue);
+    });
+
+    test('EXPORT size guard: fails gracefully if vault blobs exceed ceiling', () async {
+      await VaultCrypto.instance.initialize('123456');
+      await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
+
+      final photosDbPath = '$dbDirPath/vault_files.db';
+      final photosDb = await openDatabase(
+        photosDbPath,
+        version: 1,
+        onCreate: (db, version) async {
+          await db.execute('CREATE TABLE photos(id TEXT PRIMARY KEY, mimeType TEXT, size INTEGER, createdAt TEXT, originalName TEXT)');
+        },
+      );
+      final now = DateTime.now().toIso8601String();
+      await photosDb.insert('photos', {'id': 'huge_photo', 'mimeType': 'image/jpeg', 'size': 1024, 'createdAt': now});
+      await photosDb.close();
+
+      final hugeFile = File('$appDocsPath/vault_files/huge_photo');
+      await Directory('$appDocsPath/vault_files').create(recursive: true);
+      
+      final randomAccessFile = await hugeFile.open(mode: FileMode.write);
+      await randomAccessFile.setPosition((115 * 1024 * 1024) + 1);
+      await randomAccessFile.writeByte(0);
+      await randomAccessFile.close();
+
+      try {
+        await VaultExporter.buildExportFile(ProviderContainer());
+        fail('Should have thrown an exception');
+      } catch (e) {
+        expect(e.toString().toLowerCase(), contains('too large'));
+      }
+    });
+
+    test('IMPORT size guard: fails gracefully if .mimic file exceeds ceiling', () async {
+      final hugeFile = File('$downloadsPath/huge_backup.mimic');
+      final randomAccessFile = await hugeFile.open(mode: FileMode.write);
+      await randomAccessFile.setPosition((160 * 1024 * 1024) + 1);
+      await randomAccessFile.writeByte(0);
+      await randomAccessFile.close();
+
+      try {
+        await VaultImporter.importWithPhrase(hugeFile, recoveryWords);
+        fail('Should have thrown an exception');
+      } catch (e) {
+        expect(e.toString().toLowerCase(), contains('too large'));
+      }
+    });
+
+    test('CORRUPT import: fails gracefully with corrupt or invalid backup', () async {
+      final corruptFile = File('$downloadsPath/corrupt_backup.mimic');
+      await corruptFile.writeAsBytes([0x4D, 0x4D, 0x49, 0x43, 0x01, 1, 2, 3]);
+
+      try {
+        await VaultImporter.importWithPhrase(corruptFile, recoveryWords);
+        fail('Should have thrown an exception');
+      } catch (e) {
+        expect(e.toString().toLowerCase(), contains('corrupt or invalid backup'));
       }
     });
   });

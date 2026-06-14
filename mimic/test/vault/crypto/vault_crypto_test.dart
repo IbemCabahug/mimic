@@ -1,6 +1,7 @@
 // test/vault/crypto/vault_crypto_test.dart
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -45,6 +46,9 @@ class FakePlatformService implements PlatformService {
   Future<void> deleteFile(String path) async {
     fileStore.remove(path);
   }
+
+  @override
+  Future<File> resolveVaultFile(String path) async => throw UnimplementedError();
 }
 
 // ---------------------------------------------------------------------------

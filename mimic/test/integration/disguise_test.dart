@@ -62,6 +62,9 @@ class FakePlatformService implements PlatformService {
   Future<void> deleteFile(String path) async {
     fileStore.remove(path);
   }
+
+  @override
+  Future<File> resolveVaultFile(String path) async => throw UnimplementedError();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

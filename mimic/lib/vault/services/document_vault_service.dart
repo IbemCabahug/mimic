@@ -1,11 +1,13 @@
 // lib/vault/services/document_vault_service.dart
 import 'dart:convert';
-
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 import '../../core/services/platform_service.dart';
 import '../crypto/vault_crypto.dart';
 
@@ -96,7 +98,7 @@ class DocumentVaultService {
 
   Future<String> importDocument() async {
     final result = await FilePicker.platform.pickFiles(
-      withData: true,
+      withData: false,
       allowedExtensions: ['txt', 'pdf', 'docx', 'xlsx'],
       type: FileType.custom,
     );
@@ -106,26 +108,32 @@ class DocumentVaultService {
     }
 
     final file = result.files.single;
-    if (file.bytes == null) {
-      throw Exception('File data not available');
+    if (file.path == null) {
+      throw Exception('Couldn\'t read that file. Please try again or use a different file manager.');
     }
 
-    final bytes = file.bytes!;
+    final srcFile = File(file.path!);
     final fileName = file.name;
     final extension = fileName.split('.').last.toLowerCase();
 
+    return saveDocumentFromFile(srcFile, extension, originalName: fileName);
+  }
+
+  Future<String> saveDocumentFromFile(File src, String mimeType, {String? originalName}) async {
     final id = const Uuid().v4();
     final now = DateTime.now();
 
-    final encrypted = await _crypto.encryptSystem(bytes);
-    await _platformService.saveEncryptedFile(id, encrypted);
+    final dest = await _platformService.resolveVaultFile(id);
+    await _crypto.encryptStreamSystem(src, dest);
+
+    final size = await src.length();
 
     final existing = await listDocuments();
     existing.add(DocumentMeta(
       id: id,
-      fileName: fileName,
-      fileType: extension,
-      sizeBytes: bytes.length,
+      fileName: originalName ?? 'document_$id.$mimeType',
+      fileType: mimeType,
+      sizeBytes: size,
       addedAt: now,
       isTextNote: false,
     ));
@@ -174,6 +182,29 @@ class DocumentVaultService {
       } catch (_) {}
     }
     return decrypted;
+  }
+
+  Future<File?> getDocumentToTempFile(String id) async {
+    final srcBlob = await _platformService.resolveVaultFile(id);
+    if (!srcBlob.existsSync()) return null;
+
+    final tempDir = await getTemporaryDirectory();
+    final docsDir = Directory(p.join(tempDir.path, 'vault_docs'));
+    if (!docsDir.existsSync()) {
+      docsDir.createSync(recursive: true);
+    }
+    
+    final tempFile = File(p.join(docsDir.path, '${id}_view.pdf'));
+    
+    try {
+      await _crypto.decryptStreamSystem(srcBlob, tempFile);
+      return tempFile;
+    } catch (e) {
+      if (tempFile.existsSync()) {
+        tempFile.deleteSync();
+      }
+      return null;
+    }
   }
 
   Future<String?> getTextNote(String id) async {

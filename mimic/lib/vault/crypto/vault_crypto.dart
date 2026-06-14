@@ -1,6 +1,7 @@
 // lib/vault/crypto/vault_crypto.dart
 // WEB NOTE: web storage is not secure. For testing only. Android uses full encryption.
 
+import 'dart:io';
 import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
@@ -255,6 +256,361 @@ class VaultCrypto extends ChangeNotifier {
       if (cipher[i] != _mediaMagic[i]) return true;
     }
     return false;
+  }
+
+  Future<void> encryptStream(File src, File dest) async {
+    if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+    final iv = _generateSecureRandomBytes(_ivLength);
+    final raf = await dest.open(mode: FileMode.write);
+    try {
+      await raf.writeFrom(iv);
+
+      final cipher = CBCBlockCipher(AESEngine());
+      cipher.init(true, ParametersWithIV(KeyParameter(_derivedKey!), iv));
+
+      final srcRaf = await src.open(mode: FileMode.read);
+      try {
+        final buffer = Uint8List(64 * 1024);
+        final outBuffer = Uint8List(64 * 1024 + 16);
+        
+        var leftover = <int>[];
+        var bytesRead = 0;
+
+        while ((bytesRead = await srcRaf.readInto(buffer)) > 0) {
+          int offset = 0;
+          int outOffset = 0;
+          
+          if (leftover.isNotEmpty) {
+            final needed = 16 - leftover.length;
+            if (bytesRead < needed) {
+              leftover.addAll(buffer.sublist(0, bytesRead));
+              continue;
+            } else {
+              final temp = Uint8List(16);
+              temp.setRange(0, leftover.length, leftover);
+              temp.setRange(leftover.length, 16, buffer.sublist(0, needed));
+              cipher.processBlock(temp, 0, outBuffer, outOffset);
+              outOffset += 16;
+              offset = needed;
+              leftover.clear();
+            }
+          }
+
+          while (offset + 16 <= bytesRead) {
+            cipher.processBlock(buffer, offset, outBuffer, outOffset);
+            outOffset += 16;
+            offset += 16;
+          }
+
+          if (outOffset > 0) {
+            await raf.writeFrom(outBuffer, 0, outOffset);
+          }
+
+          if (offset < bytesRead) {
+            leftover.addAll(buffer.sublist(offset, bytesRead));
+          }
+        }
+
+        final padLength = 16 - leftover.length;
+        final finalBlock = Uint8List(16);
+        if (leftover.isNotEmpty) {
+          finalBlock.setRange(0, leftover.length, leftover);
+        }
+        for (int i = leftover.length; i < 16; i++) {
+          finalBlock[i] = padLength;
+        }
+        final outBlock = Uint8List(16);
+        cipher.processBlock(finalBlock, 0, outBlock, 0);
+        await raf.writeFrom(outBlock);
+      } finally {
+        await srcRaf.close();
+      }
+    } finally {
+      await raf.flush();
+      await raf.close();
+    }
+  }
+
+  Future<void> decryptStream(File src, File dest) async {
+    if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+    final srcRaf = await src.open(mode: FileMode.read);
+    try {
+      final iv = Uint8List(_ivLength);
+      final ivRead = await srcRaf.readInto(iv);
+      if (ivRead < _ivLength) {
+        throw Exception('Invalid ciphertext: missing IV');
+      }
+
+      final raf = await dest.open(mode: FileMode.write);
+      try {
+        final cipher = CBCBlockCipher(AESEngine());
+        cipher.init(false, ParametersWithIV(KeyParameter(_derivedKey!), iv));
+
+        final buffer = Uint8List(64 * 1024);
+        final outBuffer = Uint8List(64 * 1024 + 16);
+        var bytesRead = 0;
+        
+        var leftoverCipher = <int>[];
+        Uint8List? heldPlaintextBlock;
+
+        while ((bytesRead = await srcRaf.readInto(buffer)) > 0) {
+          int offset = 0;
+          int outOffset = 0;
+          
+          if (leftoverCipher.isNotEmpty) {
+            final needed = 16 - leftoverCipher.length;
+            if (bytesRead < needed) {
+              leftoverCipher.addAll(buffer.sublist(0, bytesRead));
+              continue;
+            } else {
+              final temp = Uint8List(16);
+              temp.setRange(0, leftoverCipher.length, leftoverCipher);
+              temp.setRange(leftoverCipher.length, 16, buffer.sublist(0, needed));
+              
+              final tempOut = Uint8List(16);
+              cipher.processBlock(temp, 0, tempOut, 0);
+              
+              if (heldPlaintextBlock != null) {
+                outBuffer.setRange(outOffset, outOffset + 16, heldPlaintextBlock);
+                outOffset += 16;
+              }
+              heldPlaintextBlock = tempOut;
+              
+              offset = needed;
+              leftoverCipher.clear();
+            }
+          }
+
+          while (offset + 16 <= bytesRead) {
+            final tempOut = Uint8List(16);
+            cipher.processBlock(buffer, offset, tempOut, 0);
+            
+            if (heldPlaintextBlock != null) {
+              outBuffer.setRange(outOffset, outOffset + 16, heldPlaintextBlock);
+              outOffset += 16;
+            }
+            heldPlaintextBlock = tempOut;
+            offset += 16;
+          }
+
+          if (outOffset > 0) {
+            await raf.writeFrom(outBuffer, 0, outOffset);
+          }
+
+          if (offset < bytesRead) {
+            leftoverCipher.addAll(buffer.sublist(offset, bytesRead));
+          }
+        }
+
+        if (leftoverCipher.isNotEmpty) {
+          throw Exception('Invalid ciphertext: not a multiple of block size');
+        }
+
+        if (heldPlaintextBlock != null) {
+          final padLength = heldPlaintextBlock[15];
+          if (padLength > 0 && padLength <= 16) {
+            await raf.writeFrom(heldPlaintextBlock.sublist(0, 16 - padLength));
+          } else {
+            throw Exception('Invalid PKCS7 padding');
+          }
+        }
+      } finally {
+        await raf.flush();
+        await raf.close();
+      }
+    } finally {
+      await srcRaf.close();
+    }
+  }
+
+  Future<void> encryptStreamSystem(File src, File dest) async {
+    if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+    final iv = _generateSecureRandomBytes(_ivLength);
+    final raf = await dest.open(mode: FileMode.write);
+    try {
+      await raf.writeFrom(_mediaMagic);
+      await raf.writeFrom(iv);
+
+      final cipher = CBCBlockCipher(AESEngine());
+      cipher.init(true, ParametersWithIV(KeyParameter(_derivedKey!), iv));
+
+      final srcRaf = await src.open(mode: FileMode.read);
+      try {
+        final buffer = Uint8List(64 * 1024);
+        final outBuffer = Uint8List(64 * 1024 + 16);
+        
+        var leftover = <int>[];
+        var bytesRead = 0;
+
+        while ((bytesRead = await srcRaf.readInto(buffer)) > 0) {
+          int offset = 0;
+          int outOffset = 0;
+          
+          if (leftover.isNotEmpty) {
+            final needed = 16 - leftover.length;
+            if (bytesRead < needed) {
+              leftover.addAll(buffer.sublist(0, bytesRead));
+              continue;
+            } else {
+              final temp = Uint8List(16);
+              temp.setRange(0, leftover.length, leftover);
+              temp.setRange(leftover.length, 16, buffer.sublist(0, needed));
+              cipher.processBlock(temp, 0, outBuffer, outOffset);
+              outOffset += 16;
+              offset = needed;
+              leftover.clear();
+            }
+          }
+
+          while (offset + 16 <= bytesRead) {
+            cipher.processBlock(buffer, offset, outBuffer, outOffset);
+            outOffset += 16;
+            offset += 16;
+          }
+
+          if (outOffset > 0) {
+            await raf.writeFrom(outBuffer, 0, outOffset);
+          }
+
+          if (offset < bytesRead) {
+            leftover.addAll(buffer.sublist(offset, bytesRead));
+          }
+        }
+
+        final padLength = 16 - leftover.length;
+        final finalBlock = Uint8List(16);
+        if (leftover.isNotEmpty) {
+          finalBlock.setRange(0, leftover.length, leftover);
+        }
+        for (int i = leftover.length; i < 16; i++) {
+          finalBlock[i] = padLength;
+        }
+        final outBlock = Uint8List(16);
+        cipher.processBlock(finalBlock, 0, outBlock, 0);
+        await raf.writeFrom(outBlock);
+      } finally {
+        await srcRaf.close();
+      }
+    } finally {
+      await raf.flush();
+      await raf.close();
+    }
+  }
+
+  Future<void> decryptStreamSystem(File src, File dest) async {
+    bool isLegacy = false;
+    final raf = await src.open(mode: FileMode.read);
+    try {
+      final magicBuffer = Uint8List(_mediaMagic.length);
+      final magicRead = await raf.readInto(magicBuffer);
+      
+      if (magicRead < _mediaMagic.length) {
+        isLegacy = true;
+      } else {
+        for (int i = 0; i < _mediaMagic.length; i++) {
+          if (magicBuffer[i] != _mediaMagic[i]) {
+            isLegacy = true;
+            break;
+          }
+        }
+      }
+
+      if (!isLegacy) {
+        if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+        
+        final iv = Uint8List(_ivLength);
+        final ivRead = await raf.readInto(iv);
+        if (ivRead < _ivLength) {
+          throw Exception('Invalid ciphertext: missing IV');
+        }
+
+        final destRaf = await dest.open(mode: FileMode.write);
+        try {
+          final cipher = CBCBlockCipher(AESEngine());
+          cipher.init(false, ParametersWithIV(KeyParameter(_derivedKey!), iv));
+
+          final buffer = Uint8List(64 * 1024);
+          final outBuffer = Uint8List(64 * 1024 + 16);
+          var bytesRead = 0;
+          
+          var leftoverCipher = <int>[];
+          Uint8List? heldPlaintextBlock;
+
+          while ((bytesRead = await raf.readInto(buffer)) > 0) {
+            int offset = 0;
+            int outOffset = 0;
+            
+            if (leftoverCipher.isNotEmpty) {
+              final needed = 16 - leftoverCipher.length;
+              if (bytesRead < needed) {
+                leftoverCipher.addAll(buffer.sublist(0, bytesRead));
+                continue;
+              } else {
+                final temp = Uint8List(16);
+                temp.setRange(0, leftoverCipher.length, leftoverCipher);
+                temp.setRange(leftoverCipher.length, 16, buffer.sublist(0, needed));
+                
+                final tempOut = Uint8List(16);
+                cipher.processBlock(temp, 0, tempOut, 0);
+                
+                if (heldPlaintextBlock != null) {
+                  outBuffer.setRange(outOffset, outOffset + 16, heldPlaintextBlock);
+                  outOffset += 16;
+                }
+                heldPlaintextBlock = tempOut;
+                
+                offset = needed;
+                leftoverCipher.clear();
+              }
+            }
+
+            while (offset + 16 <= bytesRead) {
+              final tempOut = Uint8List(16);
+              cipher.processBlock(buffer, offset, tempOut, 0);
+              
+              if (heldPlaintextBlock != null) {
+                outBuffer.setRange(outOffset, outOffset + 16, heldPlaintextBlock);
+                outOffset += 16;
+              }
+              heldPlaintextBlock = tempOut;
+              offset += 16;
+            }
+
+            if (outOffset > 0) {
+              await destRaf.writeFrom(outBuffer, 0, outOffset);
+            }
+
+            if (offset < bytesRead) {
+              leftoverCipher.addAll(buffer.sublist(offset, bytesRead));
+            }
+          }
+
+          if (leftoverCipher.isNotEmpty) {
+            throw Exception('Invalid ciphertext: not a multiple of block size');
+          }
+
+          if (heldPlaintextBlock != null) {
+            final padLength = heldPlaintextBlock[15];
+            if (padLength > 0 && padLength <= 16) {
+              await destRaf.writeFrom(heldPlaintextBlock.sublist(0, 16 - padLength));
+            } else {
+              throw Exception('Invalid PKCS7 padding');
+            }
+          }
+        } finally {
+          await destRaf.flush();
+          await destRaf.close();
+        }
+      }
+    } finally {
+      await raf.close();
+    }
+
+    if (isLegacy) {
+      final allBytes = await src.readAsBytes();
+      final decrypted = await _decryptLegacySystem(allBytes);
+      await dest.writeAsBytes(decrypted, flush: true);
+    }
   }
 
   Future<Uint8List> decryptSystem(Uint8List ciphertext) async {

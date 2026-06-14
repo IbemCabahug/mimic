@@ -5,8 +5,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -16,6 +15,8 @@ import '../services/file_vault_service.dart';
 import '../services/video_vault_service.dart';
 import '../services/document_vault_service.dart';
 import '../services/vault_backup_status.dart';
+
+int kMaxBackupFileBytes = 160 * 1024 * 1024;
 
 /// Handles exporting and sharing the entire Mimic Vault as a single
 /// `.mimic` binary backup file.
@@ -134,8 +135,25 @@ class VaultExporter {
     final appDir = await getApplicationDocumentsDirectory();
     final Map<String, String> encryptedFiles = {};
 
-    // Gather IDs from photo metadata
+    // Gather IDs
     final photoIds = _extractIds(payload['vault_photos_meta']);
+    final videoIds = _extractIds(payload['vault_videos_meta']);
+    final documentIds = _extractIds(payload['vault_documents_meta']);
+    final noteIds = _extractIds(payload['vault_notes']);
+
+    int totalVaultSize = 0;
+    for (final id in [...photoIds, ...videoIds, ...documentIds]) {
+      final file = File('${appDir.path}/vault_files/$id');
+      if (await file.exists()) {
+        totalVaultSize += await file.length();
+      }
+    }
+
+    final estimatedExportSize = totalVaultSize * 1.4;
+    if (estimatedExportSize > kMaxBackupFileBytes) {
+      throw Exception('Vault too large to back up in this version. Please wait for the next update.');
+    }
+
     final fileVault = ref.read(fileVaultServiceProvider);
     for (final id in photoIds) {
       try { await fileVault.getPhoto(id); } catch (_) {}
@@ -146,8 +164,7 @@ class VaultExporter {
       }
     }
 
-    // Gather IDs from video metadata
-    final videoIds = _extractIds(payload['vault_videos_meta']);
+    // Videos
     final videoVault = ref.read(videoVaultServiceProvider);
     for (final id in videoIds) {
       try { await videoVault.getVideo(id); } catch (_) {}
@@ -158,8 +175,7 @@ class VaultExporter {
       }
     }
 
-    // Gather IDs from document metadata
-    final documentIds = _extractIds(payload['vault_documents_meta']);
+    // Documents
     final documentVault = ref.read(documentVaultServiceProvider);
     for (final id in documentIds) {
       try { await documentVault.getDocumentBytes(id); } catch (_) {}
@@ -169,8 +185,7 @@ class VaultExporter {
         encryptedFiles[id] = base64Encode(bytes);
       }
     }
-    
-    final noteIds = _extractIds(payload['vault_notes']);
+
 
     if (encryptedFiles.isNotEmpty) {
       payload['encrypted_files'] = encryptedFiles;

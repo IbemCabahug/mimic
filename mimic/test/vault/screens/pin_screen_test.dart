@@ -1,3 +1,4 @@
+import 'dart:io';
 // test/vault/screens/pin_screen_test.dart
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
@@ -27,6 +28,9 @@ class FakePlatformService implements PlatformService {
   Future<Uint8List?> readEncryptedFile(String path) async => null;
   @override
   Future<void> deleteFile(String path) async {}
+
+  @override
+  Future<File> resolveVaultFile(String path) async => throw UnimplementedError();
 }
 
 void main() {
@@ -87,3 +91,4 @@ void main() {
     expect(find.text('ENTER_RECOVERY_SCREEN'), findsOneWidget);
   });
 }
+

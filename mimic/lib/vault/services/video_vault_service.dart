@@ -98,6 +98,28 @@ class VideoVaultService {
     return id;
   }
 
+  Future<String> saveVideoFromFile(File src, String mimeType, int? durationS, {String? originalName}) async {
+    final id = const Uuid().v4();
+    final now = DateTime.now();
+
+    final dest = await _platformService.resolveVaultFile(id);
+    await _crypto.encryptStreamSystem(src, dest);
+
+    final size = await src.length();
+
+    final meta = VideoMeta(
+      id: id,
+      mimeType: mimeType,
+      size: size,
+      durationS: durationS ?? 0,
+      createdAt: now,
+      originalName: originalName,
+    );
+
+    await _saveMeta(meta);
+    return id;
+  }
+
   Future<Uint8List?> getVideo(String id) async {
     final encrypted = await _platformService.readEncryptedFile(id);
     if (encrypted == null) return null;
@@ -116,6 +138,29 @@ class VideoVaultService {
       } catch (_) {}
     }
     return decrypted;
+  }
+
+  Future<File?> getVideoToTempFile(String id) async {
+    final srcBlob = await _platformService.resolveVaultFile(id);
+    if (!srcBlob.existsSync()) return null;
+
+    final tempDir = await getTemporaryDirectory();
+    final playbackDir = Directory(p.join(tempDir.path, 'vault_playback'));
+    if (!playbackDir.existsSync()) {
+      playbackDir.createSync(recursive: true);
+    }
+    
+    final tempFile = File(p.join(playbackDir.path, '${id}_play.mp4'));
+    
+    try {
+      await _crypto.decryptStreamSystem(srcBlob, tempFile);
+      return tempFile;
+    } catch (e) {
+      if (tempFile.existsSync()) {
+        tempFile.deleteSync();
+      }
+      return null;
+    }
   }
 
   Future<void> deleteVideo(String id) async {
@@ -193,11 +238,10 @@ class VideoVaultService {
       for (final asset in assets) {
         final file = await asset.originFile;
         if (file == null) continue;
-        final bytes = await file.readAsBytes();
         final name = asset.title;
         final mime = await asset.mimeTypeAsync ?? 'video/mp4';
         final durationS = asset.duration;
-        final id = await saveVideo(bytes, mime, durationS, originalName: name);
+        final id = await saveVideoFromFile(file, mime, durationS, originalName: name);
         savedIds.add(id);
       }
 

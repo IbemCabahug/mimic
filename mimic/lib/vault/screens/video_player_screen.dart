@@ -71,11 +71,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       final file = File(widget.tempFilePath);
       if (file.existsSync()) {
         file.deleteSync();
-        debugPrint('Temporary video file deleted: ${widget.tempFilePath}');
       }
-    } catch (e) {
-      debugPrint('Failed to delete temporary video file: $e');
-    }
+    } catch (_) {}
     super.dispose();
   }
 

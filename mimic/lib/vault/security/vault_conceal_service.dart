@@ -1,5 +1,6 @@
 // lib/vault/security/vault_conceal_service.dart
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -194,4 +195,6 @@ class PlatformServicePlaceholder implements PlatformService {
   Future<Uint8List?> readEncryptedFile(String path) async => null;
   @override
   Future<void> deleteFile(String path) async {}
+  @override
+  Future<File> resolveVaultFile(String path) async => throw UnimplementedError();
 }
