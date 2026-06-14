@@ -112,30 +112,38 @@ class _LoadingScreenState extends State<LoadingScreen> with TickerProviderStateM
       animation: _bgGlowAnimation,
       builder: (context, child) {
         return Container(
-          decoration: BoxDecoration(
-            color: const Color(0xFF0F0F14),
-            gradient: RadialGradient(
-              center: Alignment.bottomCenter,
-              radius: 1.2,
-              colors: [
-                HorrorColors.crimson.withValues(alpha: _bgGlowAnimation.value * 0.5),
-                const Color(0xFF0F0F14).withValues(alpha: 0.9),
-                const Color(0xFF0F0F14),
-              ],
-              stops: const [0.0, 0.6, 1.0],
+          decoration: const BoxDecoration(
+            color: Color(0xFF0F0F14),
+            image: DecorationImage(
+              image: AssetImage('assets/splash/splash.png'),
+              fit: BoxFit.cover,
             ),
           ),
           child: Container(
-            // Dark vignette around edges
             decoration: BoxDecoration(
               gradient: RadialGradient(
-                center: Alignment.center,
-                radius: 1.0,
+                center: Alignment.bottomCenter,
+                radius: 1.2,
                 colors: [
-                  Colors.transparent,
-                  Colors.black.withValues(alpha: 0.8),
+                  HorrorColors.crimson.withValues(alpha: _bgGlowAnimation.value * 0.5),
+                  const Color(0xFF0F0F14).withValues(alpha: 0.9),
+                  const Color(0xFF0F0F14),
                 ],
-                stops: const [0.5, 1.0],
+                stops: const [0.0, 0.6, 1.0],
+              ),
+            ),
+            child: Container(
+              // Dark vignette around edges
+              decoration: BoxDecoration(
+                gradient: RadialGradient(
+                  center: Alignment.center,
+                  radius: 1.0,
+                  colors: [
+                    Colors.transparent,
+                    Colors.black.withValues(alpha: 0.8),
+                  ],
+                  stops: const [0.5, 1.0],
+                ),
               ),
             ),
           ),

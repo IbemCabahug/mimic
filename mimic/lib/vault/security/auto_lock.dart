@@ -38,6 +38,10 @@ class AutoLock {
 
   void _lockVault() {
     if (_context == null || _ref == null) return;
+    if (!_context!.mounted) {
+      dispose();
+      return;
+    }
 
     // Clear Vault keys
     final crypto = _ref!.read(vaultCryptoProvider);

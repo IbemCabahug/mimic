@@ -627,6 +627,53 @@ void main() {
                 'With a cleared key the vault home must redirect to PinScreen');
       },
     );
+    // ------------------------------------------------------------------
+    // Test 10.5 — AutoLock does not throw if timer fires after widget is disposed
+    // ------------------------------------------------------------------
+    testWidgets(
+      '10.5 · AutoLock does not throw if timer fires after widget is disposed',
+      (WidgetTester tester) async {
+        late VaultCrypto crypto;
+        
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              platformServiceProvider.overrideWithValue(fakePlatform),
+            ],
+            child: MaterialApp(
+              routes: {
+                '/vault-pin': (_) => const Scaffold(body: Text('PIN_SCREEN')),
+              },
+              home: Consumer(
+                builder: (context, ref, _) {
+                  crypto = ref.read(vaultCryptoProvider);
+                  // Initialize the AutoLock singleton
+                  AutoLock().init(context, ref);
+                  return const AutoLockWrapper(
+                    child: Text('VAULT_CONTENT'),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+        
+        await crypto.initialize('1234');
+        expect(crypto.isUnlocked, isTrue);
+
+        // Advance a bit but not full 60s
+        await tester.pump(const Duration(seconds: 30));
+        
+        // Dispose the widget by replacing it with a completely different widget
+        await tester.pumpWidget(const SizedBox());
+
+        // Now advance time past the original 60s timer
+        await tester.pump(const Duration(seconds: 40));
+        
+        // Verify crypto is STILL unlocked because _lockVault should have early-returned
+        expect(crypto.isUnlocked, isTrue);
+      },
+    );
   });
 
   // ═══════════════════════════════════════════════════════════════════════
