@@ -226,9 +226,7 @@ class VaultImporter {
         if (val != null) {
           try {
             await storage.write(key: key, value: val);
-            debugPrint('IMPORT: WRITE $key OK');
           } catch (e) {
-            debugPrint('IMPORT: WRITE $key FAILED: ${e.runtimeType}: $e');
             rethrow;
           }
           if (key == 'vault_documents_meta' && !kIsWeb) {

@@ -19,7 +19,7 @@ import 'package:mimic/vault/security/auto_lock.dart';
 import 'package:mimic/vault/security/breakin_log.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/security/shake_wipe_service.dart';
-import 'package:mimic/vault/screens/vault_home_screen.dart';
+
 import 'package:mimic/vault/screens/pin_screen.dart';
 import 'package:mimic/vault/security/duress_service.dart';
 import 'package:mimic/vault/security/vault_conceal_service.dart';

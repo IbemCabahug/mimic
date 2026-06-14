@@ -10,7 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:mimic/multiplayer/network/network_service.dart';
 import 'package:mimic/core/router/app_router.dart';
-import 'package:mimic/core/providers/provider_registration.dart';
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Controllable NetworkService for test overrides
