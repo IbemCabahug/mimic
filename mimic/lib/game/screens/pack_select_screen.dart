@@ -233,30 +233,33 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
             ),
 
             // Confirm Button
-            Padding(
-              padding: const EdgeInsets.all(20.0),
-              child: SizedBox(
-                width: double.infinity,
-                height: 52,
-                child: ElevatedButton(
-                  onPressed: _selectedPackIds.isNotEmpty ? _confirmSelection : null,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: HorrorColors.crimson,
-                    foregroundColor: HorrorColors.fogWhite,
-                    disabledBackgroundColor: HorrorColors.cardSurface,
-                    disabledForegroundColor: HorrorColors.ashGray,
-                    side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
-                    elevation: 4,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.all(20.0),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: ElevatedButton(
+                    onPressed: _selectedPackIds.isNotEmpty ? _confirmSelection : null,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: HorrorColors.crimson,
+                      foregroundColor: HorrorColors.fogWhite,
+                      disabledBackgroundColor: HorrorColors.cardSurface,
+                      disabledForegroundColor: HorrorColors.ashGray,
+                      side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
+                      elevation: 4,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
                     ),
-                  ),
-                  child: Text(
-                    'CONFIRM PACKS',
-                    style: GoogleFonts.creepster(
-                      fontSize: 20,
-                      letterSpacing: 1.5,
-                      fontWeight: FontWeight.bold,
+                    child: Text(
+                      'CONFIRM PACKS',
+                      style: GoogleFonts.creepster(
+                        fontSize: 20,
+                        letterSpacing: 1.5,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                 ),

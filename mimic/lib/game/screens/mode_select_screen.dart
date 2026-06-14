@@ -88,32 +88,35 @@ class ModeSelectScreen extends ConsumerWidget {
             ),
 
             // Bottom Proceed Button
-            Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: SizedBox(
-                width: double.infinity,
-                height: 54,
-                child: ElevatedButton(
-                  onPressed: () {
-                    // Navigate to PlayerSetupScreen
-                    Navigator.of(context).pushNamed(MimicGame.playerSetupRoute);
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: HorrorColors.crimson,
-                    foregroundColor: HorrorColors.fogWhite,
-                    elevation: 6,
-                    shadowColor: HorrorColors.crimson.withValues(alpha: 0.4),
-                    side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(8),
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.all(24.0),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 54,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      // Navigate to PlayerSetupScreen
+                      Navigator.of(context).pushNamed(MimicGame.playerSetupRoute);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: HorrorColors.crimson,
+                      foregroundColor: HorrorColors.fogWhite,
+                      elevation: 6,
+                      shadowColor: HorrorColors.crimson.withValues(alpha: 0.4),
+                      side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(8),
+                      ),
                     ),
-                  ),
-                  child: Text(
-                    'PROCEED',
-                    style: GoogleFonts.creepster(
-                      fontSize: 22,
-                      letterSpacing: 2.0,
-                      fontWeight: FontWeight.bold,
+                    child: Text(
+                      'PROCEED',
+                      style: GoogleFonts.creepster(
+                        fontSize: 22,
+                        letterSpacing: 2.0,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                 ),

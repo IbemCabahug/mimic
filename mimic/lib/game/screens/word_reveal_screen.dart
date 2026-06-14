@@ -553,34 +553,37 @@ class _DiscussionScreenState extends ConsumerState<DiscussionScreen> {
                   ),
 
                   // Start Voting Now Button
-                  Padding(
-                    padding: const EdgeInsets.all(20.0),
-                    child: SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: ElevatedButton(
-                        onPressed: () {
-                          _timer.cancel();
-                          Navigator.of(context).pushNamed(MimicGame.votingRoute);
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: HorrorColors.crimson,
-                          foregroundColor: HorrorColors.fogWhite,
-                          side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
+                  SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.all(20.0),
+                      child: SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: ElevatedButton(
+                          onPressed: () {
+                            _timer.cancel();
+                            Navigator.of(context).pushNamed(MimicGame.votingRoute);
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: HorrorColors.crimson,
+                            foregroundColor: HorrorColors.fogWhite,
+                            side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
                           ),
-                        ),
-                        child: Text(
-                          'START VOTING',
-                          style: GoogleFonts.creepster(
-                            fontSize: 20,
-                            letterSpacing: 1.5,
-                            fontWeight: FontWeight.bold,
+                          child: Text(
+                            'START VOTING',
+                            style: GoogleFonts.creepster(
+                              fontSize: 20,
+                              letterSpacing: 1.5,
+                              fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ),
-                  ),
+                    ),
                   ),
                 ],
               ),

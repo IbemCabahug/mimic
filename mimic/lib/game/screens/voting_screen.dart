@@ -281,35 +281,38 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
 
                 // Submit Vote Panel for Voter Flow
                 if (!allVoted)
-                  Padding(
-                    padding: const EdgeInsets.all(20.0),
-                    child: SizedBox(
-                      width: double.infinity,
-                      height: 52,
-                      child: ElevatedButton(
-                        onPressed: _selectedCandidateId != null
-                            ? () {
-                                final targetId = _selectedCandidateId!;
-                                final targetIndex = gameState.players.indexWhere((p) => p.id == targetId);
-                                _submitVote(targetIndex, targetId);
-                              }
-                            : null,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: HorrorColors.crimson,
-                          foregroundColor: HorrorColors.fogWhite,
-                          disabledBackgroundColor: HorrorColors.cardSurface,
-                          disabledForegroundColor: HorrorColors.ashGray,
-                          side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
+                  SafeArea(
+                    top: false,
+                    child: Padding(
+                      padding: const EdgeInsets.all(20.0),
+                      child: SizedBox(
+                        width: double.infinity,
+                        height: 52,
+                        child: ElevatedButton(
+                          onPressed: _selectedCandidateId != null
+                              ? () {
+                                  final targetId = _selectedCandidateId!;
+                                  final targetIndex = gameState.players.indexWhere((p) => p.id == targetId);
+                                  _submitVote(targetIndex, targetId);
+                                }
+                              : null,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: HorrorColors.crimson,
+                            foregroundColor: HorrorColors.fogWhite,
+                            disabledBackgroundColor: HorrorColors.cardSurface,
+                            disabledForegroundColor: HorrorColors.ashGray,
+                            side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
                           ),
-                        ),
-                        child: Text(
-                          'SUBMIT VOTE',
-                          style: GoogleFonts.creepster(
-                            fontSize: 20,
-                            letterSpacing: 1.5,
-                            fontWeight: FontWeight.bold,
+                          child: Text(
+                            'SUBMIT VOTE',
+                            style: GoogleFonts.creepster(
+                              fontSize: 20,
+                              letterSpacing: 1.5,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
                         ),
                       ),

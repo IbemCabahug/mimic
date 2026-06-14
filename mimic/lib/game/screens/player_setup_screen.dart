@@ -214,64 +214,67 @@ class _PlayerSetupScreenState extends ConsumerState<PlayerSetupScreen> {
             ),
 
             // Add & Start Action Panel
-            Padding(
-              padding: const EdgeInsets.all(20),
-              child: Column(
-                children: [
-                  if (_players.length < 8)
-                    SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: OutlinedButton.icon(
-                        onPressed: _addPlayer,
-                        icon: const Icon(Icons.add, color: HorrorColors.crimson, size: 20),
-                        label: Text(
-                          'ADD PLAYER',
-                          style: GoogleFonts.creepster(
-                            color: HorrorColors.crimson,
-                            fontSize: 18,
-                            letterSpacing: 1.5,
+            SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  children: [
+                    if (_players.length < 8)
+                      SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: OutlinedButton.icon(
+                          onPressed: _addPlayer,
+                          icon: const Icon(Icons.add, color: HorrorColors.crimson, size: 20),
+                          label: Text(
+                            'ADD PLAYER',
+                            style: GoogleFonts.creepster(
+                              color: HorrorColors.crimson,
+                              fontSize: 18,
+                              letterSpacing: 1.5,
+                            ),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            side: const BorderSide(color: HorrorColors.crimson, width: 1.5),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
                           ),
                         ),
-                        style: OutlinedButton.styleFrom(
-                          side: const BorderSide(color: HorrorColors.crimson, width: 1.5),
+                      ),
+                    const SizedBox(height: 12),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: ElevatedButton(
+                        onPressed: _canStart ? _startGame : null,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: HorrorColors.crimson,
+                          foregroundColor: HorrorColors.fogWhite,
+                          disabledBackgroundColor: HorrorColors.cardSurface,
+                          disabledForegroundColor: HorrorColors.ashGray,
+                          side: BorderSide(
+                            color: _canStart ? HorrorColors.bloodRed : Colors.transparent,
+                            width: 1.5,
+                          ),
+                          elevation: 4,
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(8),
                           ),
                         ),
-                      ),
-                    ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: ElevatedButton(
-                      onPressed: _canStart ? _startGame : null,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: HorrorColors.crimson,
-                        foregroundColor: HorrorColors.fogWhite,
-                        disabledBackgroundColor: HorrorColors.cardSurface,
-                        disabledForegroundColor: HorrorColors.ashGray,
-                        side: BorderSide(
-                          color: _canStart ? HorrorColors.bloodRed : Colors.transparent,
-                          width: 1.5,
-                        ),
-                        elevation: 4,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                      ),
-                      child: Text(
-                        'START GAME',
-                        style: GoogleFonts.creepster(
-                          fontSize: 20,
-                          letterSpacing: 2.0,
-                          fontWeight: FontWeight.bold,
+                        child: Text(
+                          'START GAME',
+                          style: GoogleFonts.creepster(
+                            fontSize: 20,
+                            letterSpacing: 2.0,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ],
