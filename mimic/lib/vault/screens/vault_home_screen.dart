@@ -13,6 +13,7 @@ import '../services/backup_reminder_service.dart';
 import '../widgets/vault_scaffold.dart';
 import '../security/shake_wipe_service.dart';
 import '../widgets/blood_splatter_overlay.dart';
+import '../widgets/backup_out_of_date_banner.dart';
 
 class VaultHomeScreen extends ConsumerStatefulWidget {
   const VaultHomeScreen({super.key});
@@ -163,6 +164,7 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  const BackupOutOfDateBanner(),
                   // Title
                   Padding(
                     padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),

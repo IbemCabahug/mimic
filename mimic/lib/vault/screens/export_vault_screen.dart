@@ -7,6 +7,7 @@ import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/services/backup_reminder_service.dart';
 import 'package:mimic/vault/widgets/vault_scaffold.dart';
 import 'package:mimic/vault/export/vault_exporter.dart';
+import 'package:mimic/vault/widgets/backup_out_of_date_banner.dart';
 
 class ExportVaultScreen extends ConsumerStatefulWidget {
   const ExportVaultScreen({super.key});
@@ -49,7 +50,7 @@ class _ExportVaultScreenState extends ConsumerState<ExportVaultScreen> {
   Future<void> _exportToDownloads() async {
     setState(() => _isExporting = true);
     try {
-      final file = await VaultExporter.buildExportFile();
+      final file = await VaultExporter.buildExportFile(ref);
       await BackupReminderService.markBackupCompleted();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -88,7 +89,7 @@ class _ExportVaultScreenState extends ConsumerState<ExportVaultScreen> {
   Future<void> _exportAndShare() async {
     setState(() => _isExporting = true);
     try {
-      final file = await VaultExporter.buildExportFile();
+      final file = await VaultExporter.buildExportFile(ref);
       await BackupReminderService.markBackupCompleted();
       await VaultExporter.shareFile(file);
     } catch (e) {
@@ -127,6 +128,7 @@ class _ExportVaultScreenState extends ConsumerState<ExportVaultScreen> {
                 : ListView(
                     padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
                     children: [
+                      const BackupOutOfDateBanner(),
                       const SizedBox(height: 24),
                       const Icon(
                         Icons.unarchive_outlined,

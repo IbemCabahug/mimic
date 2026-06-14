@@ -6,11 +6,16 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:sqflite/sqflite.dart';
+import '../services/file_vault_service.dart';
+import '../services/video_vault_service.dart';
+import '../services/document_vault_service.dart';
+import '../services/vault_backup_status.dart';
 
 /// Handles exporting and sharing the entire Mimic Vault as a single
 /// `.mimic` binary backup file.
@@ -57,7 +62,7 @@ class VaultExporter {
   /// saves the result to the device's Downloads directory.
   ///
   /// Returns the written [File].
-  static Future<File> buildExportFile() async {
+  static Future<File> buildExportFile(dynamic ref, {String? overwritePath}) async {
     const storage = FlutterSecureStorage(
       aOptions: AndroidOptions(encryptedSharedPreferences: true),
     );
@@ -131,7 +136,9 @@ class VaultExporter {
 
     // Gather IDs from photo metadata
     final photoIds = _extractIds(payload['vault_photos_meta']);
+    final fileVault = ref.read(fileVaultServiceProvider);
     for (final id in photoIds) {
+      try { await fileVault.getPhoto(id); } catch (_) {}
       final file = File('${appDir.path}/vault_files/$id');
       if (await file.exists()) {
         final bytes = await file.readAsBytes();
@@ -141,7 +148,9 @@ class VaultExporter {
 
     // Gather IDs from video metadata
     final videoIds = _extractIds(payload['vault_videos_meta']);
+    final videoVault = ref.read(videoVaultServiceProvider);
     for (final id in videoIds) {
+      try { await videoVault.getVideo(id); } catch (_) {}
       final file = File('${appDir.path}/vault_files/$id');
       if (await file.exists()) {
         final bytes = await file.readAsBytes();
@@ -151,13 +160,17 @@ class VaultExporter {
 
     // Gather IDs from document metadata
     final documentIds = _extractIds(payload['vault_documents_meta']);
+    final documentVault = ref.read(documentVaultServiceProvider);
     for (final id in documentIds) {
+      try { await documentVault.getDocumentBytes(id); } catch (_) {}
       final file = File('${appDir.path}/vault_files/$id');
       if (await file.exists()) {
         final bytes = await file.readAsBytes();
         encryptedFiles[id] = base64Encode(bytes);
       }
     }
+    
+    final noteIds = _extractIds(payload['vault_notes']);
 
     if (encryptedFiles.isNotEmpty) {
       payload['encrypted_files'] = encryptedFiles;
@@ -187,11 +200,21 @@ class VaultExporter {
 
     final Uint8List fileBytes = builder.toBytes();
 
-    // ── 7. Write to the Downloads directory ──────────────────────────
-    final downloadsDir = await _getDownloadsDirectory();
-    final fileName = 'Mimic_Backup_$nowMs.mimic';
-    final outputFile = File('${downloadsDir.path}/$fileName');
+    // ── 7. Write to the target directory ─────────────────────────────
+    final File outputFile;
+    if (overwritePath != null) {
+      outputFile = File(overwritePath);
+    } else {
+      final downloadsDir = await _getDownloadsDirectory();
+      final fileName = 'Mimic_Backup_$nowMs.mimic';
+      outputFile = File('${downloadsDir.path}/$fileName');
+    }
     await outputFile.writeAsBytes(fileBytes, flush: true);
+
+    // Record export
+    final totalCount = photoIds.length + videoIds.length + documentIds.length + noteIds.length;
+    final status = await VaultBackupStatus.init();
+    await status.recordExport(totalCount, outputFile.path);
 
     return outputFile;
   }

@@ -11,6 +11,7 @@ import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/export/vault_exporter.dart';
 import 'package:mimic/vault/export/vault_importer.dart';
 import 'package:mimic/vault/services/file_vault_service.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -270,7 +271,7 @@ void main() {
       await docFile.writeAsBytes(utf8.encode('doc_bytes'));
 
       // 3. Perform export
-      final exportedFile = await VaultExporter.buildExportFile();
+      final exportedFile = await VaultExporter.buildExportFile(ProviderContainer());
       expect(await exportedFile.exists(), isTrue);
 
       // Verify the exported file validation
@@ -362,7 +363,7 @@ void main() {
       await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
 
       // Export a backup
-      final backupFile = await VaultExporter.buildExportFile();
+      final backupFile = await VaultExporter.buildExportFile(ProviderContainer());
 
       // Tamper with the backup to simulate an old backup that has no video/document keys
       final exportBytes = await backupFile.readAsBytes();
@@ -426,7 +427,7 @@ void main() {
       await notesDb.close();
 
       // Export the backup
-      final backupFile = await VaultExporter.buildExportFile();
+      final backupFile = await VaultExporter.buildExportFile(ProviderContainer());
 
       // Update the note to represent the current "active" vault state
       final activeDb = await openDatabase(notesDbPath);
@@ -457,7 +458,7 @@ void main() {
       await VaultCrypto.instance.initialize('123456');
       await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
 
-      final exportedFile = await VaultExporter.buildExportFile();
+      final exportedFile = await VaultExporter.buildExportFile(ProviderContainer());
       expect(await exportedFile.exists(), isTrue);
 
       // Good file
@@ -510,7 +511,7 @@ void main() {
       await Directory('$appDocsPath/vault_files').create(recursive: true);
       await photoFile.writeAsBytes(utf8.encode('photo_sim_bytes'));
 
-      final exportedFile = await VaultExporter.buildExportFile();
+      final exportedFile = await VaultExporter.buildExportFile(ProviderContainer());
       expect(await exportedFile.exists(), isTrue);
 
       secureStorageData.clear();
@@ -557,7 +558,7 @@ void main() {
         originalName: 'test.jpg',
       );
 
-      final exportedFile = await VaultExporter.buildExportFile();
+      final exportedFile = await VaultExporter.buildExportFile(ProviderContainer());
       expect(await exportedFile.exists(), isTrue);
 
       // Simulate FRESH install: wipe storage, delete database, delete vault_files dir
@@ -602,7 +603,7 @@ void main() {
         originalName: 'test.jpg',
       );
 
-      final exportedFile = await VaultExporter.buildExportFile();
+      final exportedFile = await VaultExporter.buildExportFile(ProviderContainer());
       expect(await exportedFile.exists(), isTrue);
 
       secureStorageData.clear();
@@ -643,7 +644,7 @@ void main() {
         originalName: 'test.jpg',
       );
 
-      final exportedFile = await VaultExporter.buildExportFile();
+      final exportedFile = await VaultExporter.buildExportFile(ProviderContainer());
       expect(await exportedFile.exists(), isTrue);
 
       secureStorageData.clear();
@@ -703,7 +704,7 @@ void main() {
       // Ensure the _db handle is cached
       await fileService.getAllPhotos();
 
-      final exportedFile = await VaultExporter.buildExportFile();
+      final exportedFile = await VaultExporter.buildExportFile(ProviderContainer());
       expect(await exportedFile.exists(), isTrue);
 
       secureStorageData.clear();
