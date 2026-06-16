@@ -5,7 +5,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb, visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -20,7 +20,7 @@ import '../services/notes_service.dart';
 
 import '../crypto/recovery_phrase.dart';
 import '../crypto/vault_crypto.dart';
-import 'vault_exporter.dart' show kMaxBackupFileBytes;
+// Import of kMaxBackupFileBytes removed for importer-specific limit
 
 /// Represents the result of validating a `.mimic` backup file.
 class ImportValidationResult {
@@ -36,6 +36,9 @@ class ImportValidationResult {
 
 /// Handles validating and importing backup `.mimic` files.
 class VaultImporter {
+  @visibleForTesting
+  static int maxImportFileBytes = 160 * 1024 * 1024;
+
   // ─── ASCII magic header ───────────────────────────────────────────
   static const List<int> _magic = [0x4D, 0x4D, 0x49, 0x43]; // M M I C
   static const int _version = 0x01;
@@ -51,9 +54,10 @@ class VaultImporter {
       if (!await file.exists()) {
         return ImportValidationResult.invalid("File does not exist");
       }
-      if (await file.length() > kMaxBackupFileBytes) {
-        throw Exception('Vault too large to back up in this version. Please wait for the next update.');
+      if (await file.length() > maxImportFileBytes) {
+        throw Exception('This backup is too large to restore in this version (over 160 MB). Larger backups will be supported in a future update.');
       }
+
       final bytes = await file.readAsBytes();
       if (bytes.length < 45) {
         return ImportValidationResult.invalid("File too short");
@@ -91,7 +95,7 @@ class VaultImporter {
 
       return ImportValidationResult.valid();
     } catch (e) {
-      if (e is Exception && e.toString().contains('too large')) {
+      if (e is Exception && e.toString().contains('too large to restore in this version')) {
         rethrow;
       }
       return ImportValidationResult.invalid("Failed to read file: $e");

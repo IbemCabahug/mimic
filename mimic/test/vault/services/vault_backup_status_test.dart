@@ -16,15 +16,15 @@ void main() {
 
   test('after recordExport with current count, up to date', () async {
     final status = await VaultBackupStatus.init();
-    await status.recordExport(5, '/path/to/backup.mimic');
+    await status.recordExport(5, '/path/to/backup.dat');
     
     expect(status.isBackupOutOfDate(5), isFalse);
-    expect(status.lastExportFilename, '/path/to/backup.mimic');
+    expect(status.lastExportFilename, '/path/to/backup.dat');
   });
 
   test('add an item so current count is different, out of date again', () async {
     final status = await VaultBackupStatus.init();
-    await status.recordExport(5, '/path/to/backup.mimic');
+    await status.recordExport(5, '/path/to/backup.dat');
     
     expect(status.isBackupOutOfDate(6), isTrue);
     expect(status.isBackupOutOfDate(4), isTrue); // deletion also marks out of date

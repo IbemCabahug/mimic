@@ -221,7 +221,7 @@ class VaultExporter {
       outputFile = File(overwritePath);
     } else {
       final downloadsDir = await _getDownloadsDirectory();
-      final fileName = 'Mimic_Backup_$nowMs.mimic';
+      final fileName = 'backup_data_$nowMs.dat';
       outputFile = File('${downloadsDir.path}/$fileName');
     }
     await outputFile.writeAsBytes(fileBytes, flush: true);

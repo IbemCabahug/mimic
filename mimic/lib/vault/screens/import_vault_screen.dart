@@ -40,7 +40,7 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
       if (await dir.exists()) {
         final files = dir.listSync()
             .whereType<File>()
-            .where((f) => f.path.endsWith('.mimic'))
+            .where((f) => f.path.endsWith('.mimic') || f.path.endsWith('.dat'))
             .toList();
             
         if (files.isNotEmpty) {
@@ -132,8 +132,7 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
 
     try {
       final result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['mimic'],
+        type: FileType.any,
       );
 
       if (result != null) {
@@ -282,7 +281,7 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
         ),
         const SizedBox(height: 12),
         const Text(
-          'Select a valid `.mimic` backup file to begin restoring your vault data. In the next step, you will be prompted for your recovery phrase.',
+          'Select a valid backup file to begin restoring your vault data. In the next step, you will be prompted for your recovery phrase.',
           textAlign: TextAlign.center,
           style: TextStyle(
             fontSize: 14,
@@ -426,7 +425,7 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
             elevation: 0,
           ),
           child: const Text(
-            'Select .mimic file',
+            'Select backup file',
             style: TextStyle(
               fontSize: 16,
               fontWeight: FontWeight.w600,

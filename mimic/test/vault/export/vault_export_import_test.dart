@@ -795,6 +795,56 @@ void main() {
       expect(result, isTrue);
     });
 
+    test('1MB backup imports successfully without hitting size guard', () async {
+      final originalExportCeiling = kMaxBackupFileBytes;
+      final originalImportLimit = VaultImporter.maxImportFileBytes;
+      kMaxBackupFileBytes = 2 * 1024 * 1024; // 2MB export limit
+      VaultImporter.maxImportFileBytes = 3 * 1024 * 1024; // 3MB import limit
+      addTearDown(() {
+        kMaxBackupFileBytes = originalExportCeiling;
+        VaultImporter.maxImportFileBytes = originalImportLimit;
+      });
+
+      await VaultCrypto.instance.initialize('123456');
+      await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
+
+      final photosDbPath = '$dbDirPath/vault_files.db';
+      final photosDb = await openDatabase(
+        photosDbPath,
+        version: 1,
+        onCreate: (db, version) async {
+          await db.execute('CREATE TABLE photos(id TEXT PRIMARY KEY, mimeType TEXT, size INTEGER, createdAt TEXT, originalName TEXT)');
+        },
+      );
+      final now = DateTime.now().toIso8601String();
+      await photosDb.insert('photos', {'id': 'photo_90mb', 'mimeType': 'image/jpeg', 'size': 1 * 1024 * 1024, 'createdAt': now});
+      await photosDb.close();
+
+      final hugeFile = File('$appDocsPath/vault_files/photo_90mb');
+      await Directory('$appDocsPath/vault_files').create(recursive: true);
+      
+      final randomAccessFile = await hugeFile.open(mode: FileMode.write);
+      await randomAccessFile.setPosition((1 * 1024 * 1024) - 1); // 1MB
+      await randomAccessFile.writeByte(0);
+      await randomAccessFile.close();
+
+      final exportFile = await VaultExporter.buildExportFile(ProviderContainer());
+      
+      secureStorageData.clear();
+      SharedPreferences.setMockInitialValues({});
+      if (await File(photosDbPath).exists()) await File(photosDbPath).delete();
+      if (await hugeFile.exists()) await hugeFile.delete();
+
+      VaultCrypto(AndroidPlatformService());
+
+      try {
+        final result = await VaultImporter.importWithPhrase(exportFile, recoveryWords);
+        expect(result, isTrue);
+      } catch (e) {
+        fail('Failed to import 90MB backup: \$e');
+      }
+    }, timeout: const Timeout(Duration(minutes: 5)));
+
     test('EXPORT size guard: fails gracefully if vault blobs exceed ceiling', () async {
       await VaultCrypto.instance.initialize('123456');
       await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
@@ -828,9 +878,13 @@ void main() {
     });
 
     test('IMPORT size guard: fails gracefully if .mimic file exceeds ceiling', () async {
+      final originalLimit = VaultImporter.maxImportFileBytes;
+      VaultImporter.maxImportFileBytes = 1024; // 1KB limit
+      addTearDown(() => VaultImporter.maxImportFileBytes = originalLimit);
+
       final hugeFile = File('$downloadsPath/huge_backup.mimic');
       final randomAccessFile = await hugeFile.open(mode: FileMode.write);
-      await randomAccessFile.setPosition((160 * 1024 * 1024) + 1);
+      await randomAccessFile.setPosition(1025 - 1);
       await randomAccessFile.writeByte(0);
       await randomAccessFile.close();
 

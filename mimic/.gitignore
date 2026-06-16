@@ -52,3 +52,4 @@ android/.kotlin/
 
 *.apk
 /app-release.apk
+test_90mb.bin
