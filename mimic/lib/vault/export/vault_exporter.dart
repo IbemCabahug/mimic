@@ -16,7 +16,6 @@ import '../services/document_vault_service.dart';
 import '../services/vault_backup_status.dart';
 import 'mimic_v2_format.dart';
 
-int kMaxBackupFileBytes = 160 * 1024 * 1024;
 
 /// Handles exporting and sharing the entire Mimic Vault as a single
 /// `.mimic` binary backup file.
@@ -128,7 +127,7 @@ class VaultExporter {
       }
     }
 
-    // ── 2. Gather file IDs and check the export cap ──────────────────
+    // ── 2. Gather file IDs ───────────────────────────────────────────
     final appDir = await getApplicationDocumentsDirectory();
 
     final photoIds = _extractIds(payload['vault_photos_meta']);
@@ -138,21 +137,6 @@ class VaultExporter {
 
     // Collect all media IDs that will become blobs
     final allMediaIds = <String>[...photoIds, ...videoIds, ...documentIds];
-
-    int totalVaultSize = 0;
-    for (final id in allMediaIds) {
-      final file = File('${appDir.path}/vault_files/$id');
-      if (await file.exists()) {
-        totalVaultSize += await file.length();
-      }
-    }
-
-    // v2 streams raw bytes (no base64 inflation) but keep the 1.4×
-    // multiplier for backward-compat with the existing cap logic.
-    final estimatedExportSize = totalVaultSize * 1.4;
-    if (estimatedExportSize > kMaxBackupFileBytes) {
-      throw Exception('Vault too large to back up in this version. Please wait for the next update.');
-    }
 
     // Touch files to ensure they exist (triggers lazy writes in services)
     final fileVault = ref.read(fileVaultServiceProvider);

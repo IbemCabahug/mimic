@@ -906,10 +906,7 @@ void main() {
       }
     });
 
-    test('Round-trip boundary: vault just under export limit imports successfully despite base64 inflation', () async {
-      final originalCeiling = kMaxBackupFileBytes;
-      kMaxBackupFileBytes = 1024 * 1024; // 1MB limit
-      addTearDown(() => kMaxBackupFileBytes = originalCeiling);
+    test('Round-trip boundary: vault with ~748KB blob round-trips successfully', () async {
 
       await VaultCrypto.instance.initialize('123456');
       await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
@@ -947,13 +944,10 @@ void main() {
       expect(result, isTrue);
     });
 
-    test('1MB backup imports successfully without hitting size guard', () async {
-      final originalExportCeiling = kMaxBackupFileBytes;
+    test('1MB backup imports successfully', () async {
       final originalImportLimit = VaultImporter.maxImportFileBytes;
-      kMaxBackupFileBytes = 2 * 1024 * 1024; // 2MB export limit
       VaultImporter.maxImportFileBytes = 3 * 1024 * 1024; // 3MB import limit
       addTearDown(() {
-        kMaxBackupFileBytes = originalExportCeiling;
         VaultImporter.maxImportFileBytes = originalImportLimit;
       });
 
@@ -997,37 +991,7 @@ void main() {
       }
     }, timeout: const Timeout(Duration(minutes: 5)));
 
-    test('EXPORT size guard: fails gracefully if vault blobs exceed ceiling', () async {
-      await VaultCrypto.instance.initialize('123456');
-      await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
 
-      final photosDbPath = '$dbDirPath/vault_files.db';
-      final photosDb = await openDatabase(
-        photosDbPath,
-        version: 1,
-        onCreate: (db, version) async {
-          await db.execute('CREATE TABLE photos(id TEXT PRIMARY KEY, mimeType TEXT, size INTEGER, createdAt TEXT, originalName TEXT)');
-        },
-      );
-      final now = DateTime.now().toIso8601String();
-      await photosDb.insert('photos', {'id': 'huge_photo', 'mimeType': 'image/jpeg', 'size': 1024, 'createdAt': now});
-      await photosDb.close();
-
-      final hugeFile = File('$appDocsPath/vault_files/huge_photo');
-      await Directory('$appDocsPath/vault_files').create(recursive: true);
-      
-      final randomAccessFile = await hugeFile.open(mode: FileMode.write);
-      await randomAccessFile.setPosition((115 * 1024 * 1024) + 1);
-      await randomAccessFile.writeByte(0);
-      await randomAccessFile.close();
-
-      try {
-        await VaultExporter.buildExportFile(ProviderContainer());
-        fail('Should have thrown an exception');
-      } catch (e) {
-        expect(e.toString().toLowerCase(), contains('too large'));
-      }
-    });
 
     test('IMPORT size guard: fails gracefully if .mimic v1 file exceeds ceiling', () async {
       final originalLimit = VaultImporter.maxImportFileBytes;
