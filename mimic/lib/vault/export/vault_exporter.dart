@@ -4,7 +4,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
@@ -15,25 +14,24 @@ import '../services/file_vault_service.dart';
 import '../services/video_vault_service.dart';
 import '../services/document_vault_service.dart';
 import '../services/vault_backup_status.dart';
+import 'mimic_v2_format.dart';
 
 int kMaxBackupFileBytes = 160 * 1024 * 1024;
 
 /// Handles exporting and sharing the entire Mimic Vault as a single
 /// `.mimic` binary backup file.
 ///
-/// File format:
+/// File format (v2):
 /// ```
-/// [4 bytes]     ASCII magic: M I M C
-/// [1 byte]      Version: 0x01
-/// [32 bytes]    SHA-256 checksum of the JSON payload bytes
+/// [4 bytes]     ASCII magic: M M I C
+/// [1 byte]      Version: 0x02
 /// [8 bytes]     Unix-millisecond timestamp, big-endian int64
-/// [remaining]   JSON payload bytes (UTF-8 encoded)
+/// [4 bytes]     Metadata-length N, big-endian uint32
+/// [N bytes]     JSON metadata (UTF-8 encoded, NO media blobs)
+/// [BLOB]*       Length-prefixed blob entries (streamed from disk)
+/// [32 bytes]    SHA-256 trailer (incremental hash of everything above)
 /// ```
 class VaultExporter {
-  // ─── ASCII magic header ───────────────────────────────────────────
-  static const List<int> _magic = [0x4D, 0x4D, 0x49, 0x43]; // M M I C
-  static const int _version = 0x01;
-
   // ─── Secure-storage keys that hold vault data ─────────────────────
   static const List<String> _secureKeys = [
     // Photo metadata (JSON array of PhotoMeta maps)
@@ -59,8 +57,9 @@ class VaultExporter {
   // ───────────────────────────────────────────────────────────────────
 
   /// Reads all encrypted vault data from flutter_secure_storage, bundles it
-  /// into a JSON payload, wraps it in the `.mimic` binary container, and
-  /// saves the result to the device's Downloads directory.
+  /// into a JSON payload, wraps it in the `.mimic` v2 binary container with
+  /// streaming blob writes, and saves the result to the device's Downloads
+  /// directory.
   ///
   /// Returns the written [File].
   static Future<File> buildExportFile(dynamic ref, {String? overwritePath}) async {
@@ -129,93 +128,58 @@ class VaultExporter {
       }
     }
 
-    // ── 2. Read encrypted files from the app-documents directory ──────
-    //    Photos and audio are stored as individual encrypted blobs whose
-    //    filenames match UUID ids listed in vault_photos_meta / vault_audio_meta.
+    // ── 2. Gather file IDs and check the export cap ──────────────────
     final appDir = await getApplicationDocumentsDirectory();
-    final Map<String, String> encryptedFiles = {};
 
-    // Gather IDs
     final photoIds = _extractIds(payload['vault_photos_meta']);
     final videoIds = _extractIds(payload['vault_videos_meta']);
     final documentIds = _extractIds(payload['vault_documents_meta']);
     final noteIds = _extractIds(payload['vault_notes']);
 
+    // Collect all media IDs that will become blobs
+    final allMediaIds = <String>[...photoIds, ...videoIds, ...documentIds];
+
     int totalVaultSize = 0;
-    for (final id in [...photoIds, ...videoIds, ...documentIds]) {
+    for (final id in allMediaIds) {
       final file = File('${appDir.path}/vault_files/$id');
       if (await file.exists()) {
         totalVaultSize += await file.length();
       }
     }
 
+    // v2 streams raw bytes (no base64 inflation) but keep the 1.4×
+    // multiplier for backward-compat with the existing cap logic.
     final estimatedExportSize = totalVaultSize * 1.4;
     if (estimatedExportSize > kMaxBackupFileBytes) {
       throw Exception('Vault too large to back up in this version. Please wait for the next update.');
     }
 
+    // Touch files to ensure they exist (triggers lazy writes in services)
     final fileVault = ref.read(fileVaultServiceProvider);
     for (final id in photoIds) {
       try { await fileVault.getPhoto(id); } catch (_) {}
-      final file = File('${appDir.path}/vault_files/$id');
-      if (await file.exists()) {
-        final bytes = await file.readAsBytes();
-        encryptedFiles[id] = base64Encode(bytes);
-      }
     }
-
-    // Videos
     final videoVault = ref.read(videoVaultServiceProvider);
     for (final id in videoIds) {
       try { await videoVault.getVideo(id); } catch (_) {}
-      final file = File('${appDir.path}/vault_files/$id');
-      if (await file.exists()) {
-        final bytes = await file.readAsBytes();
-        encryptedFiles[id] = base64Encode(bytes);
-      }
     }
-
-    // Documents
     final documentVault = ref.read(documentVaultServiceProvider);
     for (final id in documentIds) {
       try { await documentVault.getDocumentBytes(id); } catch (_) {}
-      final file = File('${appDir.path}/vault_files/$id');
-      if (await file.exists()) {
-        final bytes = await file.readAsBytes();
-        encryptedFiles[id] = base64Encode(bytes);
-      }
     }
 
+    // ── 3. Build the v2 metadata JSON (NO encrypted_files map) ───────
+    // Include an authoritative list of file IDs that will be streamed.
+    payload['blob_ids'] = allMediaIds;
+    // Do NOT include 'encrypted_files' — blobs are streamed separately.
+    payload.remove('encrypted_files');
 
-    if (encryptedFiles.isNotEmpty) {
-      payload['encrypted_files'] = encryptedFiles;
-    }
-
-    // ── 3. Encode JSON payload ───────────────────────────────────────
     final jsonString = jsonEncode(payload);
-    final Uint8List jsonBytes = Uint8List.fromList(utf8.encode(jsonString));
+    final Uint8List metadataBytes = Uint8List.fromList(utf8.encode(jsonString));
 
-    // ── 4. Compute SHA-256 checksum over the JSON payload bytes ──────
-    final Digest checksum = sha256.convert(jsonBytes);
-    final Uint8List checksumBytes = Uint8List.fromList(checksum.bytes);
-
-    // ── 5. Timestamp: current Unix milliseconds as big-endian int64 ──
+    // ── 4. Write v2 container to a temp file ─────────────────────────
     final int nowMs = DateTime.now().millisecondsSinceEpoch;
-    final ByteData timestampData = ByteData(8);
-    timestampData.setInt64(0, nowMs, Endian.big);
-    final Uint8List timestampBytes = timestampData.buffer.asUint8List();
 
-    // ── 6. Assemble the .mimic binary ────────────────────────────────
-    final builder = BytesBuilder(copy: false);
-    builder.add(_magic);                       // 4 bytes  – magic
-    builder.addByte(_version);                 // 1 byte   – version
-    builder.add(checksumBytes);                // 32 bytes – SHA-256
-    builder.add(timestampBytes);               // 8 bytes  – timestamp
-    builder.add(jsonBytes);                    // N bytes  – payload
-
-    final Uint8List fileBytes = builder.toBytes();
-
-    // ── 7. Write to the target directory ─────────────────────────────
     final File outputFile;
     if (overwritePath != null) {
       outputFile = File(overwritePath);
@@ -224,9 +188,37 @@ class VaultExporter {
       final fileName = 'backup_data_$nowMs.dat';
       outputFile = File('${downloadsDir.path}/$fileName');
     }
-    await outputFile.writeAsBytes(fileBytes, flush: true);
 
-    // Record export
+    final tempFile = File('${outputFile.path}.part');
+
+    try {
+      final sink = tempFile.openWrite();
+      final writer = MimicV2Writer(sink);
+
+      writer.writeHeader(nowMs, metadataBytes);
+
+      for (final id in allMediaIds) {
+        final blobFile = File('${appDir.path}/vault_files/$id');
+        if (await blobFile.exists()) {
+          final blobLength = await blobFile.length();
+          await writer.writeBlob(id, blobLength, blobFile.openRead());
+        }
+      }
+
+      await writer.finish();
+      await sink.close();
+
+      // Rename temp → final
+      await tempFile.rename(outputFile.path);
+    } catch (e) {
+      // Clean up partial temp file on any error
+      try {
+        if (await tempFile.exists()) await tempFile.delete();
+      } catch (_) {}
+      rethrow;
+    }
+
+    // ── 5. Record export status ──────────────────────────────────────
     final totalCount = photoIds.length + videoIds.length + documentIds.length + noteIds.length;
     final status = await VaultBackupStatus.init();
     await status.recordExport(totalCount, outputFile.path);

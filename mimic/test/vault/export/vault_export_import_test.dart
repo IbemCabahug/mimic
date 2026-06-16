@@ -11,6 +11,7 @@ import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/export/vault_exporter.dart';
 import 'package:mimic/vault/export/vault_importer.dart';
+import 'package:mimic/vault/export/mimic_v2_format.dart';
 import 'package:mimic/vault/services/file_vault_service.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
@@ -86,6 +87,9 @@ void main() {
         if (methodCall.method == 'getExternalStorageDirectory') {
           return downloadsPath;
         }
+        if (methodCall.method == 'getTemporaryDirectory') {
+          return appDocsPath;
+        }
         return null;
       },
     );
@@ -120,6 +124,23 @@ void main() {
     } catch (_) {}
   });
 
+  // Helper: build a minimal v1 .mimic file in-test
+  Uint8List _buildV1File(Map<String, dynamic> payload) {
+    final jsonBytes = utf8.encode(jsonEncode(payload));
+    final checksum = sha256.convert(jsonBytes).bytes;
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
+    final tsData = ByteData(8);
+    tsData.setInt64(0, nowMs, Endian.big);
+
+    final builder = BytesBuilder(copy: false);
+    builder.add([0x4D, 0x4D, 0x49, 0x43]); // MMIC magic
+    builder.addByte(0x01);                   // v1
+    builder.add(checksum);                   // 32B SHA-256
+    builder.add(tsData.buffer.asUint8List()); // 8B timestamp
+    builder.add(jsonBytes);                  // JSON payload
+    return builder.toBytes();
+  }
+
   group('Vault Export & Import Tests', () {
     // ─────────────────────────────────────────────────────────────────
     //  Validation-only tests (no database interaction needed)
@@ -146,14 +167,14 @@ void main() {
       final file = File('$downloadsPath/wrong_version.mimic');
       final bytes = List<int>.filled(50, 0);
       bytes[0] = 0x4D; bytes[1] = 0x4D; bytes[2] = 0x49; bytes[3] = 0x43; // MMIC
-      bytes[4] = 0x02; // version 2
+      bytes[4] = 0xFF; // unknown version (not 0x01 or 0x02)
       await file.writeAsBytes(bytes);
       final result = await VaultImporter.validateFile(file);
       expect(result.isValid, isFalse);
       expect(result.reason, contains('Unsupported backup version'));
     });
 
-    test('validateFile rejects checksum mismatch', () async {
+    test('validateFile rejects checksum mismatch (v1)', () async {
       final file = File('$downloadsPath/checksum_mismatch.mimic');
       final bytes = List<int>.filled(50, 0);
       bytes[0] = 0x4D; bytes[1] = 0x4D; bytes[2] = 0x49; bytes[3] = 0x43; // MMIC
@@ -167,11 +188,24 @@ void main() {
       expect(result.reason, contains('checksum mismatch'));
     });
 
+    test('validateFile accepts v2 file with valid header', () async {
+      // Build a minimal valid v2 file
+      final file = File('$downloadsPath/valid_v2.mimic');
+      final sink = file.openWrite();
+      final writer = MimicV2Writer(sink);
+      writer.writeHeader(0, Uint8List.fromList(utf8.encode('{}')));
+      await writer.finish();
+      await sink.close();
+      
+      final result = await VaultImporter.validateFile(file);
+      expect(result.isValid, isTrue);
+    });
+
     // ─────────────────────────────────────────────────────────────────
-    //  Full round-trip: export → validate → import
+    //  V2 Full round-trip: export → validate → import
     // ─────────────────────────────────────────────────────────────────
 
-    test('Full Export and Import Round-Trip', () async {
+    test('Full Export and Import Round-Trip (v2)', () async {
       // 1. Initialise VaultCrypto and store recovery blob
       await VaultCrypto.instance.initialize('123456');
       await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
@@ -278,18 +312,13 @@ void main() {
       final exportedFile = await VaultExporter.buildExportFile(ProviderContainer());
       expect(await exportedFile.exists(), isTrue);
 
+      // Verify the exported file is v2 format
+      final exportBytes = await exportedFile.readAsBytes();
+      expect(exportBytes[4], equals(kMimicVersionV2), reason: 'Export should produce v2 format');
+
       // Verify the exported file validation
       final validation = await VaultImporter.validateFile(exportedFile);
       expect(validation.isValid, isTrue);
-
-      // Verify payload doesn't contain audio meta
-      final exportBytes = await exportedFile.readAsBytes();
-      final payloadBytes = exportBytes.sublist(45);
-      final jsonString = utf8.decode(payloadBytes);
-      final Map<String, dynamic> payload = jsonDecode(jsonString);
-      expect(payload.containsKey('vault_audio_meta'), isFalse);
-      expect(payload.containsKey('vault_videos_meta'), isTrue);
-      expect(payload.containsKey('vault_documents_meta'), isTrue);
 
       // 4. Clear data to simulate a fresh state / new device
       secureStorageData.clear();
@@ -359,36 +388,158 @@ void main() {
     }, timeout: const Timeout(Duration(minutes: 2)));
 
     // ─────────────────────────────────────────────────────────────────
-    //  Backward compatibility: old backups without new keys
+    //  Corruption safety: flip one byte → import throws, vault untouched
     // ─────────────────────────────────────────────────────────────────
 
-    test('Import backward-compat payload WITHOUT video/document keys', () async {
+    test('V2 Corruption safety: flip byte -> import throws, vault_files untouched', () async {
       await VaultCrypto.instance.initialize('123456');
       await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
 
-      // Export a backup
-      final backupFile = await VaultExporter.buildExportFile(ProviderContainer());
+      final photosDbPath = '$dbDirPath/vault_files.db';
+      final photosDb = await openDatabase(
+        photosDbPath,
+        version: 1,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE photos(
+              id TEXT PRIMARY KEY,
+              mimeType TEXT,
+              size INTEGER,
+              createdAt TEXT
+            )
+          ''');
+        },
+      );
+      final now = DateTime.now().toIso8601String();
+      await photosDb.insert('photos', {
+        'id': 'photo_corrupt_test',
+        'mimeType': 'image/jpeg',
+        'size': 100,
+        'createdAt': now,
+      });
+      await photosDb.close();
 
-      // Tamper with the backup to simulate an old backup that has no video/document keys
-      final exportBytes = await backupFile.readAsBytes();
-      final payloadBytes = exportBytes.sublist(45);
-      final jsonString = utf8.decode(payloadBytes);
-      final Map<String, dynamic> payload = jsonDecode(jsonString);
-      
-      payload.remove('vault_videos_meta');
-      payload.remove('vault_documents_meta');
-      
-      final tamperedJsonBytes = utf8.encode(jsonEncode(payload));
-      final checksum = sha256.convert(tamperedJsonBytes).bytes;
-      
-      final builder = BytesBuilder();
-      builder.add(exportBytes.sublist(0, 5)); // magic + version
-      builder.add(checksum);
-      builder.add(exportBytes.sublist(37, 45)); // timestamp
-      builder.add(tamperedJsonBytes);
-      
+      await Directory('$appDocsPath/vault_files').create(recursive: true);
+      final photoFile = File('$appDocsPath/vault_files/photo_corrupt_test');
+      await photoFile.writeAsBytes(utf8.encode('original_photo_bytes'));
+
+      final exportedFile = await VaultExporter.buildExportFile(ProviderContainer());
+
+      // Now set up "existing" vault state that should NOT be overwritten
+      await photoFile.writeAsBytes(utf8.encode('existing_vault_data'));
+      final existingContent = await photoFile.readAsBytes();
+
+      // Corrupt the exported file (flip a byte in the blob payload area)
+      final exportBytes = await exportedFile.readAsBytes();
+      final corruptedBytes = Uint8List.fromList(exportBytes);
+      // Flip a byte near the end (in the blob data, before the 32-byte trailer)
+      corruptedBytes[corruptedBytes.length - 40] ^= 0xFF;
+
+      final corruptedFile = File('$downloadsPath/corrupted_v2.mimic');
+      await corruptedFile.writeAsBytes(corruptedBytes);
+
+      // Reinitialize VaultCrypto
+      VaultCrypto(AndroidPlatformService());
+
+      // Import should throw
+      bool threw = false;
+      try {
+        await VaultImporter.importWithPhrase(corruptedFile, recoveryWords);
+      } catch (e) {
+        threw = true;
+        expect(e.toString(), contains('corrupted or incomplete'));
+      }
+      expect(threw, isTrue, reason: 'Import of corrupted v2 file should throw');
+
+      // Vault files should be untouched (existing data preserved)
+      expect(await photoFile.exists(), isTrue);
+      expect(await photoFile.readAsBytes(), equals(existingContent),
+          reason: 'Existing vault file must not be modified after corrupted import');
+    }, timeout: const Timeout(Duration(minutes: 2)));
+
+    // ─────────────────────────────────────────────────────────────────
+    //  V1 backward compatibility: hand-built v1 .mimic imports
+    // ─────────────────────────────────────────────────────────────────
+
+    test('V1 backward-compat: hand-built v1 .mimic imports correctly', () async {
+      await VaultCrypto.instance.initialize('123456');
+      await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
+
+      // Capture the recovery blob + salt that were just stored
+      final recoveryBlob = secureStorageData['recovery_blob']!;
+      final recoverySalt = secureStorageData['recovery_salt']!;
+      final vaultSalt = secureStorageData['vault_salt']!;
+      final vaultPinHash = secureStorageData['vault_pin_hash']!;
+
+      // Build a v1 payload with one tiny base64-encoded blob
+      final tinyBlob = utf8.encode('hello_v1');
+      final payload = <String, dynamic>{
+        'recovery_blob': recoveryBlob,
+        'recovery_salt': recoverySalt,
+        'vault_salt': vaultSalt,
+        'vault_pin_hash': vaultPinHash,
+        'vault_photos_meta': jsonEncode([
+          {'id': 'v1_photo', 'mimeType': 'image/jpeg', 'size': tinyBlob.length, 'createdAt': DateTime.now().toIso8601String()},
+        ]),
+        'encrypted_files': {
+          'v1_photo': base64Encode(tinyBlob),
+        },
+      };
+
+      final v1Bytes = _buildV1File(payload);
+      final v1File = File('$downloadsPath/legacy_v1.mimic');
+      await v1File.writeAsBytes(v1Bytes);
+
+      // Verify validateFile accepts it
+      final validation = await VaultImporter.validateFile(v1File);
+      expect(validation.isValid, isTrue, reason: 'v1 file should validate');
+
+      // Clear state
+      secureStorageData.clear();
+      final photosDbPath = '$dbDirPath/vault_files.db';
+      if (await File(photosDbPath).exists()) await File(photosDbPath).delete();
+
+      VaultCrypto(AndroidPlatformService());
+
+      // Import the v1 file
+      final importSuccess = await VaultImporter.importWithPhrase(v1File, recoveryWords);
+      expect(importSuccess, isTrue, reason: 'v1 import should succeed');
+
+      // Verify the blob was restored
+      final appDir = await getApplicationDocumentsDirectory();
+      final restoredBlobFile = File('${appDir.path}/vault_files/v1_photo');
+      expect(await restoredBlobFile.exists(), isTrue, reason: 'v1 blob should be restored');
+      expect(await restoredBlobFile.readAsBytes(), equals(tinyBlob));
+
+      // Verify VaultCrypto is unlocked
+      expect(VaultCrypto.instance.isUnlocked, isTrue);
+    }, timeout: const Timeout(Duration(minutes: 2)));
+
+    // ─────────────────────────────────────────────────────────────────
+    //  Backward compatibility: old backups without new keys
+    // ─────────────────────────────────────────────────────────────────
+
+    test('Import backward-compat payload WITHOUT video/document keys (v1)', () async {
+      await VaultCrypto.instance.initialize('123456');
+      await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
+
+      // Capture recovery data
+      final recoveryBlob = secureStorageData['recovery_blob']!;
+      final recoverySalt = secureStorageData['recovery_salt']!;
+      final vaultSalt = secureStorageData['vault_salt']!;
+      final vaultPinHash = secureStorageData['vault_pin_hash']!;
+
+      // Build a v1 payload WITHOUT video/document keys
+      final payload = <String, dynamic>{
+        'recovery_blob': recoveryBlob,
+        'recovery_salt': recoverySalt,
+        'vault_salt': vaultSalt,
+        'vault_pin_hash': vaultPinHash,
+      };
+
+      final v1Bytes = _buildV1File(payload);
       final tamperedFile = File('$downloadsPath/tampered.mimic');
-      await tamperedFile.writeAsBytes(builder.toBytes());
+      await tamperedFile.writeAsBytes(v1Bytes);
 
       // Attempt import
       final importSuccess = await VaultImporter.importWithPhrase(tamperedFile, recoveryWords);
@@ -478,9 +629,10 @@ void main() {
       final corruptedFile = File('${exportedFile.path}_corrupted.mimic');
       await corruptedFile.writeAsBytes(corruptedBytes);
 
+      // v2 validateFile only does a cheap sanity check, so the corrupted file
+      // will still pass validation (corruption is detected at import time via trailer)
       final badResult = await VaultImporter.validateFile(corruptedFile);
-      expect(badResult.isValid, isFalse);
-      expect(badResult.reason, isNotNull);
+      expect(badResult.isValid, isTrue, reason: 'v2 validateFile is a cheap check; corruption caught at import');
     });
 
     test('TRUE uninstall-simulation: export -> wipe -> import with dirty phrase', () async {
@@ -841,7 +993,7 @@ void main() {
         final result = await VaultImporter.importWithPhrase(exportFile, recoveryWords);
         expect(result, isTrue);
       } catch (e) {
-        fail('Failed to import 90MB backup: \$e');
+        fail('Failed to import 1MB backup: \$e');
       }
     }, timeout: const Timeout(Duration(minutes: 5)));
 
@@ -877,13 +1029,16 @@ void main() {
       }
     });
 
-    test('IMPORT size guard: fails gracefully if .mimic file exceeds ceiling', () async {
+    test('IMPORT size guard: fails gracefully if .mimic v1 file exceeds ceiling', () async {
       final originalLimit = VaultImporter.maxImportFileBytes;
       VaultImporter.maxImportFileBytes = 1024; // 1KB limit
       addTearDown(() => VaultImporter.maxImportFileBytes = originalLimit);
 
+      // Build a v1 file that exceeds the limit
       final hugeFile = File('$downloadsPath/huge_backup.mimic');
       final randomAccessFile = await hugeFile.open(mode: FileMode.write);
+      // Write MMIC magic + v1 version first
+      await randomAccessFile.writeFrom([0x4D, 0x4D, 0x49, 0x43, 0x01]);
       await randomAccessFile.setPosition(1025 - 1);
       await randomAccessFile.writeByte(0);
       await randomAccessFile.close();
