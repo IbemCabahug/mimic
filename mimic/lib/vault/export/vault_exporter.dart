@@ -14,6 +14,7 @@ import '../services/file_vault_service.dart';
 import '../services/video_vault_service.dart';
 import '../services/document_vault_service.dart';
 import '../services/vault_backup_status.dart';
+import '../util/storage_space.dart';
 import 'mimic_v2_format.dart';
 
 
@@ -157,6 +158,23 @@ class VaultExporter {
       final downloadsDir = await _getDownloadsDirectory();
       final fileName = 'backup_data_$nowMs.dat';
       outputFile = File('${downloadsDir.path}/$fileName');
+    }
+
+    // ── Pre-check free space ─────────────────────────────────────────
+    int estimatedBytes = 0;
+    for (final id in allMediaIds) {
+      final blobFile = File('${appDir.path}/vault_files/$id');
+      if (await blobFile.exists()) {
+        estimatedBytes += await blobFile.length();
+      }
+    }
+    final requiredBytes = (estimatedBytes * 1.05).round();
+    final targetDir = outputFile.parent.path;
+    final freeBytes = await StorageSpace.availableBytes(targetDir);
+    if (freeBytes < requiredBytes) {
+      final needMB = requiredBytes ~/ (1024 * 1024);
+      final freeMB = freeBytes ~/ (1024 * 1024);
+      throw Exception('Not enough free space to create this backup. About $needMB MB is required but only $freeMB MB is available. Free up space by deleting other files or apps — do NOT uninstall Mimic, as that will permanently erase your vault.');
     }
 
     final tempFile = File('${outputFile.path}.part');

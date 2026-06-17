@@ -1026,5 +1026,71 @@ void main() {
         expect(e.toString().toLowerCase(), contains('corrupt or invalid backup'));
       }
     });
+
+    test('StorageSpace checks throw correct error on EXPORT', () async {
+      await VaultCrypto.instance.initialize('123456');
+      await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel('mimic/storage'), (message) async {
+        if (message.method == 'getAvailableBytes') return 100;
+        return null;
+      });
+
+      final photosDbPath = '$dbDirPath/vault_files.db';
+      final photosDb = await openDatabase(photosDbPath, version: 1, onCreate: (db, version) async {
+        await db.execute('CREATE TABLE photos(id TEXT PRIMARY KEY, mimeType TEXT, size INTEGER, createdAt TEXT, originalName TEXT)');
+      });
+      await photosDb.insert('photos', {'id': 'photo_1', 'mimeType': 'image/jpeg', 'size': 500, 'createdAt': DateTime.now().toIso8601String()});
+      await photosDb.close();
+
+      final photoFile = File('$appDocsPath/vault_files/photo_1');
+      await Directory('$appDocsPath/vault_files').create(recursive: true);
+      await photoFile.writeAsBytes(List.filled(500, 0));
+
+      bool threw = false;
+      try {
+        await VaultExporter.buildExportFile(ProviderContainer());
+      } catch (e) {
+        threw = true;
+        expect(e.toString(), contains('Not enough free space to create this backup'));
+        expect(e.toString(), contains('do NOT uninstall Mimic'));
+      }
+      expect(threw, isTrue);
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel('mimic/storage'), (message) async {
+        if (message.method == 'getAvailableBytes') return 1 << 50;
+        return null;
+      });
+    });
+
+    test('StorageSpace checks throw correct error on IMPORT', () async {
+      await VaultCrypto.instance.initialize('123456');
+      await VaultCrypto.instance.storeRecoveryBlob(recoveryWords);
+      final validExport = await VaultExporter.buildExportFile(ProviderContainer());
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel('mimic/storage'), (message) async {
+        if (message.method == 'getAvailableBytes') return 10;
+        return null;
+      });
+
+      bool threw = false;
+      try {
+        await VaultImporter.importWithPhrase(validExport, recoveryWords);
+      } catch (e) {
+        threw = true;
+        expect(e.toString(), contains('Not enough free space to restore this backup'));
+        expect(e.toString(), contains('do NOT uninstall Mimic'));
+      }
+      expect(threw, isTrue);
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel('mimic/storage'), (message) async {
+        if (message.method == 'getAvailableBytes') return 1 << 50;
+        return null;
+      });
+    });
   });
 }

@@ -12,6 +12,26 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "mimic/storage").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getAvailableBytes" -> {
+                    val path = call.argument<String>("path")
+                    if (path != null) {
+                        try {
+                            val stat = android.os.StatFs(path)
+                            result.success(stat.availableBytes)
+                        } catch (e: Exception) {
+                            result.error("ERROR", e.message, null)
+                        }
+                    } else {
+                        result.error("INVALID_ARG", "Path required", null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "setIconVisible" -> {

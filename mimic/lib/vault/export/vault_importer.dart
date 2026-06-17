@@ -20,6 +20,7 @@ import '../services/notes_service.dart';
 
 import '../crypto/recovery_phrase.dart';
 import '../crypto/vault_crypto.dart';
+import '../util/storage_space.dart';
 import 'mimic_v2_format.dart';
 
 /// Represents the result of validating a `.mimic` backup file.
@@ -153,6 +154,17 @@ class VaultImporter {
     final headerBytes = await raf.read(5);
     final version = headerBytes[4];
     await raf.close();
+
+    final requiredBytes = (await file.length() * 1.05).round();
+    final String targetDir = version == kMimicVersionV2 
+        ? (await getTemporaryDirectory()).path 
+        : (await getApplicationDocumentsDirectory()).path;
+    final freeBytes = await StorageSpace.availableBytes(targetDir);
+    if (freeBytes < requiredBytes) {
+      final needMB = requiredBytes ~/ (1024 * 1024);
+      final freeMB = freeBytes ~/ (1024 * 1024);
+      throw Exception('Not enough free space to restore this backup. About $needMB MB is required but only $freeMB MB is available. Free up space by deleting other files or apps — do NOT uninstall Mimic, as that will permanently erase your vault.');
+    }
 
     if (version == kMimicVersionV2) {
       return _importV2(file, recoveryWords);
