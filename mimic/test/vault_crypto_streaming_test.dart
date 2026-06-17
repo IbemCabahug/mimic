@@ -140,5 +140,69 @@ void main() {
     test('decryptStreamSystem falls back correctly on legacy blob', () async {
       // Logic for testing legacy blob.
     });
+
+    group('CTR Streaming & Range', () {
+      test('1. CTR round-trip: non-multiple of 16 size (no padding)', () async {
+        final original = generateRandomBytes(70001);
+        final src = createTempFile('ctr_src.bin', original);
+        final encrypted = createTempFile('ctr_enc.bin');
+        final decrypted = createTempFile('ctr_dec.bin');
+
+        await vaultCrypto.encryptStreamSystemCtr(src, encrypted);
+        await vaultCrypto.decryptStreamSystem(encrypted, decrypted);
+
+        final resultBytes = decrypted.readAsBytesSync();
+        expect(resultBytes.length, original.length);
+        expect(resultBytes, original);
+      });
+
+      test('2. RANGE CORRECTNESS', () async {
+        final original = generateRandomBytes(200 * 1024 + 57);
+        final src = createTempFile('range_src.bin', original);
+        final encrypted = createTempFile('range_enc.bin');
+        await vaultCrypto.encryptStreamSystemCtr(src, encrypted);
+
+        Future<void> assertRange(int offset, int len) async {
+          final rangeBytes = await vaultCrypto.decryptRangeSystem(encrypted, offset, len);
+          final expected = original.sublist(offset, min(offset + len, original.length));
+          expect(rangeBytes, expected, reason: 'Failed at offset $offset len $len');
+        }
+
+        await assertRange(0, 100); // offset 0
+        await assertRange(17, 50); // NOT a multiple of 16
+        await assertRange(15, 34); // spanning several block boundaries
+        await assertRange(1024, 1); // length 1
+        await assertRange(original.length - 1, 10); // final byte
+        await assertRange(0, original.length); // full range
+      });
+
+      test('3. Regression: CBC round-trip via router & range fallback', () async {
+        final original = generateRandomBytes(10000);
+        final src = createTempFile('cbc_src.bin', original);
+        final encrypted = createTempFile('cbc_enc.bin');
+        final decrypted = createTempFile('cbc_dec.bin');
+
+        await vaultCrypto.encryptStreamSystem(src, encrypted);
+        await vaultCrypto.decryptStreamSystem(encrypted, decrypted);
+        expect(decrypted.readAsBytesSync(), original);
+
+        final rangeBytes = await vaultCrypto.decryptRangeSystem(encrypted, 50, 100);
+        expect(rangeBytes, original.sublist(50, 150));
+      });
+
+      test('4. Empty-plaintext edge case for CTR', () async {
+        final original = Uint8List(0);
+        final src = createTempFile('empty_ctr_src.bin', original);
+        final encrypted = createTempFile('empty_ctr_enc.bin');
+        final decrypted = createTempFile('empty_ctr_dec.bin');
+
+        await vaultCrypto.encryptStreamSystemCtr(src, encrypted);
+        await vaultCrypto.decryptStreamSystem(encrypted, decrypted);
+        expect(decrypted.readAsBytesSync(), original);
+        
+        final rangeBytes = await vaultCrypto.decryptRangeSystem(encrypted, 0, 10);
+        expect(rangeBytes, Uint8List(0));
+      });
+    });
   });
 }

@@ -28,6 +28,7 @@ class VaultCrypto extends ChangeNotifier {
   static const String _storageKeySalt = 'vault_salt';
   static const String _storageKeyPinHash = 'vault_pin_hash';
   static const List<int> _mediaMagic = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x76, 0x31, 0x00]; // "MVKEYv1\0"
+  static const List<int> _mediaMagicCtr = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x63, 0x31, 0x00]; // "MVKEYc1\0"
 
   Uint8List? _derivedKey;
   bool _isUnlocked = false;
@@ -498,24 +499,24 @@ class VaultCrypto extends ChangeNotifier {
   }
 
   Future<void> decryptStreamSystem(File src, File dest) async {
-    bool isLegacy = false;
+    int magicType = 0; // 0 = legacy, 1 = v1 (CBC), 2 = c1 (CTR)
     final raf = await src.open(mode: FileMode.read);
     try {
       final magicBuffer = Uint8List(_mediaMagic.length);
       final magicRead = await raf.readInto(magicBuffer);
       
-      if (magicRead < _mediaMagic.length) {
-        isLegacy = true;
-      } else {
+      if (magicRead == _mediaMagic.length) {
+        bool isV1 = true;
+        bool isC1 = true;
         for (int i = 0; i < _mediaMagic.length; i++) {
-          if (magicBuffer[i] != _mediaMagic[i]) {
-            isLegacy = true;
-            break;
-          }
+          if (magicBuffer[i] != _mediaMagic[i]) isV1 = false;
+          if (magicBuffer[i] != _mediaMagicCtr[i]) isC1 = false;
         }
+        if (isV1) magicType = 1;
+        else if (isC1) magicType = 2;
       }
 
-      if (!isLegacy) {
+      if (magicType == 1) {
         if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
         
         final iv = Uint8List(_ivLength);
@@ -601,12 +602,52 @@ class VaultCrypto extends ChangeNotifier {
           await destRaf.flush();
           await destRaf.close();
         }
+      } else if (magicType == 2) {
+        final systemKey = await _getSystemKey();
+        final iv = Uint8List(16);
+        final ivRead = await raf.readInto(iv);
+        if (ivRead < 16) throw Exception('Invalid ciphertext: missing IV');
+
+        final destRaf = await dest.open(mode: FileMode.write);
+        try {
+          final aes = AESEngine()..init(true, KeyParameter(systemKey));
+          final counter = Uint8List.fromList(iv);
+          final ksBlock = Uint8List(16);
+
+          final buffer = Uint8List(64 * 1024);
+          final outBuffer = Uint8List(64 * 1024);
+          var bytesRead = 0;
+
+          while ((bytesRead = await raf.readInto(buffer)) > 0) {
+            int offset = 0;
+            while (offset + 16 <= bytesRead) {
+              aes.processBlock(counter, 0, ksBlock, 0);
+              for (int i = 0; i < 16; i++) {
+                outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+              }
+              _ctrIncrement(counter);
+              offset += 16;
+            }
+            if (offset < bytesRead) {
+              aes.processBlock(counter, 0, ksBlock, 0);
+              final remaining = bytesRead - offset;
+              for (int i = 0; i < remaining; i++) {
+                outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+              }
+              _ctrIncrement(counter);
+            }
+            await destRaf.writeFrom(outBuffer, 0, bytesRead);
+          }
+        } finally {
+          await destRaf.flush();
+          await destRaf.close();
+        }
       }
     } finally {
       await raf.close();
     }
 
-    if (isLegacy) {
+    if (magicType == 0) {
       final allBytes = await src.readAsBytes();
       final decrypted = await _decryptLegacySystem(allBytes);
       await dest.writeAsBytes(decrypted, flush: true);
@@ -615,9 +656,50 @@ class VaultCrypto extends ChangeNotifier {
 
   Future<Uint8List> decryptSystem(Uint8List ciphertext) async {
     if (ciphertext.isEmpty) return Uint8List(0);
-    if (!isLegacySystemBlob(ciphertext)) {
+    int magicType = 0;
+    if (ciphertext.length >= _mediaMagic.length) {
+      bool isV1 = true;
+      bool isC1 = true;
+      for (int i = 0; i < _mediaMagic.length; i++) {
+        if (ciphertext[i] != _mediaMagic[i]) isV1 = false;
+        if (ciphertext[i] != _mediaMagicCtr[i]) isC1 = false;
+      }
+      if (isV1) magicType = 1;
+      else if (isC1) magicType = 2;
+    }
+
+    if (magicType == 1) {
       final actualCiphertext = ciphertext.sublist(_mediaMagic.length);
       return decrypt(actualCiphertext);
+    } else if (magicType == 2) {
+      final actualCiphertext = ciphertext.sublist(_mediaMagic.length);
+      if (actualCiphertext.length < 16) throw Exception('Invalid ciphertext: missing IV');
+      final iv = actualCiphertext.sublist(0, 16);
+      final encrypted = actualCiphertext.sublist(16);
+      
+      final systemKey = await _getSystemKey();
+      final aes = AESEngine()..init(true, KeyParameter(systemKey));
+      final counter = Uint8List.fromList(iv);
+      final ksBlock = Uint8List(16);
+      
+      final outBuffer = Uint8List(encrypted.length);
+      int offset = 0;
+      while (offset + 16 <= encrypted.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        for (int i = 0; i < 16; i++) {
+          outBuffer[offset + i] = encrypted[offset + i] ^ ksBlock[i];
+        }
+        _ctrIncrement(counter);
+        offset += 16;
+      }
+      if (offset < encrypted.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        final remaining = encrypted.length - offset;
+        for (int i = 0; i < remaining; i++) {
+          outBuffer[offset + i] = encrypted[offset + i] ^ ksBlock[i];
+        }
+      }
+      return outBuffer;
     } else {
       return _decryptLegacySystem(ciphertext);
     }
@@ -665,7 +747,195 @@ class VaultCrypto extends ChangeNotifier {
     );
     return paddedCipher;
   }
+
+  static void _ctrIncrement(Uint8List counter) {
+    for (int i = 15; i >= 0; i--) {
+      counter[i] = (counter[i] + 1) & 0xFF;
+      if (counter[i] != 0) break;
+    }
+  }
+
+  static Uint8List _ctrCounterAt(Uint8List iv, int blockIndex) {
+    final counter = Uint8List.fromList(iv);
+    int carry = blockIndex;
+    for (int i = 15; i >= 0 && carry > 0; i--) {
+      final sum = counter[i] + carry;
+      counter[i] = sum & 0xFF;
+      carry = sum >> 8;
+    }
+    return counter;
+  }
+
+  Future<void> encryptStreamSystemCtr(File src, File dest) async {
+    final systemKey = await _getSystemKey();
+    final iv = _generateSecureRandomBytes(16);
+    final raf = await dest.open(mode: FileMode.write);
+    try {
+      await raf.writeFrom(_mediaMagicCtr);
+      await raf.writeFrom(iv);
+
+      final aes = AESEngine()..init(true, KeyParameter(systemKey));
+      final counter = Uint8List.fromList(iv);
+      final ksBlock = Uint8List(16);
+
+      final srcRaf = await src.open(mode: FileMode.read);
+      try {
+        final buffer = Uint8List(64 * 1024);
+        final outBuffer = Uint8List(64 * 1024);
+        var bytesRead = 0;
+
+        while ((bytesRead = await srcRaf.readInto(buffer)) > 0) {
+          int offset = 0;
+          while (offset + 16 <= bytesRead) {
+            aes.processBlock(counter, 0, ksBlock, 0);
+            for (int i = 0; i < 16; i++) {
+              outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+            }
+            _ctrIncrement(counter);
+            offset += 16;
+          }
+          if (offset < bytesRead) {
+            aes.processBlock(counter, 0, ksBlock, 0);
+            final remaining = bytesRead - offset;
+            for (int i = 0; i < remaining; i++) {
+              outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+            }
+            _ctrIncrement(counter);
+          }
+          await raf.writeFrom(outBuffer, 0, bytesRead);
+        }
+      } finally {
+        await srcRaf.close();
+      }
+    } finally {
+      await raf.flush();
+      await raf.close();
+    }
+  }
+
+  Future<Uint8List> decryptRangeSystem(File src, int offset, int length) async {
+    int magicType = 0;
+    final raf = await src.open(mode: FileMode.read);
+    try {
+      final magicBuffer = Uint8List(8);
+      final magicRead = await raf.readInto(magicBuffer);
+      if (magicRead == 8) {
+        bool isV1 = true;
+        bool isC1 = true;
+        for (int i = 0; i < 8; i++) {
+          if (magicBuffer[i] != _mediaMagic[i]) isV1 = false;
+          if (magicBuffer[i] != _mediaMagicCtr[i]) isC1 = false;
+        }
+        if (isV1) magicType = 1;
+        else if (isC1) magicType = 2;
+      }
+
+      if (magicType == 2) {
+        final fileLength = await src.length();
+        final maxReadable = fileLength - 24;
+        if (offset >= maxReadable || offset < 0) return Uint8List(0);
+        
+        int actualLength = length;
+        if (offset + length > maxReadable) {
+          actualLength = maxReadable - offset;
+        }
+        if (actualLength <= 0) return Uint8List(0);
+
+        final systemKey = await _getSystemKey();
+        final iv = Uint8List(16);
+        final ivRead = await raf.readInto(iv);
+        if (ivRead < 16) throw Exception('Invalid ciphertext: missing IV');
+
+        final blockIndex = offset ~/ 16;
+        final blockOffset = offset % 16;
+
+        final counter = Uint8List.fromList(iv);
+        int carry = blockIndex;
+        for (int i = 15; i >= 0 && carry > 0; i--) {
+          final sum = counter[i] + carry;
+          counter[i] = sum & 0xFF;
+          carry = sum >> 8;
+        }
+
+        final aes = AESEngine()..init(true, KeyParameter(systemKey));
+        final rangeCounter = _ctrCounterAt(iv, blockIndex);
+        final ksBlock = Uint8List(16);
+
+        await raf.setPosition(24 + offset);
+        final ciphertext = Uint8List(actualLength);
+        await raf.readInto(ciphertext);
+
+        final outBuffer = Uint8List(actualLength);
+        
+        int outPos = 0;
+        int inPos = 0;
+        
+        if (blockOffset > 0) {
+          aes.processBlock(rangeCounter, 0, ksBlock, 0);
+          _ctrIncrement(rangeCounter);
+          
+          final availableInThisBlock = 16 - blockOffset;
+          final toProcess = (actualLength < availableInThisBlock) ? actualLength : availableInThisBlock;
+          
+          for (int i = 0; i < toProcess; i++) {
+            outBuffer[outPos++] = ciphertext[inPos++] ^ ksBlock[blockOffset + i];
+          }
+        }
+        
+        while (inPos + 16 <= actualLength) {
+          aes.processBlock(rangeCounter, 0, ksBlock, 0);
+          for (int i = 0; i < 16; i++) {
+            outBuffer[outPos + i] = ciphertext[inPos + i] ^ ksBlock[i];
+          }
+          _ctrIncrement(rangeCounter);
+          inPos += 16;
+          outPos += 16;
+        }
+        
+        if (inPos < actualLength) {
+          aes.processBlock(rangeCounter, 0, ksBlock, 0);
+          final remaining = actualLength - inPos;
+          for (int i = 0; i < remaining; i++) {
+            outBuffer[outPos + i] = ciphertext[inPos + i] ^ ksBlock[i];
+          }
+        }
+        
+        return outBuffer;
+      }
+    } finally {
+      await raf.close();
+    }
+
+    final tempDir = Directory.systemTemp;
+    final tempFile = File('${tempDir.path}/temp_decrypt_${DateTime.now().millisecondsSinceEpoch}');
+    try {
+      await decryptStreamSystem(src, tempFile);
+      if (!await tempFile.exists()) return Uint8List(0);
+      final readRaf = await tempFile.open(mode: FileMode.read);
+      try {
+        final fileLen = await tempFile.length();
+        if (offset >= fileLen) return Uint8List(0);
+        
+        int actualLength = length;
+        if (offset + length > fileLen) {
+          actualLength = fileLen - offset;
+        }
+        
+        await readRaf.setPosition(offset);
+        final buffer = Uint8List(actualLength);
+        await readRaf.readInto(buffer);
+        return buffer;
+      } finally {
+        await readRaf.close();
+      }
+    } finally {
+      if (await tempFile.exists()) {
+        await tempFile.delete();
+      }
+    }
+  }
 }
+
 
 final vaultCryptoProvider = ChangeNotifierProvider<VaultCrypto>((ref) {
   return VaultCrypto(ref.read(platformServiceProvider));
