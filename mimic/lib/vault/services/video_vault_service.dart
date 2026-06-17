@@ -1,6 +1,7 @@
 // lib/vault/services/video_vault_service.dart
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -140,9 +141,68 @@ class VideoVaultService {
     return decrypted;
   }
 
+  /// CTR magic header bytes: "MVKEYc1\0"
+  static const List<int> _ctrMagic = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x63, 0x31, 0x00];
+
+  /// Lazily migrates a video blob from CBC (MVKEYv1) or legacy to CTR (MVKEYc1)
+  /// for future seekable streaming. Best-effort: errors are swallowed and the
+  /// original blob is left untouched.
+  Future<void> ensureVideoStreamable(String id) async {
+    final blobFile = await _platformService.resolveVaultFile(id);
+    if (!blobFile.existsSync()) return;
+
+    // Read the first 8 bytes to check the magic header
+    final raf = await blobFile.open(mode: FileMode.read);
+    try {
+      final magic = Uint8List(8);
+      final bytesRead = await raf.readInto(magic);
+      if (bytesRead == 8) {
+        bool isCtr = true;
+        for (int i = 0; i < 8; i++) {
+          if (magic[i] != _ctrMagic[i]) {
+            isCtr = false;
+            break;
+          }
+        }
+        if (isCtr) return; // Already CTR — nothing to do
+      }
+    } finally {
+      await raf.close();
+    }
+
+    // Migrate: CBC/legacy -> plaintext -> CTR, atomic swap
+    final tempDir = await getTemporaryDirectory();
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final plainTemp = File(p.join(tempDir.path, '${id}_migrate_plain_$ts'));
+    final ctrTemp = File(p.join(tempDir.path, '${id}_migrate_ctr_$ts'));
+
+    try {
+      // Step 1: decrypt existing blob to plaintext temp file
+      await _crypto.decryptStreamSystem(blobFile, plainTemp);
+
+      // Step 2: re-encrypt plaintext as CTR to a second temp file
+      await _crypto.encryptStreamSystemCtr(plainTemp, ctrTemp);
+
+      // Step 3: atomic rename of ctrTemp OVER the original blob
+      await ctrTemp.rename(blobFile.path);
+
+      // Step 4: clean up plaintext temp
+      if (await plainTemp.exists()) await plainTemp.delete();
+    } catch (_) {
+      // Best-effort: clean up temps, leave original blob untouched
+      try { if (await plainTemp.exists()) await plainTemp.delete(); } catch (_) {}
+      try { if (await ctrTemp.exists()) await ctrTemp.delete(); } catch (_) {}
+    }
+  }
+
   Future<File?> getVideoToTempFile(String id) async {
     final srcBlob = await _platformService.resolveVaultFile(id);
     if (!srcBlob.existsSync()) return null;
+
+    // Best-effort lazy migration to CTR; failure never blocks playback
+    try {
+      await ensureVideoStreamable(id);
+    } catch (_) {}
 
     final tempDir = await getTemporaryDirectory();
     final playbackDir = Directory(p.join(tempDir.path, 'vault_playback'));
