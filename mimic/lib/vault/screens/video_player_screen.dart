@@ -3,11 +3,12 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
+import '../services/media_stream_server.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
-  final String tempFilePath;
+  final String videoId;
 
-  const VideoPlayerScreen({super.key, required this.tempFilePath});
+  const VideoPlayerScreen({super.key, required this.videoId});
 
   @override
   State<VideoPlayerScreen> createState() => _VideoPlayerScreenState();
@@ -26,7 +27,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   Future<void> _initializePlayer() async {
     try {
-      _videoPlayerController = VideoPlayerController.file(File(widget.tempFilePath));
+      final url = await MediaStreamServer.instance.urlFor(widget.videoId);
+      _videoPlayerController = VideoPlayerController.networkUrl(url);
       await _videoPlayerController.initialize();
       _chewieController = ChewieController(
         videoPlayerController: _videoPlayerController,
@@ -68,7 +70,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _chewieController?.dispose();
     _videoPlayerController.dispose();
     try {
-      final file = File(widget.tempFilePath);
+      final file = File('');
       if (file.existsSync()) {
         file.deleteSync();
       }

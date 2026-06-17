@@ -5,6 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import '../crypto/vault_crypto.dart';
+import '../services/media_stream_server.dart';
+import '../services/video_vault_service.dart';
+import '../../core/services/platform_service.dart';
 
 class AutoLock {
   static final AutoLock _instance = AutoLock._internal();
@@ -20,6 +23,15 @@ class AutoLock {
   void init(BuildContext context, WidgetRef ref) {
     _context = context;
     _ref = ref;
+
+    final videoVaultService = ref.read(videoVaultServiceProvider);
+    final platformService = ref.read(platformServiceProvider);
+    MediaStreamServer.instance.init(
+      videoVaultService: videoVaultService,
+      resolveVaultFile: platformService.resolveVaultFile,
+      decryptRange: (f, o, l) => VaultCrypto.instance.decryptRangeSystem(f, o, l),
+    );
+
     resetTimer();
   }
 
@@ -48,6 +60,8 @@ class AutoLock {
     // Clear Vault keys
     final crypto = _ref!.read(vaultCryptoProvider);
     crypto.clearKey();
+
+    unawaited(MediaStreamServer.instance.stop());
 
     try {
       getTemporaryDirectory().then((tempDir) {

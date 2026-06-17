@@ -249,33 +249,12 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
   }
 
   Future<void> _playVideo(VideoMeta video) async {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(color: VaultColors.accent),
-      ),
-    );
-
-    try {
-      final tempFile = await ref.read(videoVaultServiceProvider).getVideoToTempFile(video.id);
-      if (tempFile == null) throw Exception('Video file not found.');
-
-      if (mounted) {
-        Navigator.of(context).pop(); // dismiss loading dialog
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (context) => VideoPlayerScreen(tempFilePath: tempFile.path),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        Navigator.of(context).pop(); // dismiss loading dialog
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to decrypt video: $e')),
-        );
-      }
+    if (mounted) {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => VideoPlayerScreen(videoId: video.id),
+        ),
+      );
     }
   }
 
