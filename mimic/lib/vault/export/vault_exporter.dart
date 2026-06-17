@@ -138,20 +138,6 @@ class VaultExporter {
     // Collect all media IDs that will become blobs
     final allMediaIds = <String>[...photoIds, ...videoIds, ...documentIds];
 
-    // Touch files to ensure they exist (triggers lazy writes in services)
-    final fileVault = ref.read(fileVaultServiceProvider);
-    for (final id in photoIds) {
-      try { await fileVault.getPhoto(id); } catch (_) {}
-    }
-    final videoVault = ref.read(videoVaultServiceProvider);
-    for (final id in videoIds) {
-      try { await videoVault.getVideo(id); } catch (_) {}
-    }
-    final documentVault = ref.read(documentVaultServiceProvider);
-    for (final id in documentIds) {
-      try { await documentVault.getDocumentBytes(id); } catch (_) {}
-    }
-
     // ── 3. Build the v2 metadata JSON (NO encrypted_files map) ───────
     // Include an authoritative list of file IDs that will be streamed.
     payload['blob_ids'] = allMediaIds;
