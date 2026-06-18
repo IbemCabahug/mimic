@@ -15,9 +15,10 @@ class VideoPlayerScreen extends StatefulWidget {
 }
 
 class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
-  late VideoPlayerController _videoPlayerController;
+  VideoPlayerController? _videoPlayerController;
   ChewieController? _chewieController;
   bool _hasError = false;
+  bool _disposed = false;
 
   @override
   void initState() {
@@ -28,10 +29,15 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   Future<void> _initializePlayer() async {
     try {
       final url = await MediaStreamServer.instance.urlFor(widget.videoId);
-      _videoPlayerController = VideoPlayerController.networkUrl(url);
-      await _videoPlayerController.initialize();
-      _chewieController = ChewieController(
-        videoPlayerController: _videoPlayerController,
+      if (!mounted || _disposed) return;
+      final controller = VideoPlayerController.networkUrl(url);
+      await controller.initialize();
+      if (!mounted || _disposed) {
+        await controller.dispose();
+        return;
+      }
+      final chewie = ChewieController(
+        videoPlayerController: controller,
         autoPlay: true,
         looping: false,
         materialProgressColors: ChewieProgressColors(
@@ -52,23 +58,30 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
           );
         },
       );
-      if (mounted) {
-        setState(() {});
+      if (!mounted || _disposed) {
+        chewie.dispose();
+        await controller.dispose();
+        return;
       }
+      setState(() {
+        _videoPlayerController = controller;
+        _chewieController = chewie;
+      });
     } catch (e) {
       debugPrint('Failed to initialize video player: $e');
-      if (mounted) {
-        setState(() {
-          _hasError = true;
-        });
-      }
+      if (!mounted || _disposed) return;
+      setState(() {
+        _hasError = true;
+      });
     }
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _chewieController?.dispose();
-    _videoPlayerController.dispose();
+    _videoPlayerController?.pause();
+    _videoPlayerController?.dispose();
     try {
       final file = File('');
       if (file.existsSync()) {
@@ -97,8 +110,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                 style: TextStyle(color: Colors.white, fontSize: 16),
               ),
             )
-          : _chewieController != null &&
-                  _chewieController!.videoPlayerController.value.isInitialized
+          : _chewieController != null
               ? SafeArea(
                   child: Chewie(
                     controller: _chewieController!,
