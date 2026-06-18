@@ -512,6 +512,52 @@ void main() {
     });
 
     // ------------------------------------------------------------------
+    // Test 8.5 — AutoLock suspend/resume prevents idle timer from firing
+    // ------------------------------------------------------------------
+    testWidgets(
+      '8.5 · AutoLock suspend/resume prevents idle timer from firing',
+      (WidgetTester tester) async {
+        late VaultCrypto crypto;
+        
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              platformServiceProvider.overrideWithValue(fakePlatform),
+            ],
+            child: MaterialApp(
+              home: Consumer(
+                builder: (context, ref, _) {
+                  crypto = ref.read(vaultCryptoProvider);
+                  AutoLock().init(context, ref);
+                  return const AutoLockWrapper(
+                    child: Text('VAULT_CONTENT'),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+        
+        await crypto.initialize('1234');
+        expect(crypto.isUnlocked, isTrue);
+
+        AutoLock().suspend();
+        
+        // Wait 70 seconds. If timer was active, vault would lock.
+        await tester.pump(const Duration(seconds: 70));
+        
+        // Should STILL be unlocked because it was suspended.
+        expect(crypto.isUnlocked, isTrue);
+
+        AutoLock().resume();
+
+        // Wait another 70 seconds, now the timer should fire.
+        await tester.pump(const Duration(seconds: 70));
+        expect(crypto.isUnlocked, isFalse);
+      },
+    );
+
+    // ------------------------------------------------------------------
     // Test 9 — when the inactivity timeout fires, vaultCryptoProvider is
     //          cleared (key wiped).
     // ------------------------------------------------------------------

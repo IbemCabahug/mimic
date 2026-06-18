@@ -24,6 +24,7 @@ class AutoLock with WidgetsBindingObserver {
   static const Duration _timeout = Duration(seconds: 60);
   bool _observerRegistered = false;
   DateTime? _backgroundedAt;
+  bool _suspended = false;
 
   /// Initializes the inactivity timer. Called when vault is unlocked.
   void init(BuildContext context, WidgetRef ref) {
@@ -53,7 +54,7 @@ class AutoLock with WidgetsBindingObserver {
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
       case AppLifecycleState.detached:
-        _backgroundedAt = DateTime.now();   // record when we left the foreground
+        _backgroundedAt ??= DateTime.now();   // record when we left the foreground
         _timer?.cancel();                   // foreground idle timer is meaningless in background
         break;
       case AppLifecycleState.resumed:
@@ -73,8 +74,20 @@ class AutoLock with WidgetsBindingObserver {
   /// Resets the inactivity timer. Called on user interactions.
   void resetTimer() {
     _timer?.cancel();
+    if (_suspended) return;
     if (_context == null || _ref == null) return;
     _timer = Timer(_timeout, _lockVault);
+  }
+
+  void suspend() {
+    _suspended = true;
+    _timer?.cancel();
+    _timer = null;
+  }
+
+  void resume() {
+    _suspended = false;
+    resetTimer();
   }
 
   /// Cancels the timer. Called when manually locked or panic mode triggers.
@@ -89,6 +102,7 @@ class AutoLock with WidgetsBindingObserver {
       _observerRegistered = false;
     }
     _backgroundedAt = null;
+    _suspended = false;
   }
 
   void _lockVault() {

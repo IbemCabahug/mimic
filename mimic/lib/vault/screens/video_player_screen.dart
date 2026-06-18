@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import '../services/media_stream_server.dart';
+import '../security/auto_lock.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   final String videoId;
@@ -22,6 +23,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   @override
   void initState() {
+    AutoLock().suspend();
     super.initState();
     _initializePlayer();
   }
@@ -78,6 +80,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   @override
   void dispose() {
+    AutoLock().resume();
     _disposed = true;
     _chewieController?.dispose();
     _videoPlayerController?.pause();
