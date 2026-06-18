@@ -8,15 +8,19 @@ import '../crypto/vault_crypto.dart';
 import '../services/media_stream_server.dart';
 import '../services/video_vault_service.dart';
 import '../../core/services/platform_service.dart';
+import '../../core/router/app_router.dart' as router;
 
 class AutoLock with WidgetsBindingObserver {
   static final AutoLock _instance = AutoLock._internal();
   factory AutoLock() => _instance;
   AutoLock._internal();
 
+  static GlobalKey<NavigatorState> get navigatorKey => router.navigatorKey;
+
   Timer? _timer;
   BuildContext? _context;
   WidgetRef? _ref;
+  ProviderContainer? _container;
   static const Duration _timeout = Duration(seconds: 60);
   bool _observerRegistered = false;
   DateTime? _backgroundedAt;
@@ -25,6 +29,7 @@ class AutoLock with WidgetsBindingObserver {
   void init(BuildContext context, WidgetRef ref) {
     _context = context;
     _ref = ref;
+    _container = ProviderScope.containerOf(context, listen: false);
 
     final videoVaultService = ref.read(videoVaultServiceProvider);
     final platformService = ref.read(platformServiceProvider);
@@ -78,6 +83,7 @@ class AutoLock with WidgetsBindingObserver {
     _timer = null;
     _context = null;
     _ref = null;
+    _container = null;
     if (_observerRegistered) {
       WidgetsBinding.instance.removeObserver(this);
       _observerRegistered = false;
@@ -86,38 +92,27 @@ class AutoLock with WidgetsBindingObserver {
   }
 
   void _lockVault() {
-    if (_context == null || _ref == null) return;
-    if (!_context!.mounted) {
-      dispose();
-      return;
-    }
+    final container = _container;
+    if (container == null) return;
 
     // Clear Vault keys
-    final crypto = _ref!.read(vaultCryptoProvider);
-    crypto.clearKey();
+    container.read(vaultCryptoProvider).clearKey();
 
     unawaited(MediaStreamServer.instance.stop());
 
     try {
       getTemporaryDirectory().then((tempDir) {
-        final playbackDir = Directory('${tempDir.path}/vault_playback');
-        if (playbackDir.existsSync()) {
-          playbackDir.deleteSync(recursive: true);
-        }
-        final docsDir = Directory('${tempDir.path}/vault_docs');
-        if (docsDir.existsSync()) {
-          docsDir.deleteSync(recursive: true);
+        for (final name in const ['vault_playback', 'vault_docs']) {
+          final dir = Directory('${tempDir.path}/$name');
+          if (dir.existsSync()) dir.deleteSync(recursive: true);
         }
       });
     } catch (_) {}
 
-    // Navigate back to PIN screen
-    if (_context!.mounted) {
-      Navigator.of(_context!).pushNamedAndRemoveUntil(
-        '/vault-pin',
-        (route) => false,
-      );
-    }
+    AutoLock.navigatorKey.currentState?.pushNamedAndRemoveUntil(
+      '/vault-pin',
+      (route) => false,
+    );
 
     dispose();
   }
