@@ -9,7 +9,7 @@ import '../services/media_stream_server.dart';
 import '../services/video_vault_service.dart';
 import '../../core/services/platform_service.dart';
 
-class AutoLock {
+class AutoLock with WidgetsBindingObserver {
   static final AutoLock _instance = AutoLock._internal();
   factory AutoLock() => _instance;
   AutoLock._internal();
@@ -18,6 +18,8 @@ class AutoLock {
   BuildContext? _context;
   WidgetRef? _ref;
   static const Duration _timeout = Duration(seconds: 60);
+  bool _observerRegistered = false;
+  DateTime? _backgroundedAt;
 
   /// Initializes the inactivity timer. Called when vault is unlocked.
   void init(BuildContext context, WidgetRef ref) {
@@ -32,7 +34,35 @@ class AutoLock {
       decryptRange: (f, o, l) => VaultCrypto.instance.decryptRangeSystem(f, o, l),
     );
 
+    if (!_observerRegistered) {
+      WidgetsBinding.instance.addObserver(this);
+      _observerRegistered = true;
+    }
+
     resetTimer();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.paused:
+      case AppLifecycleState.hidden:
+      case AppLifecycleState.detached:
+        _backgroundedAt = DateTime.now();   // record when we left the foreground
+        _timer?.cancel();                   // foreground idle timer is meaningless in background
+        break;
+      case AppLifecycleState.resumed:
+        final since = _backgroundedAt;
+        _backgroundedAt = null;
+        if (since != null && DateTime.now().difference(since) >= _timeout) {
+          _lockVault();                      // backgrounded >= timeout -> lock
+        } else {
+          resetTimer();                      // returned in time -> resume the idle timer
+        }
+        break;
+      case AppLifecycleState.inactive:
+        break;                               // transient (app switcher / shade) -> ignore, never lock
+    }
   }
 
   /// Resets the inactivity timer. Called on user interactions.
@@ -48,6 +78,11 @@ class AutoLock {
     _timer = null;
     _context = null;
     _ref = null;
+    if (_observerRegistered) {
+      WidgetsBinding.instance.removeObserver(this);
+      _observerRegistered = false;
+    }
+    _backgroundedAt = null;
   }
 
   void _lockVault() {
