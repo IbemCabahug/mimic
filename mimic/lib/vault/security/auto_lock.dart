@@ -95,8 +95,13 @@ class AutoLock with WidgetsBindingObserver {
     final container = _container;
     if (container == null) return;
 
-    // Clear Vault keys
-    container.read(vaultCryptoProvider).clearKey();
+    try {
+      // Clear Vault keys
+      container.read(vaultCryptoProvider).clearKey();
+    } on StateError {
+      dispose();
+      return;
+    }
 
     unawaited(MediaStreamServer.instance.stop());
 
