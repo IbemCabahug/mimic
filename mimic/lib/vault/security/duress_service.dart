@@ -1,10 +1,12 @@
 // mimic/lib/vault/security/duress_service.dart
 import 'dart:math';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:pointycastle/export.dart' as pc;
 import '../../core/services/platform_service.dart';
 
 class DuressService {
@@ -15,10 +17,32 @@ class DuressService {
 
   DuressService(this._platformService);
 
+  static const int _iterations = 100000;
+
+  String _verifier(String pin, String salt) {
+    final pinBytes = Uint8List.fromList(utf8.encode(pin));
+    final saltBytes = Uint8List.fromList(utf8.encode(salt));
+    final pbkdf2 = pc.PBKDF2KeyDerivator(pc.HMac(pc.SHA256Digest(), 64))
+      ..init(pc.Pbkdf2Parameters(saltBytes, _iterations, 32));
+    final derived = pbkdf2.process(pinBytes);
+    return 'v2:${base64Encode(derived)}';
+  }
+
+  bool _constantTimeEquals(String a, String b) {
+    final ab = utf8.encode(a);
+    final bb = utf8.encode(b);
+    if (ab.length != bb.length) return false;
+    var result = 0;
+    for (var i = 0; i < ab.length; i++) {
+      result |= ab[i] ^ bb[i];
+    }
+    return result == 0;
+  }
+
   Future<void> setFakePin(String pin) async {
     if (kIsWeb) return;
     final salt = _generateSalt();
-    final hash = _hashPin(pin, salt);
+    final hash = _verifier(pin, salt);
     await _platformService.secureWrite(_pinHashKey, hash);
     await _platformService.secureWrite(_pinSaltKey, salt);
   }
@@ -28,8 +52,17 @@ class DuressService {
     final storedHash = await _platformService.secureRead(_pinHashKey);
     final storedSalt = await _platformService.secureRead(_pinSaltKey);
     if (storedHash == null || storedSalt == null) return false;
-    final computedHash = _hashPin(pin, storedSalt);
-    return computedHash == storedHash;
+    bool ok;
+    if (storedHash.startsWith('v2:')) {
+      ok = _constantTimeEquals(storedHash, _verifier(pin, storedSalt));
+    } else {
+      // Legacy single-pass salted SHA-256 — upgrade on success.
+      ok = _constantTimeEquals(storedHash, _hashPin(pin, storedSalt));
+      if (ok) {
+        await _platformService.secureWrite(_pinHashKey, _verifier(pin, storedSalt));
+      }
+    }
+    return ok;
   }
 
   Future<bool> isFakePinEnabled() async {

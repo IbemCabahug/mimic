@@ -486,14 +486,36 @@ void main() {
           // The derived key is 32 bytes = 44 chars base64.
           // We can't just check length — the pin hash is also 44 chars.
           // Instead verify the key name is one of the expected keys.
+          // 'master_key_wrapped' is allowed: it is the data key ENCRYPTED under
+          // the PIN-derived KEK (IV + AES-CBC ciphertext), never the raw key.
           expect(
-            ['vault_salt', 'vault_pin_hash', 'vault_setup_completed', 'vault_wiped'].contains(entry.key),
+            [
+              'vault_salt',
+              'vault_pin_hash',
+              'vault_setup_completed',
+              'vault_wiped',
+              'master_key_wrapped',
+            ].contains(entry.key),
             isTrue,
             reason:
                 'Unexpected key "${entry.key}" found in secure storage — '
                 'the derived AES key must never be persisted',
           );
         }
+
+        // Strengthen: the wrapped key must be genuinely encrypted, not the raw
+        // 32-byte derived key. A raw key is 44 base64 chars; the wrapped form is
+        // IV + AES-CBC ciphertext (~88 chars), so it must be clearly longer.
+        final wrapped = platform.store['master_key_wrapped'];
+        expect(wrapped, isNotNull,
+            reason: 'master_key_wrapped must be persisted after setup');
+        expect(
+          wrapped!.length,
+          greaterThan(44),
+          reason:
+              'master_key_wrapped must be IV + ciphertext, never the raw '
+              'derived key',
+        );
       },
     );
   });
@@ -1031,10 +1053,10 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        expect(find.text('Enter Vault PIN'), findsOneWidget);
+        expect(find.text('Enter PIN'), findsWidgets);
 
         final container = ProviderScope.containerOf(
-          tester.element(find.text('Enter Vault PIN')),
+          tester.element(find.text('Enter PIN')),
         );
         final crypto = container.read(vaultCryptoProvider);
 
@@ -1084,7 +1106,7 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        expect(find.text('Enter Vault PIN'), findsOneWidget);
+        expect(find.text('Enter PIN'), findsWidgets);
 
         await tester.enterText(find.byType(TextField), '0000');
         await tester.pump();

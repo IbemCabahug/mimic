@@ -105,7 +105,17 @@ class AutoLock with WidgetsBindingObserver {
     _suspended = false;
   }
 
-  void _lockVault() {
+  static Future<void> wipeTransientPlaintext() async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      for (final name in const ['vault_playback', 'vault_docs']) {
+        final dir = Directory('${tempDir.path}/$name');
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      }
+    } catch (_) {}
+  }
+
+  void _lockVault() async {
     final container = _container;
     if (container == null) return;
 
@@ -119,14 +129,7 @@ class AutoLock with WidgetsBindingObserver {
 
     unawaited(MediaStreamServer.instance.stop());
 
-    try {
-      getTemporaryDirectory().then((tempDir) {
-        for (final name in const ['vault_playback', 'vault_docs']) {
-          final dir = Directory('${tempDir.path}/$name');
-          if (dir.existsSync()) dir.deleteSync(recursive: true);
-        }
-      });
-    } catch (_) {}
+    await wipeTransientPlaintext();
 
     AutoLock.navigatorKey.currentState?.pushNamedAndRemoveUntil(
       '/vault-pin',

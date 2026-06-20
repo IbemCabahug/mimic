@@ -27,6 +27,7 @@ class VaultCrypto extends ChangeNotifier {
   static const int _pbkdf2Iterations = 100000;
   static const String _storageKeySalt = 'vault_salt';
   static const String _storageKeyPinHash = 'vault_pin_hash';
+  static const String _storageKeyMasterWrapped = 'master_key_wrapped';
   static const List<int> _mediaMagic = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x76, 0x31, 0x00]; // "MVKEYv1\0"
   static const List<int> _mediaMagicCtr = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x63, 0x31, 0x00]; // "MVKEYc1\0"
 
@@ -55,24 +56,62 @@ class VaultCrypto extends ChangeNotifier {
     if (storedSalt != null) {
       salt = base64Decode(storedSalt);
       final storedHash = await _platformService.secureRead(_storageKeyPinHash);
-      if (storedHash != null && storedHash == _hashPin(pin)) {
-        _derivedKey = await _deriveKey(pin, storedSalt);
-        _isUnlocked = true;
-        await _platformService.secureWrite('vault_setup_completed', 'true');
-        await _platformService.secureDelete('vault_wiped');
-        notifyListeners();
-        return;
-      } else {
+      if (storedHash == null) {
         throw Exception('Invalid PIN');
       }
+      // Derive the candidate master key once; used to both verify and unlock.
+      final candidateKey = await _deriveKey(pin, storedSalt);
+      bool ok;
+      bool needsMigration = false;
+      if (storedHash.startsWith('v2:')) {
+        ok = _constantTimeEquals(storedHash, _verifierForKey(candidateKey));
+      } else {
+        // Legacy unsalted SHA-256(pin) verifier — upgrade on success.
+        ok = _constantTimeEquals(storedHash, _hashPin(pin));
+        needsMigration = ok;
+      }
+      if (!ok) {
+        throw Exception('Invalid PIN');
+      }
+      // Resolve the stable data key (DEK) through the PIN-derived wrapping key.
+      final kek = _deriveKek(candidateKey);
+      final wrapped =
+          await _platformService.secureRead(_storageKeyMasterWrapped);
+      Uint8List dek;
+      if (wrapped == null) {
+        // Legacy vault: the PIN-derived key IS the current data key. Adopt it as
+        // the permanent DEK and wrap it for the future. No data is re-encrypted.
+        dek = candidateKey;
+        await _platformService.secureWrite(
+            _storageKeyMasterWrapped, _wrapKey(dek, kek));
+      } else {
+        dek = _unwrapKey(wrapped, kek);
+      }
+      _derivedKey = dek;
+      _isUnlocked = true;
+      if (needsMigration) {
+        await _platformService.secureWrite(
+            _storageKeyPinHash, _verifierForKey(candidateKey));
+      }
+      await _platformService.secureWrite('vault_setup_completed', 'true');
+      await _platformService.secureDelete('vault_wiped');
+      notifyListeners();
+      return;
     }
 
     salt = _generateSecureRandomBytes(16);
     await _platformService.secureWrite(_storageKeySalt, base64Encode(salt));
-    await _platformService.secureWrite(_storageKeyPinHash, _hashPin(pin));
+    final candidateKey = await _deriveKey(pin, base64Encode(salt));
+    await _platformService.secureWrite(
+        _storageKeyPinHash, _verifierForKey(candidateKey));
+    // New vault: the data key (DEK) starts as the PIN-derived key, then is
+    // wrapped by the PIN-derived KEK so the PIN can change without data loss.
+    final kek = _deriveKek(candidateKey);
+    await _platformService.secureWrite(
+        _storageKeyMasterWrapped, _wrapKey(candidateKey, kek));
+    _derivedKey = candidateKey;
     await _platformService.secureWrite('vault_setup_completed', 'true');
     await _platformService.secureDelete('vault_wiped');
-    _derivedKey = await _deriveKey(pin, base64Encode(salt));
     _isUnlocked = true;
     notifyListeners();
   }
@@ -105,6 +144,9 @@ class VaultCrypto extends ChangeNotifier {
 
   void lock() {
     _isUnlocked = false;
+    if (_derivedKey != null) {
+      _derivedKey!.fillRange(0, _derivedKey!.length, 0);
+    }
     _derivedKey = null;
     notifyListeners();
   }
@@ -138,16 +180,27 @@ class VaultCrypto extends ChangeNotifier {
   }
 
   Future<void> changePin(String newPin) async {
+    // The data key (DEK) must NOT change when the PIN changes, or all existing
+    // vault data would be orphaned. Re-wrap the SAME DEK under the new PIN.
+    if (_derivedKey == null) {
+      throw Exception('Vault must be unlocked before changing the PIN');
+    }
+    final dek = _derivedKey!;
     final salt = _generateSecureRandomBytes(16);
     await _platformService.secureWrite(_storageKeySalt, base64Encode(salt));
-    await _platformService.secureWrite(_storageKeyPinHash, _hashPin(newPin));
+    final newCandidateKey = await _deriveKey(newPin, base64Encode(salt));
+    await _platformService.secureWrite(
+        _storageKeyPinHash, _verifierForKey(newCandidateKey));
+    final newKek = _deriveKek(newCandidateKey);
+    await _platformService.secureWrite(
+        _storageKeyMasterWrapped, _wrapKey(dek, newKek));
     if (!kIsWeb) {
       await _platformService.secureWrite('vault_pin', newPin);
       await _platformService.secureWrite('wrong_attempts', '0');
       await _platformService.secureWrite('vault_setup_completed', 'true');
       await _platformService.secureDelete('vault_wiped');
     }
-    _derivedKey = await _deriveKey(newPin, base64Encode(salt));
+    _derivedKey = dek; // unchanged — the whole point of the fix
     _isUnlocked = true;
     notifyListeners();
   }
@@ -713,6 +766,55 @@ class VaultCrypto extends ChangeNotifier {
     final encrypted = ciphertext.sublist(_ivLength);
     final cipher = _createCipher(key, iv, false);
     return cipher.process(encrypted);
+  }
+
+  /// Strong PIN verifier: SHA-256 of the PBKDF2-derived master key, tagged "v2:".
+  /// Reproducing it costs the full PBKDF2 work and it never reveals the key.
+  String _verifierForKey(Uint8List key) {
+    final digest = SHA256Digest().process(key);
+    return 'v2:${base64Encode(digest)}';
+  }
+
+  bool _constantTimeEquals(String a, String b) {
+    final ab = utf8.encode(a);
+    final bb = utf8.encode(b);
+    if (ab.length != bb.length) return false;
+    var result = 0;
+    for (var i = 0; i < ab.length; i++) {
+      result |= ab[i] ^ bb[i];
+    }
+    return result == 0;
+  }
+
+  /// Derive the PIN-based wrapping key (KEK) from the PIN-derived key. Domain-
+  /// separated from the verifier so vault_pin_hash never reveals the KEK.
+  Uint8List _deriveKek(Uint8List candidateKey) {
+    final input = Uint8List.fromList([
+      ...candidateKey,
+      ...utf8.encode('mimic-kek-v1'),
+    ]);
+    return SHA256Digest().process(input);
+  }
+
+  String _wrapKey(Uint8List dek, Uint8List kek) {
+    final iv = _generateSecureRandomBytes(_ivLength);
+    final cipher = _createCipher(kek, iv, true);
+    final enc = cipher.process(dek);
+    final blob = Uint8List(iv.length + enc.length);
+    blob.setRange(0, iv.length, iv);
+    blob.setRange(iv.length, blob.length, enc);
+    return base64Encode(blob);
+  }
+
+  Uint8List _unwrapKey(String wrapped, Uint8List kek) {
+    final blob = base64Decode(wrapped);
+    if (blob.length < _ivLength) {
+      throw Exception('Invalid wrapped master key');
+    }
+    final iv = blob.sublist(0, _ivLength);
+    final enc = blob.sublist(_ivLength);
+    final cipher = _createCipher(kek, iv, false);
+    return cipher.process(enc);
   }
 
   String _hashPin(String pin) {

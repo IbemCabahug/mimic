@@ -533,6 +533,7 @@ class VaultImporter {
         'recovery_salt',
         'vault_salt',
         'vault_pin_hash',
+        'master_key_wrapped',
       ];
       for (final key in secureKeys) {
         final val = payload[key] as String?;

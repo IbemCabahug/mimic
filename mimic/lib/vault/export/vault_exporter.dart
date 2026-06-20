@@ -50,6 +50,8 @@ class VaultExporter {
     'vault_salt',
     // PIN hash (used to verify the PIN on unlock)
     'vault_pin_hash',
+    // Wrapped data key (base64 AES-encrypted master key; useless without the PIN)
+    'master_key_wrapped',
   ];
 
   // ───────────────────────────────────────────────────────────────────
