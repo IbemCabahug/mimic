@@ -8,12 +8,14 @@ import '../services/file_vault_service.dart';
 class PhotoViewerScreen extends ConsumerStatefulWidget {
   final List<PhotoMeta> photos;
   final int initialIndex;
+  final Future<Uint8List?> Function(String) loadBytes;
   final ValueChanged<String> onDelete;
 
   const PhotoViewerScreen({
     super.key,
     required this.photos,
     required this.initialIndex,
+    required this.loadBytes,
     required this.onDelete,
   });
 
@@ -104,7 +106,7 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
               itemBuilder: (context, index) {
                 final photo = widget.photos[index];
                 return FutureBuilder<Uint8List?>(
-                  future: ref.read(fileVaultServiceProvider).getPhoto(photo.id),
+                  future: widget.loadBytes(photo.id),
                   builder: (context, snapshot) {
                     if (snapshot.connectionState == ConnectionState.waiting) {
                       return const Center(child: CircularProgressIndicator(color: Colors.white));
@@ -115,7 +117,7 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
                     }
                     return Center(
                       child: InteractiveViewer(
-                        child: Image.memory(bytes, fit: BoxFit.contain, cacheWidth: 1080),
+                        child: Image.memory(bytes, fit: BoxFit.contain),
                       ),
                     );
                   },

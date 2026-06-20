@@ -1,3 +1,6 @@
+import 'dart:collection';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -16,8 +19,36 @@ class PhotoVaultScreen extends ConsumerStatefulWidget {
 
 class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   List<PhotoMeta> _photos = [];
-  Map<String, Uint8List?> _photoCache = {};
   bool _isLoading = true;
+
+  final LinkedHashMap<String, Uint8List> _bytesCache = LinkedHashMap();
+  int _bytesCacheSize = 0;
+  static const int _bytesCacheBudget = 32 * 1024 * 1024; // 32 MB
+
+  Uint8List? _getCached(String id) {
+    final b = _bytesCache.remove(id);
+    if (b != null) _bytesCache[id] = b;
+    return b;
+  }
+
+  void _putCached(String id, Uint8List b) {
+    final old = _bytesCache.remove(id);
+    if (old != null) _bytesCacheSize -= old.lengthInBytes;
+    _bytesCache[id] = b;
+    _bytesCacheSize += b.lengthInBytes;
+    while (_bytesCacheSize > _bytesCacheBudget && _bytesCache.isNotEmpty) {
+      final k = _bytesCache.keys.first;
+      _bytesCacheSize -= _bytesCache.remove(k)!.lengthInBytes;
+    }
+  }
+
+  Future<Uint8List?> _loadPhotoBytes(String id) async {
+    final hit = _getCached(id);
+    if (hit != null) return hit;
+    final bytes = await ref.read(fileVaultServiceProvider).getPhoto(id);
+    if (bytes != null) _putCached(id, bytes);
+    return bytes;
+  }
 
   @override
   void initState() {
@@ -25,17 +56,19 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     _loadPhotos();
   }
 
+  @override
+  void dispose() {
+    _bytesCache.clear();
+    _bytesCacheSize = 0;
+    super.dispose();
+  }
+
   Future<void> _loadPhotos() async {
     setState(() => _isLoading = true);
     final photos = await ref.read(fileVaultServiceProvider).getAllPhotos();
     if (mounted) {
-      final cache = <String, Uint8List?>{};
-      for (final photo in photos) {
-        cache[photo.id] = await ref.read(fileVaultServiceProvider).getPhoto(photo.id);
-      }
       setState(() {
         _photos = photos;
-        _photoCache = cache;
         _isLoading = false;
       });
     }
@@ -264,6 +297,7 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
         builder: (context) => PhotoViewerScreen(
           photos: _photos,
           initialIndex: initialIndex,
+          loadBytes: _loadPhotoBytes,
           onDelete: (id) async {
             await ref.read(fileVaultServiceProvider).deletePhoto(id);
             await _loadPhotos();
@@ -386,23 +420,76 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                   itemCount: _photos.length,
                   itemBuilder: (context, index) {
                     final photo = _photos[index];
-                    final bytes = _photoCache[photo.id];
-                    if (bytes == null) {
-                      return Container(
-                        color: Colors.white,
-                        child: const Icon(Icons.broken_image, color: VaultColors.textTertiary),
-                      );
-                    }
+                    final thumbPx = (MediaQuery.of(context).size.width / 3 * MediaQuery.of(context).devicePixelRatio).round().clamp(150, 600);
                     return GestureDetector(
                       onTap: () => _openViewer(index),
                       onLongPress: () => _showOptions(photo),
-                      child: Image.memory(
-                        bytes,
-                        fit: BoxFit.cover,
+                      child: _PhotoThumbnail(
+                        key: ValueKey(photo.id),
+                        photoId: photo.id,
+                        thumbPx: thumbPx,
+                        loadBytes: _loadPhotoBytes,
                       ),
                     );
                   },
                 ),
+    );
+  }
+}
+
+class _PhotoThumbnail extends StatefulWidget {
+  final String photoId;
+  final int thumbPx;
+  final Future<Uint8List?> Function(String) loadBytes;
+
+  const _PhotoThumbnail({
+    super.key,
+    required this.photoId,
+    required this.thumbPx,
+    required this.loadBytes,
+  });
+
+  @override
+  State<_PhotoThumbnail> createState() => _PhotoThumbnailState();
+}
+
+class _PhotoThumbnailState extends State<_PhotoThumbnail> {
+  Uint8List? _bytes;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+  }
+
+  Future<void> _fetch() async {
+    final b = await widget.loadBytes(widget.photoId);
+    if (!mounted) return;
+    setState(() {
+      _bytes = b;
+      _failed = b == null;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_failed) {
+      return Container(
+        color: Colors.grey[200],
+        child: const Icon(Icons.broken_image, color: Colors.grey),
+      );
+    }
+    if (_bytes == null) {
+      return Container(
+        color: Colors.grey[200],
+      );
+    }
+    return Image.memory(
+      _bytes!,
+      cacheWidth: widget.thumbPx,
+      fit: BoxFit.cover,
+      gaplessPlayback: true,
     );
   }
 }
