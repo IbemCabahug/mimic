@@ -2,6 +2,7 @@
 import 'dart:math' as math;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/game/data/word_packs.dart';
+import 'package:mimic/game/data/language_store.dart';
 
 enum GameMode { classic, nightmare, survival }
 
@@ -333,7 +334,8 @@ class GameStateNotifier extends StateNotifier<GameState> {
     activeList.shuffle(random);
 
     // Pick a random WordPair from selected packs
-    final activePacks = WordPackData.packs.where((p) => state.selectedPacks.contains(p.id)).toList();
+    final localizedPacks = WordPackData.getPacksForLanguage(LanguageStore.current);
+    final activePacks = localizedPacks.where((p) => state.selectedPacks.contains(p.id)).toList();
     final packsToUse = activePacks.isNotEmpty ? activePacks : [WordPackData.packs.first];
     
     final chosenPack = packsToUse[random.nextInt(packsToUse.length)];

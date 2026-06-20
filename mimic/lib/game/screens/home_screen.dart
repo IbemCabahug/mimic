@@ -7,6 +7,7 @@ import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/core/animations/horror_animations.dart';
 import 'package:mimic/game/game.dart';
 import 'package:mimic/multiplayer/network/network_service.dart';
+import 'package:mimic/game/data/language_store.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -530,6 +531,8 @@ Text(
               _buildSettingSwitch('TENSION MUSIC', true),
               const SizedBox(height: 12),
               _buildSettingSwitch('HAPTIC FEEDBACK', true),
+              const SizedBox(height: 16),
+              _buildLanguageSelector(),
             ],
           ),
           actions: [
@@ -575,6 +578,74 @@ Text(
                   initialValue = val;
                 });
               },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildLanguageSelector() {
+    const languages = [
+      {'code': 'en', 'label': 'English'},
+      {'code': 'fil', 'label': 'Filipino'},
+      {'code': 'ceb', 'label': 'Cebuano'},
+    ];
+    return StatefulBuilder(
+      builder: (context, setState) {
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'WORD LANGUAGE',
+              style: GoogleFonts.inter(
+                color: HorrorColors.fogWhite,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: languages.map((lang) {
+                final code = lang['code']!;
+                final selected = LanguageStore.current == code;
+                return Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    child: InkWell(
+                      onTap: () {
+                        LanguageStore.setLanguage(code);
+                        setState(() {});
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? HorrorColors.bloodRed.withValues(alpha: 0.5)
+                              : HorrorColors.cardSurface,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                            color: selected
+                                ? HorrorColors.crimson
+                                : HorrorColors.ashGray.withValues(alpha: 0.3),
+                          ),
+                        ),
+                        child: Text(
+                          lang['label']!,
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.inter(
+                            color: selected
+                                ? HorrorColors.fogWhite
+                                : HorrorColors.ashGray,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                );
+              }).toList(),
             ),
           ],
         );
