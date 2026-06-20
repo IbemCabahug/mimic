@@ -216,7 +216,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         title: Text(
-          _isCreateMode ? 'Vault Setup' : 'Vault Access',
+          _isCreateMode ? 'Set Up PIN' : 'Security',
           style: const TextStyle(color: Color(0xFF7F77DD)),
         ),
         centerTitle: true,
@@ -228,8 +228,8 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           children: [
             Text(
               _isCreateMode
-                  ? (_isConfirming ? 'Confirm Vault PIN' : 'Create Vault PIN')
-                  : 'Enter Vault PIN',
+                  ? (_isConfirming ? 'Confirm PIN' : 'Create PIN')
+                  : 'Enter PIN',
               style: const TextStyle(
                 color: Color(0xFF7F77DD),
                 fontSize: 24,

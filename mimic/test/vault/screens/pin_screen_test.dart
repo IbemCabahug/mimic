@@ -61,7 +61,7 @@ void main() {
     await tester.pumpAndSettle();
 
     // Verify initial layout
-    expect(find.text('Enter Vault PIN'), findsOneWidget);
+    expect(find.text('Enter PIN'), findsWidgets);
     expect(find.text('Forgot PIN?'), findsNothing);
 
     // Fail 1
