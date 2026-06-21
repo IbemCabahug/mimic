@@ -18,6 +18,7 @@ class DocumentMeta {
   final int sizeBytes;
   final DateTime addedAt;
   final bool isTextNote;
+  final String folder;
 
   DocumentMeta({
     required this.id,
@@ -26,6 +27,7 @@ class DocumentMeta {
     required this.sizeBytes,
     required this.addedAt,
     this.isTextNote = false,
+    this.folder = '',
   });
 
   Map<String, dynamic> toMap() => {
@@ -35,6 +37,7 @@ class DocumentMeta {
         'sizeBytes': sizeBytes,
         'addedAt': addedAt.toIso8601String(),
         'isTextNote': isTextNote ? 1 : 0,
+        'folder': folder,
       };
 
   factory DocumentMeta.fromMap(Map<String, dynamic> map) => DocumentMeta(
@@ -44,6 +47,25 @@ class DocumentMeta {
         sizeBytes: map['sizeBytes'] as int,
         addedAt: DateTime.parse(map['addedAt'] as String),
         isTextNote: (map['isTextNote'] as int? ?? 0) == 1,
+        folder: map['folder'] as String? ?? '',
+      );
+
+  DocumentMeta copyWith({
+    String? fileName,
+    String? fileType,
+    int? sizeBytes,
+    DateTime? addedAt,
+    bool? isTextNote,
+    String? folder,
+  }) =>
+      DocumentMeta(
+        id: id,
+        fileName: fileName ?? this.fileName,
+        fileType: fileType ?? this.fileType,
+        sizeBytes: sizeBytes ?? this.sizeBytes,
+        addedAt: addedAt ?? this.addedAt,
+        isTextNote: isTextNote ?? this.isTextNote,
+        folder: folder ?? this.folder,
       );
 }
 
@@ -211,12 +233,9 @@ class DocumentVaultService {
     final existing = await listDocuments();
     final index = existing.indexWhere((d) => d.id == id);
     if (index != -1) {
-      existing[index] = DocumentMeta(
-        id: id,
-        fileName: existing[index].fileName,
-        fileType: 'txt',
+      existing[index] = existing[index].copyWith(
         sizeBytes: bytes.length,
-        addedAt: existing[index].addedAt,
+        fileType: 'txt',
         isTextNote: true,
       );
       await _saveMeta(existing);
@@ -227,6 +246,14 @@ class DocumentVaultService {
     await _platformService.deleteFile(id);
     final existing = await listDocuments();
     existing.removeWhere((d) => d.id == id);
+    await _saveMeta(existing);
+  }
+
+  Future<void> moveDocument(String id, String folder) async {
+    final existing = await listDocuments();
+    final index = existing.indexWhere((d) => d.id == id);
+    if (index == -1) return;
+    existing[index] = existing[index].copyWith(folder: folder);
     await _saveMeta(existing);
   }
 }

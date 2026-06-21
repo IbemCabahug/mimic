@@ -19,6 +19,7 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
   bool _isLoading = true;
   String _searchQuery = '';
   String _sortMode = 'date';
+  String? _selectedFolder;
 
   void setDocumentsForTesting(List<DocumentMeta> docs) {
     setState(() {
@@ -27,28 +28,135 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
   }
 
   List<DocumentMeta> _visibleDocuments() {
+    Iterable<DocumentMeta> list = documents;
+    if (_selectedFolder != null) {
+      list = list.where((d) => d.folder == _selectedFolder);
+    }
     final q = _searchQuery.trim().toLowerCase();
-    final list = q.isEmpty
-        ? List<DocumentMeta>.from(documents)
-        : documents.where((d) => d.fileName.toLowerCase().contains(q)).toList();
+    if (q.isNotEmpty) {
+      list = list.where((d) => d.fileName.toLowerCase().contains(q));
+    }
+    final result = list.toList();
     switch (_sortMode) {
       case 'name':
-        list.sort((a, b) => a.fileName.toLowerCase().compareTo(b.fileName.toLowerCase()));
+        result.sort((a, b) => a.fileName.toLowerCase().compareTo(b.fileName.toLowerCase()));
         break;
       case 'size':
-        list.sort((a, b) => b.sizeBytes.compareTo(a.sizeBytes));
+        result.sort((a, b) => b.sizeBytes.compareTo(a.sizeBytes));
         break;
       case 'type':
-        list.sort((a, b) {
+        result.sort((a, b) {
           final t = a.fileType.toLowerCase().compareTo(b.fileType.toLowerCase());
           return t != 0 ? t : a.fileName.toLowerCase().compareTo(b.fileName.toLowerCase());
         });
         break;
       case 'date':
       default:
-        list.sort((a, b) => b.addedAt.compareTo(a.addedAt));
+        result.sort((a, b) => b.addedAt.compareTo(a.addedAt));
     }
-    return list;
+    return result;
+  }
+
+  Widget _folderChip(String label, bool selected, VoidCallback onTap) {
+    return ChoiceChip(
+      label: Text(label,
+          style: TextStyle(
+              fontFamily: 'Inter',
+              color: selected ? Colors.white : VaultColors.textSecondary)),
+      selected: selected,
+      onSelected: (_) => onTap(),
+      backgroundColor: VaultColors.surface,
+      selectedColor: VaultColors.accent,
+      showCheckmark: false,
+    );
+  }
+
+  Widget _buildFolderChips() {
+    final folders = documents.map((d) => d.folder).where((f) => f.isNotEmpty).toSet().toList()
+      ..sort();
+    final hasUnfiled = documents.any((d) => d.folder.isEmpty);
+    final chips = <Widget>[
+      _folderChip('All', _selectedFolder == null, () => setState(() => _selectedFolder = null)),
+    ];
+    if (hasUnfiled) {
+      chips.add(_folderChip('Unfiled', _selectedFolder == '', () => setState(() => _selectedFolder = '')));
+    }
+    for (final f in folders) {
+      chips.add(_folderChip(f, _selectedFolder == f, () => setState(() => _selectedFolder = f)));
+    }
+    return SizedBox(
+      height: 44,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        children: chips
+            .map((c) => Padding(padding: const EdgeInsets.only(right: 8), child: c))
+            .toList(),
+      ),
+    );
+  }
+
+  Future<void> _showMoveToFolder(DocumentMeta doc) async {
+    final existingFolders =
+        documents.map((d) => d.folder).where((f) => f.isNotEmpty).toSet().toList()..sort();
+    final newFolderController = TextEditingController();
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Move to folder',
+            style: TextStyle(
+                color: VaultColors.textPrimary,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'Inter')),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.folder_off_outlined, color: VaultColors.textSecondary),
+                  title: const Text('Unfiled', style: TextStyle(fontFamily: 'Inter')),
+                  onTap: () => Navigator.of(context).pop(''),
+                ),
+                ...existingFolders.map((f) => ListTile(
+                      leading: const Icon(Icons.folder_outlined, color: VaultColors.accent),
+                      title: Text(f, style: const TextStyle(fontFamily: 'Inter')),
+                      onTap: () => Navigator.of(context).pop(f),
+                    )),
+                const Divider(),
+                TextField(
+                  controller: newFolderController,
+                  decoration: const InputDecoration(
+                      hintText: 'New folder name',
+                      hintStyle: TextStyle(fontFamily: 'Inter')),
+                  style: const TextStyle(fontFamily: 'Inter'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(null),
+            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary)),
+          ),
+          TextButton(
+            onPressed: () {
+              final name = newFolderController.text.trim();
+              if (name.isNotEmpty) Navigator.of(context).pop(name);
+            },
+            child: const Text('Create & Move', style: TextStyle(color: VaultColors.accent)),
+          ),
+        ],
+      ),
+    );
+    if (chosen != null && mounted) {
+      await ref.read(documentVaultServiceProvider).moveDocument(doc.id, chosen);
+      await _loadDocuments();
+    }
   }
 
   @override
@@ -370,6 +478,8 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                     final visible = _visibleDocuments();
                     return Column(
                       children: [
+                        _buildFolderChips(),
+                        const SizedBox(height: 8),
                         Padding(
                           padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
                           child: Row(
@@ -507,7 +617,15 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                                   ),
                                 ),
                               ),
-                              trailing: const Icon(Icons.chevron_right, color: VaultColors.textTertiary, size: 20),
+                              trailing: PopupMenuButton<String>(
+                                icon: const Icon(Icons.more_vert, color: VaultColors.textTertiary, size: 20),
+                                onSelected: (v) {
+                                  if (v == 'move') _showMoveToFolder(doc);
+                                },
+                                itemBuilder: (_) => const [
+                                  PopupMenuItem(value: 'move', child: Text('Move to folder')),
+                                ],
+                              ),
                             ),
                           ),
                         ),
