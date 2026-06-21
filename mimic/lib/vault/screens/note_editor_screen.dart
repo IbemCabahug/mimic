@@ -126,18 +126,18 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
   Widget _buildToolbar() {
     return Container(
       decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Color(0xFFE0DDD3))),
+        border: Border(top: BorderSide(color: Color(0xFFCFCFCF))),
       ),
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            IconButton(icon: const Icon(Icons.format_bold), color: const Color(0xFF534AB7), onPressed: () => _wrapSelection('**', '**')),
-            IconButton(icon: const Icon(Icons.format_italic), color: const Color(0xFF534AB7), onPressed: () => _wrapSelection('*', '*')),
-            IconButton(icon: const Icon(Icons.title), color: const Color(0xFF534AB7), onPressed: () => _insertLinePrefix('# ')),
-            IconButton(icon: const Icon(Icons.format_list_bulleted), color: const Color(0xFF534AB7), onPressed: () => _insertLinePrefix('- ')),
-            IconButton(icon: const Icon(Icons.check_box_outlined), color: const Color(0xFF534AB7), onPressed: () => _insertLinePrefix('- [ ] ')),
-            IconButton(icon: const Icon(Icons.code), color: const Color(0xFF534AB7), onPressed: () => _wrapSelection('`', '`')),
+            IconButton(icon: const Icon(Icons.format_bold), color: const Color(0xFF3A2DB0), onPressed: () => _wrapSelection('**', '**')),
+            IconButton(icon: const Icon(Icons.format_italic), color: const Color(0xFF3A2DB0), onPressed: () => _wrapSelection('*', '*')),
+            IconButton(icon: const Icon(Icons.title), color: const Color(0xFF3A2DB0), onPressed: () => _insertLinePrefix('# ')),
+            IconButton(icon: const Icon(Icons.format_list_bulleted), color: const Color(0xFF3A2DB0), onPressed: () => _insertLinePrefix('- ')),
+            IconButton(icon: const Icon(Icons.check_box_outlined), color: const Color(0xFF3A2DB0), onPressed: () => _insertLinePrefix('- [ ] ')),
+            IconButton(icon: const Icon(Icons.code), color: const Color(0xFF3A2DB0), onPressed: () => _wrapSelection('`', '`')),
           ],
         ),
       ),
@@ -157,12 +157,12 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
         }
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFFF1EFE8),
+        backgroundColor: const Color(0xFFFFFFFF),
         appBar: AppBar(
           backgroundColor: Colors.transparent,
           elevation: 0,
           leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new, color: Color(0xFF534AB7), size: 20),
+            icon: const Icon(Icons.arrow_back_ios_new, color: Color(0xFF3A2DB0), size: 20),
             onPressed: () async {
               final navigator = Navigator.of(context);
               final shouldPop = await _onWillPop();
@@ -181,7 +181,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
             ),
             decoration: const InputDecoration(
               hintText: 'Note title',
-              hintStyle: TextStyle(color: Color(0xFF8E8E8E), fontFamily: 'Inter'),
+              hintStyle: TextStyle(color: Color(0xFF5C5C5C), fontFamily: 'Inter'),
               border: InputBorder.none,
               contentPadding: EdgeInsets.zero,
             ),
@@ -193,13 +193,13 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
               child: Center(
                 child: Text(
                   _statusText(),
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF8E8E8E), fontFamily: 'Inter'),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF5C5C5C), fontFamily: 'Inter'),
                 ),
               ),
             ),
             IconButton(
               icon: Icon(_previewMode ? Icons.edit_outlined : Icons.visibility_outlined,
-                  color: const Color(0xFF534AB7)),
+                  color: const Color(0xFF3A2DB0)),
               onPressed: () => setState(() => _previewMode = !_previewMode),
             ),
           ],
@@ -218,14 +218,14 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
                       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
                       child: TextField(
                         controller: _bodyController,
-                        style: const TextStyle(
-                            fontSize: 16, color: Color(0xFF1A1A1A), fontFamily: 'Inter', height: 1.6),
+                        cursorColor: const Color(0xFF3A2DB0),
+                        style: const TextStyle(fontSize: 17, color: Color(0xFF111111), fontFamily: 'Inter', height: 1.6, fontWeight: FontWeight.w600),
                         maxLines: null,
                         expands: true,
                         textCapitalization: TextCapitalization.sentences,
                         decoration: const InputDecoration(
                           hintText: 'Start typing… (Markdown supported)',
-                          hintStyle: TextStyle(color: Color(0xFF8E8E8E), fontFamily: 'Inter'),
+                          hintStyle: TextStyle(color: Color(0xFF5C5C5C), fontFamily: 'Inter'),
                           border: InputBorder.none,
                           contentPadding: EdgeInsets.symmetric(vertical: 12),
                         ),

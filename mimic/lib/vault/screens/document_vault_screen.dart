@@ -711,14 +711,30 @@ class _DocumentEditorScreenState extends ConsumerState<DocumentEditorScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return VaultScaffold(
-      title: 'Text Note',
-      showLockButton: false,
+    return Scaffold(
+      backgroundColor: const Color(0xFFFFFFFF),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: const Text(
+          'Text Note',
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            color: Color(0xFF111111),
+            fontFamily: 'Inter',
+          ),
+        ),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back_ios_new, color: Color(0xFF3A2DB0), size: 20),
+          onPressed: () => Navigator.of(context).pop(),
+        ),
+      ),
       floatingActionButton: _hasChanges
           ? AnimatedFAB(
               child: FloatingActionButton(
                 onPressed: _save,
-                backgroundColor: VaultColors.accent,
+                backgroundColor: const Color(0xFF3A2DB0),
                 child: const Icon(Icons.save, color: Colors.white),
               ),
             )
@@ -727,16 +743,20 @@ class _DocumentEditorScreenState extends ConsumerState<DocumentEditorScreen> {
         padding: const EdgeInsets.all(16.0),
         child: TextField(
           controller: _controller,
+          cursorColor: const Color(0xFF3A2DB0),
           maxLines: null,
           expands: true,
           decoration: const InputDecoration(
             hintText: 'Start typing...',
+            hintStyle: TextStyle(color: Color(0xFF5C5C5C), fontFamily: 'Inter'),
             border: InputBorder.none,
           ),
           style: const TextStyle(
+            fontSize: 17,
+            color: Color(0xFF111111),
             fontFamily: 'Inter',
-            fontSize: 16,
-            color: VaultColors.textPrimary,
+            height: 1.6,
+            fontWeight: FontWeight.w600,
           ),
         ),
       ),
