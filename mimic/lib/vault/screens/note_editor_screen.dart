@@ -1,6 +1,7 @@
 // lib/vault/screens/note_editor_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/notes_service.dart';
 
@@ -18,19 +19,31 @@ class NoteEditorScreen extends ConsumerStatefulWidget {
   ConsumerState<NoteEditorScreen> createState() => _NoteEditorScreenState();
 }
 
-class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
+class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with WidgetsBindingObserver {
   late TextEditingController _titleController;
   late TextEditingController _bodyController;
   bool _hasChanges = false;
   Timer? _autoSaveTimer;
+  bool _previewMode = false;
+  bool _isSaving = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _titleController = TextEditingController(text: widget.note.title);
     _bodyController = TextEditingController(text: widget.initialBody);
     _titleController.addListener(_onContentChanged);
     _bodyController.addListener(_onContentChanged);
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.hidden) {
+      _saveNote();
+    }
   }
 
   void _onContentChanged() {
@@ -54,13 +67,12 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
       createdAt: widget.note.createdAt,
       updatedAt: DateTime.now(),
     );
+    if (mounted) setState(() => _isSaving = true);
     try {
       await ref.read(notesServiceProvider).updateNote(updatedNote);
-      if (mounted) {
-        setState(() => _hasChanges = false);
-      }
+      if (mounted) setState(() { _hasChanges = false; _isSaving = false; });
     } catch (e) {
-      // Silently fail auto-save
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
@@ -72,10 +84,64 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _autoSaveTimer?.cancel();
     _titleController.dispose();
     _bodyController.dispose();
     super.dispose();
+  }
+
+  String _statusText() {
+    if (_isSaving) return 'Saving…';
+    if (!_hasChanges) return 'Saved';
+    return '';
+  }
+
+  void _wrapSelection(String left, String right) {
+    final text = _bodyController.text;
+    final sel = _bodyController.selection;
+    final start = sel.start < 0 ? text.length : sel.start;
+    final end = sel.end < 0 ? text.length : sel.end;
+    final selected = text.substring(start, end);
+    final newText = text.replaceRange(start, end, '$left$selected$right');
+    _bodyController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(
+          offset: start + left.length + selected.length + right.length),
+    );
+  }
+
+  void _insertLinePrefix(String prefix) {
+    final text = _bodyController.text;
+    final sel = _bodyController.selection;
+    final pos = sel.start < 0 ? text.length : sel.start;
+    final lineStart = text.lastIndexOf('\n', pos - 1) + 1;
+    final newText = text.replaceRange(lineStart, lineStart, prefix);
+    _bodyController.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: pos + prefix.length),
+    );
+  }
+
+  Widget _buildToolbar() {
+    return Container(
+      decoration: const BoxDecoration(
+        border: Border(top: BorderSide(color: Color(0xFFE0DDD3))),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            IconButton(icon: const Icon(Icons.format_bold), color: const Color(0xFF534AB7), onPressed: () => _wrapSelection('**', '**')),
+            IconButton(icon: const Icon(Icons.format_italic), color: const Color(0xFF534AB7), onPressed: () => _wrapSelection('*', '*')),
+            IconButton(icon: const Icon(Icons.title), color: const Color(0xFF534AB7), onPressed: () => _insertLinePrefix('# ')),
+            IconButton(icon: const Icon(Icons.format_list_bulleted), color: const Color(0xFF534AB7), onPressed: () => _insertLinePrefix('- ')),
+            IconButton(icon: const Icon(Icons.check_box_outlined), color: const Color(0xFF534AB7), onPressed: () => _insertLinePrefix('- [ ] ')),
+            IconButton(icon: const Icon(Icons.code), color: const Color(0xFF534AB7), onPressed: () => _wrapSelection('`', '`')),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -122,44 +188,52 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> {
             textCapitalization: TextCapitalization.sentences,
           ),
           actions: [
-            if (_hasChanges)
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: SizedBox(
-                  width: 20,
-                  height: 20,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: const Color(0xFF534AB7),
-                    valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF534AB7)),
-                  ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Center(
+                child: Text(
+                  _statusText(),
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF8E8E8E), fontFamily: 'Inter'),
                 ),
               ),
+            ),
+            IconButton(
+              icon: Icon(_previewMode ? Icons.edit_outlined : Icons.visibility_outlined,
+                  color: const Color(0xFF534AB7)),
+              onPressed: () => setState(() => _previewMode = !_previewMode),
+            ),
           ],
         ),
-        body: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-          child: TextField(
-            controller: _bodyController,
-            style: const TextStyle(
-              fontSize: 16,
-              color: Color(0xFF1A1A1A),
-              fontFamily: 'Inter',
-              height: 1.6,
+        body: Column(
+          children: [
+            Expanded(
+              child: _previewMode
+                  ? Markdown(
+                      data: _bodyController.text.trim().isEmpty
+                          ? '*Nothing to preview*'
+                          : _bodyController.text,
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                    )
+                  : Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                      child: TextField(
+                        controller: _bodyController,
+                        style: const TextStyle(
+                            fontSize: 16, color: Color(0xFF1A1A1A), fontFamily: 'Inter', height: 1.6),
+                        maxLines: null,
+                        expands: true,
+                        textCapitalization: TextCapitalization.sentences,
+                        decoration: const InputDecoration(
+                          hintText: 'Start typing… (Markdown supported)',
+                          hintStyle: TextStyle(color: Color(0xFF8E8E8E), fontFamily: 'Inter'),
+                          border: InputBorder.none,
+                          contentPadding: EdgeInsets.symmetric(vertical: 12),
+                        ),
+                      ),
+                    ),
             ),
-            maxLines: null,
-            expands: true,
-            textCapitalization: TextCapitalization.sentences,
-            decoration: const InputDecoration(
-              hintText: 'Start typing...',
-              hintStyle: TextStyle(
-                color: Color(0xFF8E8E8E),
-                fontFamily: 'Inter',
-              ),
-              border: InputBorder.none,
-              contentPadding: EdgeInsets.symmetric(vertical: 12),
-            ),
-          ),
+            if (!_previewMode) _buildToolbar(),
+          ],
         ),
       ),
     );
