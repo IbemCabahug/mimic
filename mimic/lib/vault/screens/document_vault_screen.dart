@@ -17,11 +17,38 @@ class DocumentVaultScreen extends ConsumerStatefulWidget {
 class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
   List<DocumentMeta> documents = [];
   bool _isLoading = true;
+  String _searchQuery = '';
+  String _sortMode = 'date';
 
   void setDocumentsForTesting(List<DocumentMeta> docs) {
     setState(() {
       documents = docs;
     });
+  }
+
+  List<DocumentMeta> _visibleDocuments() {
+    final q = _searchQuery.trim().toLowerCase();
+    final list = q.isEmpty
+        ? List<DocumentMeta>.from(documents)
+        : documents.where((d) => d.fileName.toLowerCase().contains(q)).toList();
+    switch (_sortMode) {
+      case 'name':
+        list.sort((a, b) => a.fileName.toLowerCase().compareTo(b.fileName.toLowerCase()));
+        break;
+      case 'size':
+        list.sort((a, b) => b.sizeBytes.compareTo(a.sizeBytes));
+        break;
+      case 'type':
+        list.sort((a, b) {
+          final t = a.fileType.toLowerCase().compareTo(b.fileType.toLowerCase());
+          return t != 0 ? t : a.fileName.toLowerCase().compareTo(b.fileName.toLowerCase());
+        });
+        break;
+      case 'date':
+      default:
+        list.sort((a, b) => b.addedAt.compareTo(a.addedAt));
+    }
+    return list;
   }
 
   @override
@@ -338,11 +365,77 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                     ],
                   ),
                 )
-              : ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  itemCount: documents.length,
-                  itemBuilder: (context, index) {
-                    final doc = documents[index];
+              : Builder(
+                  builder: (context) {
+                    final visible = _visibleDocuments();
+                    return Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  onChanged: (v) => setState(() => _searchQuery = v),
+                                  style: const TextStyle(fontFamily: 'Inter', color: VaultColors.textPrimary),
+                                  decoration: InputDecoration(
+                                    hintText: 'Search documents',
+                                    hintStyle: const TextStyle(fontFamily: 'Inter', color: VaultColors.textTertiary),
+                                    prefixIcon: const Icon(Icons.search, color: VaultColors.textTertiary),
+                                    filled: true,
+                                    fillColor: VaultColors.surface,
+                                    contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+                                    border: OutlineInputBorder(
+                                      borderRadius: BorderRadius.circular(14),
+                                      borderSide: BorderSide.none,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              PopupMenuButton<String>(
+                                icon: const Icon(Icons.sort, color: VaultColors.textSecondary),
+                                initialValue: _sortMode,
+                                onSelected: (v) => setState(() => _sortMode = v),
+                                itemBuilder: (_) => const [
+                                  PopupMenuItem(value: 'date', child: Text('Newest first')),
+                                  PopupMenuItem(value: 'name', child: Text('Name (A–Z)')),
+                                  PopupMenuItem(value: 'size', child: Text('Largest first')),
+                                  PopupMenuItem(value: 'type', child: Text('File type')),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          child: visible.isEmpty
+                              ? Center(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        Icons.search_off,
+                                        size: 80,
+                                        color: VaultColors.accent.withValues(alpha: 0.2),
+                                      ),
+                                      const SizedBox(height: 16),
+                                      const Text(
+                                        'No documents match your search',
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          color: VaultColors.textTertiary,
+                                          fontFamily: 'Inter',
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                )
+                              : ListView.builder(
+                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  itemCount: visible.length,
+                                  itemBuilder: (context, index) {
+                                    final doc = visible[index];
                     final docColor = _getDocColor(doc.fileType);
 
                     return Dismissible(
@@ -419,6 +512,11 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                           ),
                         ),
                       ),
+                    );
+                                  },
+                                ),
+                        ),
+                      ],
                     );
                   },
                 ),

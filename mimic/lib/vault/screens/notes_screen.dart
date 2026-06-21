@@ -15,6 +15,7 @@ class NotesScreen extends ConsumerStatefulWidget {
 
 class _NotesScreenState extends ConsumerState<NotesScreen> {
   late Future<List<Note>> _notesFuture;
+  String _searchQuery = '';
 
   @override
   void initState() {
@@ -132,8 +133,30 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
           ),
         ),
       ),
-      body: FutureBuilder<List<Note>>(
-        future: _notesFuture,
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+            child: TextField(
+              onChanged: (v) => setState(() => _searchQuery = v),
+              style: const TextStyle(fontFamily: 'Inter', color: VaultColors.textPrimary),
+              decoration: InputDecoration(
+                hintText: 'Search notes',
+                hintStyle: const TextStyle(fontFamily: 'Inter', color: VaultColors.textTertiary),
+                prefixIcon: const Icon(Icons.search, color: VaultColors.textTertiary),
+                filled: true,
+                fillColor: VaultColors.surface,
+                contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: BorderSide.none,
+                ),
+              ),
+            ),
+          ),
+          Expanded(
+            child: FutureBuilder<List<Note>>(
+              future: _notesFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const Center(
@@ -142,6 +165,13 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
           }
 
           final notes = snapshot.data ?? [];
+
+          final q = _searchQuery.trim().toLowerCase();
+          final visibleNotes = q.isEmpty
+              ? notes
+              : notes.where((n) =>
+                  n.title.toLowerCase().contains(q) ||
+                  n.encryptedBody.toLowerCase().contains(q)).toList();
 
           if (notes.isEmpty) {
             return Center(
@@ -177,11 +207,36 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
             );
           }
 
+          if (visibleNotes.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.search_off,
+                    size: 80,
+                    color: VaultColors.accent.withValues(alpha: 0.2),
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'No notes match your search',
+                    style: TextStyle(
+                      fontSize: 18,
+                      color: VaultColors.textTertiary,
+                      fontFamily: 'Inter',
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+
           return ListView.builder(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            itemCount: notes.length,
+            itemCount: visibleNotes.length,
             itemBuilder: (context, index) {
-              final note = notes[index];
+              final note = visibleNotes[index];
               final preview = _getPreview(note.encryptedBody);
               final dateStr = _formatDate(note.updatedAt);
 
@@ -260,6 +315,9 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
             },
           );
         },
+      ),
+          ),
+        ],
       ),
     );
   }
