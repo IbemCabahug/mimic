@@ -6,6 +6,7 @@ import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import '../widgets/vault_scaffold.dart';
 import '../services/document_vault_service.dart';
 import '../../core/theme/app_theme.dart';
+import 'package:share_plus/share_plus.dart';
 
 class DocumentVaultScreen extends ConsumerStatefulWidget {
   const DocumentVaultScreen({super.key});
@@ -156,6 +157,25 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
     if (chosen != null && mounted) {
       await ref.read(documentVaultServiceProvider).moveDocument(doc.id, chosen);
       await _loadDocuments();
+    }
+  }
+
+  Future<void> _shareDocument(DocumentMeta doc) async {
+    final service = ref.read(documentVaultServiceProvider);
+    await service.cleanupShareTemp(); // clear any stale temp first
+    final file = await service.getDocumentForSharing(doc);
+    if (file == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to prepare file for sharing')),
+        );
+      }
+      return;
+    }
+    try {
+      await Share.shareXFiles([XFile(file.path)], subject: doc.fileName);
+    } finally {
+      await service.cleanupShareTemp(); // delete decrypted temp after sharing
     }
   }
 
@@ -620,9 +640,11 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                               trailing: PopupMenuButton<String>(
                                 icon: const Icon(Icons.more_vert, color: VaultColors.textTertiary, size: 20),
                                 onSelected: (v) {
+                                  if (v == 'share') _shareDocument(doc);
                                   if (v == 'move') _showMoveToFolder(doc);
                                 },
                                 itemBuilder: (_) => const [
+                                  PopupMenuItem(value: 'share', child: Text('Share / export')),
                                   PopupMenuItem(value: 'move', child: Text('Move to folder')),
                                 ],
                               ),

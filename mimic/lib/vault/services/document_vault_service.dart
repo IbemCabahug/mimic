@@ -256,6 +256,48 @@ class DocumentVaultService {
     existing[index] = existing[index].copyWith(folder: folder);
     await _saveMeta(existing);
   }
+
+  Future<File?> getDocumentForSharing(DocumentMeta doc) async {
+    final tempDir = await getTemporaryDirectory();
+    final shareDir = Directory(p.join(tempDir.path, 'vault_share'));
+    if (!shareDir.existsSync()) {
+      shareDir.createSync(recursive: true);
+    }
+    var safeName = doc.fileName.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    if (safeName.trim().isEmpty) safeName = 'document';
+    if ((doc.isTextNote || doc.fileType == 'txt') &&
+        !safeName.toLowerCase().endsWith('.txt')) {
+      safeName = '$safeName.txt';
+    }
+    final outFile = File(p.join(shareDir.path, safeName));
+    try {
+      if (doc.isTextNote || doc.fileType == 'txt') {
+        final bytes = await getDocumentBytes(doc.id);
+        if (bytes == null) return null;
+        await outFile.writeAsBytes(bytes);
+      } else {
+        final srcBlob = await _platformService.resolveVaultFile(doc.id);
+        if (!srcBlob.existsSync()) return null;
+        await _crypto.decryptStreamSystem(srcBlob, outFile);
+      }
+      return outFile;
+    } catch (e) {
+      if (outFile.existsSync()) {
+        outFile.deleteSync();
+      }
+      return null;
+    }
+  }
+
+  Future<void> cleanupShareTemp() async {
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final shareDir = Directory(p.join(tempDir.path, 'vault_share'));
+      if (shareDir.existsSync()) {
+        shareDir.deleteSync(recursive: true);
+      }
+    } catch (_) {}
+  }
 }
 
 final documentVaultServiceProvider = Provider<DocumentVaultService>((ref) {
