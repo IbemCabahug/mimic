@@ -251,7 +251,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
     } else {
       ref.read(gameStateProvider.notifier).resetGame();
       Navigator.of(context).pushNamedAndRemoveUntil(
-        MimicGame.playerSetupRoute,
+        MimicGame.homeRoute,
         (route) => false,
       );
     }

@@ -331,25 +331,40 @@ void main() {
       expect(find.byType(WordRevealScreen), findsOneWidget);
     });
 
-    testWidgets('END GAME resets state and navigates to PlayerSetupScreen',
+    testWidgets('END GAME resets state and navigates to home',
         (WidgetTester tester) async {
       final (:container, :voteCounts) = await buildResultsState();
 
+      // Home is the REAL HomeScreen so navigating to '/' (homeRoute) lands here.
       await tester.pumpWidget(buildGameTestApp(
-        home: ResultsScreen(voteCounts: voteCounts),
+        home: const HomeScreen(),
         container: container,
       ));
       await pumpScreen(tester);
 
+      // Reach ResultsScreen the way the app does — pushed on top of home.
+      final navigator =
+          tester.state<NavigatorState>(find.byType(Navigator).first);
+      navigator.push(MaterialPageRoute(
+        builder: (_) => ResultsScreen(voteCounts: voteCounts),
+      ));
+      await pumpScreen(tester);
+
+      // Let the reveal animation finish so the action buttons render.
       await tester.pump(const Duration(milliseconds: 3600));
       await tester.pump(const Duration(milliseconds: 200));
 
       final endGameBtn = find.widgetWithText(OutlinedButton, 'END GAME');
       expect(endGameBtn, findsOneWidget);
       await tester.tap(endGameBtn);
-      await pumpScreen(tester);
+      // Let pushNamedAndRemoveUntil finish: the new HomeScreen animates in and the
+      // old ResultsScreen route is removed and disposed. Use fixed pumps (NOT
+      // pumpAndSettle) because ResultsScreen has looping animations.
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
 
-      expect(find.byType(PlayerSetupScreen), findsOneWidget);
+      expect(find.byType(HomeScreen), findsOneWidget);
+      expect(find.byType(ResultsScreen), findsNothing);
       expect(container.read(gameStateProvider).players.length, 0,
           reason: 'End Game must clear/reset all players from state');
     });
