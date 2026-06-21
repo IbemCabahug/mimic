@@ -161,5 +161,55 @@ void main() {
         );
       },
     );
+
+    test(
+      'device repro: setup -> recover -> reset PIN (no-arg storeRecoveryBlob) -> recover again',
+      () async {
+        final platform = FakePlatformService();
+
+        // 1) Initial setup + save recovery phrase (mirrors RecoveryPhraseScreen).
+        final setup = VaultCrypto(platform);
+        await setup.initialize('1111');
+        await setup.storeRecoveryBlob(kRecoveryWords);
+        final secret = Uint8List.fromList(utf8.encode('device secret'));
+        final ciphertext = setup.encrypt(secret);
+
+        // 2) Forgot-PIN flow on one shared instance (like the singleton provider):
+        //    EnterRecoveryScreen.recoverWithPhrase -> ResetPinScreen.changePin + storeRecoveryBlob().
+        final session = VaultCrypto(platform);
+        final recovered1 = await session.recoverWithPhrase(kRecoveryWords);
+        expect(recovered1, isTrue, reason: 'first recovery must succeed');
+        await session.changePin('2222');
+        await session.storeRecoveryBlob(); // NO ARGS — exactly what reset_pin_screen does
+
+        // 3) Later: Forgot PIN again, fresh instance, SAME 12 words.
+        final again = VaultCrypto(platform);
+        final recovered2 = await again.recoverWithPhrase(kRecoveryWords);
+        expect(recovered2, isTrue,
+            reason: 'recovery with the SAME words must still work after a PIN reset');
+        expect(again.decrypt(ciphertext), equals(secret),
+            reason: 'data must still decrypt after recover -> reset -> recover');
+      },
+    );
+
+    test('photos survive a PIN change and an app restart (DEK preserved)', () async {
+      final platform = FakePlatformService();
+      final crypto = VaultCrypto(platform);
+      await crypto.initialize('11111111');
+
+      final secret = Uint8List.fromList(utf8.encode('my secret photo bytes'));
+      final encrypted = await crypto.encryptSystem(secret);
+
+      // Proper PIN change must NOT change the data key.
+      await crypto.changePin('22222222');
+      final afterChange = await crypto.decryptSystem(encrypted);
+      expect(afterChange, equals(secret));
+
+      // Fresh app instance unlocking with the new PIN must still decrypt.
+      final crypto2 = VaultCrypto(platform);
+      await crypto2.initialize('22222222');
+      final afterRestart = await crypto2.decryptSystem(encrypted);
+      expect(afterRestart, equals(secret));
+    });
   });
 }

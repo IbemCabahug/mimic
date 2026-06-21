@@ -128,21 +128,11 @@ class FileVaultService {
   Future<Uint8List?> getPhoto(String id) async {
     final encrypted = await _platformService.readEncryptedFile(id);
     if (encrypted == null) return null;
-
-    Uint8List? decrypted;
     try {
-      decrypted = await _crypto.decryptSystem(encrypted);
+      return await _crypto.decryptSystem(encrypted);
     } catch (e) {
       return null;
     }
-
-    if (_crypto.isLegacySystemBlob(encrypted)) {
-      try {
-        final reEncrypted = await _crypto.encryptSystem(decrypted);
-        await _platformService.saveEncryptedFile(id, reEncrypted);
-      } catch (_) {}
-    }
-    return decrypted;
   }
 
   Future<void> deletePhoto(String id) async {

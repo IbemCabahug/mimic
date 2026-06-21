@@ -199,14 +199,10 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
 
                 try {
                   final crypto = ref.read(vaultCryptoProvider);
-                  crypto.lock();
-                  final platformService = ref.read(platformServiceProvider);
-                  await platformService.secureDelete('vault_salt');
-                  await platformService.secureDelete('vault_pin_hash');
-                  if (!kIsWeb) {
-                    await platformService.secureWrite('vault_pin', newPin);
-                  }
-                  await crypto.initialize(newPin);
+                  // Preserve the data key (DEK): changePin re-wraps the SAME key under the new PIN.
+                  // NEVER delete the salt/hash or call initialize() here — that creates a new key
+                  // and permanently orphans all encrypted photos, videos, and documents.
+                  await crypto.changePin(newPin);
 
                   if (context.mounted && dialogContext.mounted) {
                     Navigator.of(dialogContext).pop();
