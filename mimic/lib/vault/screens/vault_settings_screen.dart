@@ -45,7 +45,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     if (mounted) {
       setState(() {
         _shakeEnabled = prefs.getBool('shake_wipe_enabled') ?? false;
-        _shakeSensitivity = ShakeSensitivity.fromName(
+        _shakeSensitivity = ShakeSensitivity.fromCode(
           prefs.getString('shake_sensitivity'),
         );
       });
@@ -62,23 +62,36 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     }
   }
 
-  Future<void> _onBiometricToggle(bool value) async {
+  Future<void> _onBiometricSelection(BiometricLayer? selection) async {
     final biometricService = ref.read(biometricServiceProvider);
     final unlockStore = ref.read(biometricUnlockStoreProvider);
-    if (value) {
+    
+    if (selection == BiometricLayer.vault) {
       setState(() => _isLoadingBiometric = true);
       final result = await biometricService.authenticate(reason: 'Unlock');
-      if (mounted) {
-        setState(() => _isLoadingBiometric = false);
-      }
+      if (mounted) setState(() => _isLoadingBiometric = false);
       if (result == BiometricResult.success) {
         final pin = await ref.read(platformServiceProvider).secureRead('vault_pin') ?? '';
         await unlockStore.enable(BiometricLayer.vault, pin);
+        await unlockStore.disable(BiometricLayer.admin);
         ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
+        ref.invalidate(biometricEnabledProvider(BiometricLayer.admin));
+      }
+    } else if (selection == BiometricLayer.admin) {
+      setState(() => _isLoadingBiometric = true);
+      final result = await biometricService.authenticate(reason: 'Unlock');
+      if (mounted) setState(() => _isLoadingBiometric = false);
+      if (result == BiometricResult.success) {
+        await unlockStore.enable(BiometricLayer.admin, '');
+        await unlockStore.disable(BiometricLayer.vault);
+        ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
+        ref.invalidate(biometricEnabledProvider(BiometricLayer.admin));
       }
     } else {
       await unlockStore.disable(BiometricLayer.vault);
+      await unlockStore.disable(BiometricLayer.admin);
       ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
+      ref.invalidate(biometricEnabledProvider(BiometricLayer.admin));
     }
   }
 
@@ -362,32 +375,61 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           _buildSettingsTile(
             icon: Icons.fingerprint,
             title: 'Biometric Unlock',
-            subtitle: 'Use fingerprint or face to access your vault',
-            onTap: ref.watch(biometricEnabledProvider(BiometricLayer.vault)).maybeWhen(
-              data: (enabled) => !_isLoadingBiometric ? () {
-                _onBiometricToggle(!enabled);
-              } : null,
-              orElse: () => null,
-            ),
-            trailing: ref.watch(biometricEnabledProvider(BiometricLayer.vault)).maybeWhen(
-              data: (enabled) => enabled
-                  ? Switch(
-                      value: true,
-                      onChanged: (_) => _onBiometricToggle(false),
-                      activeThumbColor: VaultColors.accent,
-                    )
-                  : _isLoadingBiometric
-                      ? const SizedBox(
-                          width: 20,
-                          height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: VaultColors.accent),
-                        )
-                      : Switch(
-                          value: false,
-                          onChanged: (_) => _onBiometricToggle(true),
-                          activeThumbColor: VaultColors.accent,
-                        ),
-              orElse: () => const SizedBox.shrink(),
+            subtitle: 'Choose what biometric unlock does',
+            onTap: () {},
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            child: Consumer(
+              builder: (context, ref, child) {
+                final isVault = ref.watch(biometricEnabledProvider(BiometricLayer.vault)).valueOrNull ?? false;
+                final isAdmin = ref.watch(biometricEnabledProvider(BiometricLayer.admin)).valueOrNull ?? false;
+                final selected = isVault ? 'vault' : (isAdmin ? 'admin' : 'off');
+                
+                if (_isLoadingBiometric) {
+                  return const Padding(
+                    padding: EdgeInsets.all(16.0),
+                    child: Center(
+                      child: SizedBox(
+                        width: 24, height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: VaultColors.accent)
+                      )
+                    ),
+                  );
+                }
+                
+                return Column(
+                  children: [
+                    RadioListTile<String>(
+                      title: const Text('Off', style: TextStyle(color: VaultColors.textPrimary, fontSize: 14)),
+                      value: 'off',
+                      groupValue: selected,
+                      onChanged: (val) => _onBiometricSelection(null),
+                      activeColor: VaultColors.accent,
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                    ),
+                    RadioListTile<String>(
+                      title: const Text('Vault (shortcut)', style: TextStyle(color: VaultColors.textPrimary, fontSize: 14)),
+                      value: 'vault',
+                      groupValue: selected,
+                      onChanged: (val) => _onBiometricSelection(BiometricLayer.vault),
+                      activeColor: VaultColors.accent,
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                    ),
+                    RadioListTile<String>(
+                      title: const Text('Admin panel (decoy)', style: TextStyle(color: VaultColors.textPrimary, fontSize: 14)),
+                      value: 'admin',
+                      groupValue: selected,
+                      onChanged: (val) => _onBiometricSelection(BiometricLayer.admin),
+                      activeColor: VaultColors.accent,
+                      contentPadding: EdgeInsets.zero,
+                      dense: true,
+                    ),
+                  ],
+                );
+              },
             ),
           ),
           _buildSettingsTile(

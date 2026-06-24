@@ -8,10 +8,12 @@ class BiometricVaultUnlock extends ConsumerStatefulWidget {
   const BiometricVaultUnlock({
     super.key,
     required this.onUnlockedVault,
+    required this.onDecoyAdmin,
     this.onError,
   });
 
   final void Function(String secret) onUnlockedVault;
+  final VoidCallback onDecoyAdmin;
   final void Function(BiometricResult result)? onError;
 
   @override
@@ -30,10 +32,8 @@ class _BiometricVaultUnlockState extends ConsumerState<BiometricVaultUnlock> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      // Always use vault layer - shake-to-admin bypass removed
-      final layer = BiometricLayer.vault;
-
-      if (!await _store.isEnabled(layer)) {
+      final layer = await _store.activeLayer();
+      if (layer == null) {
         widget.onError?.call(BiometricResult.unavailable);
         return;
       }
@@ -42,12 +42,17 @@ class _BiometricVaultUnlockState extends ConsumerState<BiometricVaultUnlock> {
         widget.onError?.call(result);
         return;
       }
-      final secret = await _store.readSecret(layer);
-      if (secret == null) {
-        widget.onError?.call(BiometricResult.error);
-        return;
+      
+      if (layer == BiometricLayer.vault) {
+        final secret = await _store.readSecret(layer);
+        if (secret == null) {
+          widget.onError?.call(BiometricResult.error);
+          return;
+        }
+        widget.onUnlockedVault(secret);
+      } else if (layer == BiometricLayer.admin) {
+        widget.onDecoyAdmin();
       }
-      widget.onUnlockedVault(secret);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -57,7 +62,12 @@ class _BiometricVaultUnlockState extends ConsumerState<BiometricVaultUnlock> {
   Widget build(BuildContext context) {
     final available =
         ref.watch(biometricAvailableProvider).valueOrNull ?? false;
-    if (!available) return const SizedBox.shrink();
+    final isVaultEnabled = ref.watch(biometricEnabledProvider(BiometricLayer.vault)).valueOrNull ?? false;
+    final isAdminEnabled = ref.watch(biometricEnabledProvider(BiometricLayer.admin)).valueOrNull ?? false;
+
+    if (!available || (!isVaultEnabled && !isAdminEnabled)) {
+      return const SizedBox.shrink();
+    }
 
     return IconButton(
       iconSize: 56,

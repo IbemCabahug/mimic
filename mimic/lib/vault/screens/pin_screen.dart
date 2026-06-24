@@ -274,6 +274,11 @@ class _PinScreenState extends ConsumerState<PinScreen> {
             if (!kIsWeb && !_isCreateMode)
               BiometricVaultUnlock(
                 onUnlockedVault: (secret) => _authenticateWithSecret(secret),
+                onDecoyAdmin: () {
+                  if (mounted) {
+                    Navigator.of(context).pushReplacementNamed('/admin-panel');
+                  }
+                },
                 onError: (result) {
                   if (mounted) setState(() => _error = _biometricResultToMessage(result));
                 },
