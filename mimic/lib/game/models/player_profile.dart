@@ -133,7 +133,39 @@ enum HorrorAvatar {
   coffin,
   potion,
   dagger,
-  mask,
+  mask;
+
+  String get code {
+    switch (this) {
+      case HorrorAvatar.skull: return 'skull';
+      case HorrorAvatar.ghost: return 'ghost';
+      case HorrorAvatar.eye: return 'eye';
+      case HorrorAvatar.spider: return 'spider';
+      case HorrorAvatar.bat: return 'bat';
+      case HorrorAvatar.moon: return 'moon';
+      case HorrorAvatar.coffin: return 'coffin';
+      case HorrorAvatar.potion: return 'potion';
+      case HorrorAvatar.dagger: return 'dagger';
+      case HorrorAvatar.mask: return 'mask';
+    }
+  }
+
+  static HorrorAvatar fromCode(String? code) {
+    switch (code) {
+      case 'ghost': return HorrorAvatar.ghost;
+      case 'eye': return HorrorAvatar.eye;
+      case 'spider': return HorrorAvatar.spider;
+      case 'bat': return HorrorAvatar.bat;
+      case 'moon': return HorrorAvatar.moon;
+      case 'coffin': return HorrorAvatar.coffin;
+      case 'potion': return HorrorAvatar.potion;
+      case 'dagger': return HorrorAvatar.dagger;
+      case 'mask': return HorrorAvatar.mask;
+      case 'skull':
+      default:
+        return HorrorAvatar.skull;
+    }
+  }
 }
 
 extension HorrorAvatarDisplay on HorrorAvatar {
@@ -502,7 +534,7 @@ class PlayerProfile {
     return {
       'id': id,
       'displayName': displayName,
-      'avatar': avatar.name,
+      'avatar': avatar.code,
       'selectedTitle': selectedTitle,
       'suspicionScore': suspicionScore,
       'gamesPlayed': gamesPlayed,
@@ -522,10 +554,7 @@ class PlayerProfile {
     return PlayerProfile(
       id: json['id'] as String? ?? '',
       displayName: json['displayName'] as String? ?? 'Unknown',
-      avatar: HorrorAvatar.values.firstWhere(
-        (a) => a.name == (json['avatar'] as String?),
-        orElse: () => HorrorAvatar.skull,
-      ),
+      avatar: HorrorAvatar.fromCode(json['avatar'] as String?),
       selectedTitle: json['selectedTitle'] as String?,
       suspicionScore: (json['suspicionScore'] as num?)?.toInt() ?? 0,
       gamesPlayed: (json['gamesPlayed'] as num?)?.toInt() ?? 0,

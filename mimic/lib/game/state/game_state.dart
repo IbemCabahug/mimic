@@ -4,7 +4,27 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/game/data/word_packs.dart';
 import 'package:mimic/game/data/language_store.dart';
 
-enum GameMode { classic, nightmare, survival }
+enum GameMode {
+  classic, nightmare, survival;
+
+  String get code {
+    switch (this) {
+      case GameMode.classic: return 'classic';
+      case GameMode.nightmare: return 'nightmare';
+      case GameMode.survival: return 'survival';
+    }
+  }
+
+  static GameMode fromCode(String? code) {
+    switch (code) {
+      case 'nightmare': return GameMode.nightmare;
+      case 'survival': return GameMode.survival;
+      case 'classic':
+      default:
+        return GameMode.classic;
+    }
+  }
+}
 
 class RoundOutcome {
   final int round;

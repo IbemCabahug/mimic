@@ -25,13 +25,22 @@ enum ShakeSensitivity {
   final double threshold;
   const ShakeSensitivity(this.threshold);
 
-  /// Resolve a [ShakeSensitivity] from its persisted name, defaulting to [medium].
-  static ShakeSensitivity fromName(String? name) {
-    if (name == null) return ShakeSensitivity.medium;
-    return ShakeSensitivity.values.firstWhere(
-      (s) => s.name == name,
-      orElse: () => ShakeSensitivity.medium,
-    );
+  String get code {
+    switch (this) {
+      case ShakeSensitivity.low: return 'low';
+      case ShakeSensitivity.medium: return 'medium';
+      case ShakeSensitivity.high: return 'high';
+    }
+  }
+
+  static ShakeSensitivity fromCode(String? code) {
+    switch (code) {
+      case 'low': return ShakeSensitivity.low;
+      case 'high': return ShakeSensitivity.high;
+      case 'medium':
+      default:
+        return ShakeSensitivity.medium;
+    }
   }
 }
 
@@ -66,7 +75,7 @@ class VaultConcealService {
     // Load persisted shake sensitivity
     final prefs = await SharedPreferences.getInstance();
     final sensName = prefs.getString('shake_sensitivity');
-    _sensitivity = ShakeSensitivity.fromName(sensName);
+    _sensitivity = ShakeSensitivity.fromCode(sensName);
     _shakeThreshold = _sensitivity.threshold;
   }
 
@@ -90,7 +99,7 @@ class VaultConcealService {
     _sensitivity = sensitivity;
     _shakeThreshold = sensitivity.threshold;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('shake_sensitivity', sensitivity.name);
+    await prefs.setString('shake_sensitivity', sensitivity.code);
   }
 
   void start() {

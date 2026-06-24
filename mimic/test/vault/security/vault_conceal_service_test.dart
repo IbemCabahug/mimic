@@ -15,11 +15,11 @@ void main() {
     });
 
     test('2 · fromName resolves names or defaults to medium', () {
-      expect(ShakeSensitivity.fromName('low'), equals(ShakeSensitivity.low));
-      expect(ShakeSensitivity.fromName('high'), equals(ShakeSensitivity.high));
-      expect(ShakeSensitivity.fromName('medium'), equals(ShakeSensitivity.medium));
-      expect(ShakeSensitivity.fromName(null), equals(ShakeSensitivity.medium));
-      expect(ShakeSensitivity.fromName('invalid'), equals(ShakeSensitivity.medium));
+      expect(ShakeSensitivity.fromCode('low'), equals(ShakeSensitivity.low));
+      expect(ShakeSensitivity.fromCode('high'), equals(ShakeSensitivity.high));
+      expect(ShakeSensitivity.fromCode('medium'), equals(ShakeSensitivity.medium));
+      expect(ShakeSensitivity.fromCode(null), equals(ShakeSensitivity.medium));
+      expect(ShakeSensitivity.fromCode('invalid'), equals(ShakeSensitivity.medium));
     });
   });
 

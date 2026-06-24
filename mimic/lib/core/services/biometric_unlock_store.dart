@@ -1,10 +1,19 @@
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
-enum BiometricLayer { admin, vault }
+enum BiometricLayer {
+  admin, vault;
+
+  String get code {
+    switch (this) {
+      case BiometricLayer.admin: return 'admin';
+      case BiometricLayer.vault: return 'vault';
+    }
+  }
+}
 
 extension _BiometricLayerKeys on BiometricLayer {
-  String get enabledKey => 'biometric_enabled_$name';
-  String get secretKey => 'biometric_secret_$name';
+  String get enabledKey => 'biometric_enabled_$code';
+  String get secretKey => 'biometric_secret_$code';
 }
 
 class BiometricUnlockStore {
@@ -32,6 +41,12 @@ class BiometricUnlockStore {
   Future<String?> readSecret(BiometricLayer layer) async {
     if (!await isEnabled(layer)) return null;
     return _storage.read(key: layer.secretKey);
+  }
+
+  Future<BiometricLayer?> activeLayer() async {
+    if (await isEnabled(BiometricLayer.vault)) return BiometricLayer.vault;
+    if (await isEnabled(BiometricLayer.admin)) return BiometricLayer.admin;
+    return null;
   }
 
   Future<void> wipeAll() async {

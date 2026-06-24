@@ -32,7 +32,27 @@ enum SpecialRole {
   /// The Ally: Knows the identity of one other confirmed innocent player.
   /// They can coordinate with that player, but revealing this information
   /// publicly risks tipping off the Mimic(s).
-  ally,
+  ally;
+
+  String get code {
+    switch (this) {
+      case SpecialRole.none: return 'none';
+      case SpecialRole.informant: return 'informant';
+      case SpecialRole.paranoid: return 'paranoid';
+      case SpecialRole.ally: return 'ally';
+    }
+  }
+
+  static SpecialRole fromCode(String? code) {
+    switch (code) {
+      case 'informant': return SpecialRole.informant;
+      case 'paranoid': return SpecialRole.paranoid;
+      case 'ally': return SpecialRole.ally;
+      case 'none':
+      default:
+        return SpecialRole.none;
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -142,7 +162,7 @@ class RoleAssignment {
   Map<String, dynamic> toJson() {
     return {
       'playerId': playerId,
-      'role': role.name,
+      'role': role.code,
       'roleData': roleData,
     };
   }
@@ -150,10 +170,7 @@ class RoleAssignment {
   factory RoleAssignment.fromJson(Map<String, dynamic> json) {
     return RoleAssignment(
       playerId: json['playerId'] as String? ?? '',
-      role: SpecialRole.values.firstWhere(
-        (r) => r.name == (json['role'] as String?),
-        orElse: () => SpecialRole.none,
-      ),
+      role: SpecialRole.fromCode(json['role'] as String?),
       roleData:
           (json['roleData'] as Map<String, dynamic>?) ?? const {},
     );

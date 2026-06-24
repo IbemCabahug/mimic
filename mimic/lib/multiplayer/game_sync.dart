@@ -66,7 +66,7 @@ class GameSync {
   /// Serialize a full [GameState] into a JSON-compatible map.
   static Map<String, dynamic> serializeState(GameState state) {
     return {
-      'selectedMode': state.selectedMode.name,
+      'selectedMode': state.selectedMode.code,
       'players': state.players.map((p) => _serializePlayer(p)).toList(),
       'mimicIds': state.mimicIds,
       'currentRound': state.currentRound,
@@ -110,10 +110,7 @@ class GameSync {
   static GameState? deserializeState(Map<String, dynamic> json) {
     try {
       final modeName = json['selectedMode'] as String? ?? 'classic';
-      final mode = GameMode.values.firstWhere(
-        (m) => m.name == modeName,
-        orElse: () => GameMode.classic,
-      );
+      final mode = GameMode.fromCode(modeName);
 
       final playersList = (json['players'] as List<dynamic>?)
               ?.map((p) => _deserializePlayer(p as Map<String, dynamic>))
