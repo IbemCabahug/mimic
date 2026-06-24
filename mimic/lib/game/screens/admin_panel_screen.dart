@@ -1,6 +1,4 @@
 // mimic/lib/game/screens/admin_panel_screen.dart
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -210,61 +208,13 @@ class AdminPanelScreen extends ConsumerWidget {
 
           const SizedBox(height: 24),
           _buildSectionHeader('SYSTEM'),
-          _buildActionTile(
-            context,
-            icon: Icons.terminal,
-            title: 'Game State Dump',
-            subtitle: 'View full current state',
-            onTap: () {
-              final dump = const JsonEncoder.withIndent('  ').convert({
-                'mode': gameState.selectedMode.name,
-                'round': gameState.currentRound,
-                'players': gameState.players.map((p) => {
-                  'id': p.id,
-                  'name': p.name,
-                  'alive': p.isAlive,
-                  'ghost': p.isGhost,
-                  'suspicion': p.suspicion,
-                }).toList(),
-                'mimicIds': gameState.mimicIds,
-                'scores': gameState.scores,
-                'suspicionScores': gameState.suspicionScores,
-                'eliminated': gameState.eliminatedPlayers,
-                'ghosts': gameState.ghostPlayers,
-                'packs': gameState.selectedPacks,
-                'currentWord': gameState.currentWord,
-                'category': gameState.currentCategory,
-              });
-              showDialog(
-                context: context,
-                builder: (dialogContext) => AlertDialog(
-                  backgroundColor: HorrorColors.cardSurface,
-                  title: Text(
-                    'Game State Dump',
-                    style: GoogleFonts.creepster(color: HorrorColors.crimson, fontSize: 22),
-                  ),
-                  content: SingleChildScrollView(
-                    child: Text(
-                      dump,
-                      style: const TextStyle(fontFamily: 'monospace', fontSize: 12, color: HorrorColors.fogWhite),
-                    ),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.of(dialogContext).pop(),
-                      child: Text('CLOSE', style: GoogleFonts.creepster(color: HorrorColors.ashGray)),
-                    ),
-                  ],
-                ),
-              );
-            },
-          ),
+
           _buildActionTile(
             context,
             icon: Icons.exit_to_app,
             title: 'Exit',
             subtitle: 'Return to game seamlessly',
-            onTap: () => Navigator.of(context).pop(),
+            onTap: () => Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false),
             iconColor: HorrorColors.crimson,
           ),
 
