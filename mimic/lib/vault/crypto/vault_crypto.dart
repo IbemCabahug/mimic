@@ -10,6 +10,14 @@ import 'package:pointycastle/export.dart';
 import '../../core/services/platform_service.dart';
 import 'recovery_phrase.dart';
 
+class SystemKeyMissingException implements Exception {
+  final String message;
+  SystemKeyMissingException([this.message =
+    'System key is missing but the vault was already provisioned. Refusing to regenerate to avoid orphaning encrypted data.']);
+  @override
+  String toString() => 'SystemKeyMissingException: $message';
+}
+
 class VaultCrypto extends ChangeNotifier {
   static VaultCrypto? _instance;
   static VaultCrypto get instance {
@@ -288,10 +296,19 @@ class VaultCrypto extends ChangeNotifier {
   Future<Uint8List> _getSystemKey() async {
     final storedKey = await _platformService.secureRead('system_key');
     if (storedKey != null) {
+      final isProvisioned = await _platformService.secureRead('system_key_provisioned');
+      if (isProvisioned != 'true') {
+        await _platformService.secureWrite('system_key_provisioned', 'true');
+      }
       return base64Decode(storedKey);
+    }
+    final isProvisioned = await _platformService.secureRead('system_key_provisioned');
+    if (isProvisioned == 'true') {
+      throw SystemKeyMissingException();
     }
     final newKey = _generateSecureRandomBytes(32);
     await _platformService.secureWrite('system_key', base64Encode(newKey));
+    await _platformService.secureWrite('system_key_provisioned', 'true');
     return newKey;
   }
 

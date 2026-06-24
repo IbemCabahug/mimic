@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
+import '../security/vault_error_ui.dart';
+import '../crypto/vault_crypto.dart';
 import '../services/media_stream_server.dart';
 import '../security/auto_lock.dart';
 
@@ -68,6 +70,12 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       setState(() {
         _videoPlayerController = controller;
         _chewieController = chewie;
+      });
+    } on SystemKeyMissingException catch (_) {
+      if (!mounted || _disposed) return;
+      showSecureKeyLostSnackBar(context);
+      setState(() {
+        _hasError = true;
       });
     } catch (e) {
       debugPrint('Failed to initialize video player: $e');

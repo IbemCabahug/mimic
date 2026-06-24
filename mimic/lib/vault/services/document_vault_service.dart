@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import '../../core/services/platform_service.dart';
 import '../crypto/vault_crypto.dart';
+import '../security/auto_lock.dart';
 
 class DocumentMeta {
   final String id;
@@ -293,9 +294,7 @@ class DocumentVaultService {
     try {
       final tempDir = await getTemporaryDirectory();
       final shareDir = Directory(p.join(tempDir.path, 'vault_share'));
-      if (shareDir.existsSync()) {
-        shareDir.deleteSync(recursive: true);
-      }
+      await AutoLock.secureDeleteDir(shareDir);
     } catch (_) {}
   }
 }

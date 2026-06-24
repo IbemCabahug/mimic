@@ -3,6 +3,7 @@
 // Centralized routing configuration for Mimic, supporting horror/party game screens,
 // vault screens (for the disguise), and new multiplayer/networked routes with route guards.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/core/providers/provider_registration.dart';
@@ -36,6 +37,7 @@ import 'package:mimic/vault/screens/export_vault_screen.dart';
 import 'package:mimic/vault/screens/import_vault_screen.dart';
 import 'package:mimic/vault/screens/set_duress_pin_screen.dart';
 import 'package:mimic/vault/screens/video_vault_screen.dart';
+import '../../vault/security/secure_screen.dart';
 
 // Multiplayer screens
 import 'package:mimic/multiplayer/screens/multiplayer_menu_screen.dart';
@@ -120,9 +122,9 @@ class AppRouter {
       case '/admin-panel':
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const AdminPanelScreen(),
+            child: const SecureGuard(child: AdminPanelScreen()),
           ),
           settings: settings,
         );
@@ -209,36 +211,36 @@ class AppRouter {
       case vaultPinRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const PinScreen(),
+            child: const SecureGuard(child: PinScreen()),
           ),
           settings: settings,
         );
       case vaultHomeRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const VaultHomeScreen(),
+            child: const SecureGuard(child: VaultHomeScreen()),
           ),
           settings: settings,
         );
       case vaultPhotosRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const PhotoVaultScreen(),
+            child: const SecureGuard(child: PhotoVaultScreen()),
           ),
           settings: settings,
         );
       case vaultNotesRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const NotesScreen(),
+            child: const SecureGuard(child: NotesScreen()),
           ),
           settings: settings,
         );
@@ -246,90 +248,90 @@ class AppRouter {
       case vaultDocumentsRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const DocumentVaultScreen(),
+            child: const SecureGuard(child: DocumentVaultScreen()),
           ),
           settings: settings,
         );
       case vaultSettingsRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const VaultSettingsScreen(),
+            child: const SecureGuard(child: VaultSettingsScreen()),
           ),
           settings: settings,
         );
       case vaultBreakinLogsRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const BreakInLogScreen(),
+            child: const SecureGuard(child: BreakInLogScreen()),
           ),
           settings: settings,
         );
       case vaultRecoveryPhraseRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const RecoveryPhraseScreen(),
+            child: const SecureGuard(child: RecoveryPhraseScreen()),
           ),
           settings: settings,
         );
       case vaultEnterRecoveryRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const EnterRecoveryScreen(),
+            child: const SecureGuard(child: EnterRecoveryScreen()),
           ),
           settings: settings,
         );
       case vaultResetPinRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const ResetPinScreen(),
+            child: const SecureGuard(child: ResetPinScreen()),
           ),
           settings: settings,
         );
       case vaultSetDuressPinRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const SetDuressPinScreen(),
+            child: const SecureGuard(child: SetDuressPinScreen()),
           ),
           settings: settings,
         );
       case vaultExportRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const ExportVaultScreen(),
+            child: const SecureGuard(child: ExportVaultScreen()),
           ),
           settings: settings,
         );
       case vaultImportRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const ImportVaultScreen(),
+            child: const SecureGuard(child: ImportVaultScreen()),
           ),
           settings: settings,
         );
       case vaultVideosRoute:
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
-            guard: (net) => !isMultiplayerSessionActive(net),
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
-            child: const VideoVaultScreen(),
+            child: const SecureGuard(child: VideoVaultScreen()),
           ),
           settings: settings,
         );

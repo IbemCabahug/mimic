@@ -4,6 +4,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import '../widgets/vault_scaffold.dart';
+import '../security/vault_error_ui.dart';
+import '../crypto/vault_crypto.dart';
+import '../security/auto_lock.dart';
 import '../services/document_vault_service.dart';
 import '../../core/theme/app_theme.dart';
 import 'package:share_plus/share_plus.dart';
@@ -245,7 +248,13 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
     if (result == true && mounted) {
       final title = controller.text.trim();
       final docId = await ref.read(documentVaultServiceProvider).createTextNote(title, '');
-      final noteBytes = await ref.read(documentVaultServiceProvider).getDocumentBytes(docId);
+      Uint8List? noteBytes;
+      try {
+        noteBytes = await ref.read(documentVaultServiceProvider).getDocumentBytes(docId);
+      } on SystemKeyMissingException catch (_) {
+        if (!mounted) return;
+        showSecureKeyLostSnackBar(context);
+      }
       if (noteBytes != null && mounted) {
         await Navigator.of(context).push(
           MaterialPageRoute(
@@ -355,13 +364,20 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
 
   Future<void> _openDocument(DocumentMeta doc) async {
     if (doc.fileType == 'txt' || doc.isTextNote) {
-      final content = await ref.read(documentVaultServiceProvider).getTextNote(doc.id);
+      String? content;
+      try {
+        content = await ref.read(documentVaultServiceProvider).getTextNote(doc.id);
+      } on SystemKeyMissingException catch (_) {
+        if (!mounted) return;
+        showSecureKeyLostSnackBar(context);
+      }
       if (content != null && mounted) {
+        final noteContent = content;
         await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (context) => DocumentEditorScreen(
               documentId: doc.id,
-              initialContent: content,
+              initialContent: noteContent,
               isNew: false,
             ),
           ),
@@ -369,11 +385,18 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
         await _loadDocuments();
       }
     } else if (doc.fileType == 'pdf') {
-      final tempFile = await ref.read(documentVaultServiceProvider).getDocumentToTempFile(doc.id);
+      File? tempFile;
+      try {
+        tempFile = await ref.read(documentVaultServiceProvider).getDocumentToTempFile(doc.id);
+      } on SystemKeyMissingException catch (_) {
+        if (!mounted) return;
+        showSecureKeyLostSnackBar(context);
+      }
       if (tempFile != null && mounted) {
+        final pdfFile = tempFile;
         await Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => PdfViewerScreen(file: tempFile, title: doc.fileName),
+            builder: (context) => PdfViewerScreen(file: pdfFile, title: doc.fileName),
           ),
         );
       } else if (tempFile == null && mounted) {
@@ -750,6 +773,7 @@ class _DocumentEditorScreenState extends ConsumerState<DocumentEditorScreen> {
             hintText: 'Start typing...',
             hintStyle: TextStyle(color: Color(0xFF5C5C5C), fontFamily: 'Inter'),
             border: InputBorder.none,
+            filled: false,
           ),
           style: const TextStyle(
             fontSize: 17,
@@ -778,9 +802,8 @@ class _PdfViewerScreenState extends State<PdfViewerScreen> {
   @override
   void dispose() {
     try {
-      if (widget.file.existsSync()) {
-        widget.file.deleteSync();
-      }
+      final f = widget.file;
+      AutoLock.secureDeleteFile(f);
     } catch (_) {}
     super.dispose();
   }

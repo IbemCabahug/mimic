@@ -5,6 +5,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../security/vault_error_ui.dart';
+import '../crypto/vault_crypto.dart';
 import '../services/file_vault_service.dart';
 import '../widgets/vault_scaffold.dart';
 import '../../core/theme/app_theme.dart';
@@ -45,7 +47,14 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   Future<Uint8List?> _loadPhotoBytes(String id) async {
     final hit = _getCached(id);
     if (hit != null) return hit;
-    final bytes = await ref.read(fileVaultServiceProvider).getPhoto(id);
+    Uint8List? bytes;
+    try {
+      bytes = await ref.read(fileVaultServiceProvider).getPhoto(id);
+    } on SystemKeyMissingException catch (_) {
+      if (!mounted) return null;
+      showSecureKeyLostSnackBar(context);
+      return null;
+    }
     if (bytes != null) _putCached(id, bytes);
     return bytes;
   }

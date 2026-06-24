@@ -13,6 +13,7 @@ import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../core/services/platform_service.dart';
 import '../crypto/vault_crypto.dart';
+import '../security/auto_lock.dart';
 
 class VideoMeta {
   final String id;
@@ -187,10 +188,10 @@ class VideoVaultService {
       await ctrTemp.rename(blobFile.path);
 
       // Step 4: clean up plaintext temp
-      if (await plainTemp.exists()) await plainTemp.delete();
+      await AutoLock.secureDeleteFile(plainTemp);
     } catch (_) {
       // Best-effort: clean up temps, leave original blob untouched
-      try { if (await plainTemp.exists()) await plainTemp.delete(); } catch (_) {}
+      await AutoLock.secureDeleteFile(plainTemp);
       try { if (await ctrTemp.exists()) await ctrTemp.delete(); } catch (_) {}
     }
   }

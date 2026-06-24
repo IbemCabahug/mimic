@@ -1,6 +1,8 @@
 // lib/vault/security/auto_lock.dart
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
@@ -105,12 +107,60 @@ class AutoLock with WidgetsBindingObserver {
     _suspended = false;
   }
 
+  static const _maxSecureWipeBytes = 64 * 1024 * 1024;
+
+  static Future<void> secureDeleteFile(File f) async {
+    try {
+      if (!await f.exists()) return;
+      final len = await f.length();
+      if (len > 0 && len <= _maxSecureWipeBytes) {
+        // Best-effort overwrite (FTL/wear-leveling may map to new physical blocks)
+        final raf = await f.open(mode: FileMode.writeOnly);
+        try {
+          final rand = Random.secure();
+          const chunkSize = 64 * 1024;
+          var remaining = len;
+          while (remaining > 0) {
+            final writeSize = remaining < chunkSize ? remaining : chunkSize;
+            final buf = Uint8List.fromList(List.generate(writeSize, (_) => rand.nextInt(256)));
+            await raf.writeFrom(buf);
+            remaining -= writeSize;
+          }
+          await raf.flush();
+        } finally {
+          await raf.close();
+        }
+      }
+      await f.delete();
+    } catch (_) {}
+  }
+
+  static Future<void> secureDeleteDir(Directory d) async {
+    try {
+      if (!await d.exists()) return;
+      await for (final entity in d.list(recursive: true)) {
+        if (entity is File) {
+          await secureDeleteFile(entity);
+        }
+      }
+      await d.delete(recursive: true);
+    } catch (_) {}
+  }
+
   static Future<void> wipeTransientPlaintext() async {
     try {
       final tempDir = await getTemporaryDirectory();
-      for (final name in const ['vault_playback', 'vault_docs']) {
+      for (final name in const ['vault_playback', 'vault_docs', 'vault_share']) {
         final dir = Directory('${tempDir.path}/$name');
-        if (dir.existsSync()) dir.deleteSync(recursive: true);
+        await secureDeleteDir(dir);
+      }
+      await for (final entity in tempDir.list()) {
+        if (entity is File) {
+          final name = entity.uri.pathSegments.last;
+          if (name.contains('_migrate_plain_') || name.contains('_migrate_ctr_')) {
+            await secureDeleteFile(entity);
+          }
+        }
       }
     } catch (_) {}
   }
