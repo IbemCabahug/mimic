@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -49,7 +50,7 @@ void main() {
     vaultFilesDir = p.join(tempDir.path, 'vault_files');
     Directory(vaultFilesDir).createSync();
 
-    crypto = VaultCrypto(FakePlatformService());
+    crypto = VaultCrypto(FakePlatformService(), FakeKeystoreService());
     await crypto.initialize('1234');
 
     testId = 'test-video-001';

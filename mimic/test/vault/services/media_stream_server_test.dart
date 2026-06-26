@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
@@ -81,7 +82,7 @@ void main() {
     await Directory(appDocsPath).create(recursive: true);
 
     platformService = FakePlatformService(tempDir);
-    crypto = VaultCrypto(platformService);
+    crypto = VaultCrypto(platformService, FakeKeystoreService());
     await crypto.initialize('1234');
     videoVaultService = VideoVaultService(platformService, crypto);
 

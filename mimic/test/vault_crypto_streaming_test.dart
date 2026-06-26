@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:math';
@@ -41,7 +42,7 @@ void main() {
 
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('vault_crypto_stream_test');
-    vaultCrypto = VaultCrypto(FakePlatformService());
+    vaultCrypto = VaultCrypto(FakePlatformService(), FakeKeystoreService());
     await vaultCrypto.initialize('1234');
   });
 

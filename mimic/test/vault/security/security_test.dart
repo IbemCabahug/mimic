@@ -22,6 +22,7 @@ import 'package:mimic/vault/security/auto_lock.dart';
 import 'package:mimic/vault/security/breakin_log.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/security/shake_wipe_service.dart';
+import 'package:mimic/vault/crypto/keystore_service.dart';
 
 import 'package:mimic/vault/screens/pin_screen.dart';
 import 'package:mimic/vault/security/duress_service.dart';
@@ -304,7 +305,7 @@ void main() {
       (WidgetTester tester) async {
         // Pre-seed the fake storage so VaultCrypto.initialize succeeds
         // on the first call (sets up salt + pin hash).
-        final crypto = VaultCrypto(fakePlatform);
+        final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
         await crypto.initialize('1234');
         crypto.lock();
 
@@ -315,7 +316,7 @@ void main() {
                 builder: (context) {
                   return ElevatedButton(
                     onPressed: () async {
-                      final testCrypto = VaultCrypto(fakePlatform);
+                      final testCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
                       await testCrypto.initialize('1234');
                       if (context.mounted) {
                         Navigator.of(context).pushReplacementNamed('/vault-home');
@@ -344,7 +345,7 @@ void main() {
       '6 · wrong PIN shows error and does NOT navigate',
       (WidgetTester tester) async {
         // Seed with correct PIN '1234'.
-        final crypto = VaultCrypto(fakePlatform);
+        final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
         await crypto.initialize('1234');
         crypto.lock();
 
@@ -360,7 +361,7 @@ void main() {
                       ElevatedButton(
                         onPressed: () async {
                           try {
-                            final testCrypto = VaultCrypto(fakePlatform);
+                            final testCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
                             await testCrypto.initialize('9999');
                             if (context.mounted) {
                               Navigator.of(context)
@@ -402,7 +403,7 @@ void main() {
       '7 · after 3 wrong PINs, attempt counter is stored as 3',
       (WidgetTester tester) async {
         // Seed correct PIN.
-        final crypto = VaultCrypto(fakePlatform);
+        final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
         await crypto.initialize('1234');
         crypto.lock();
 
@@ -418,7 +419,7 @@ void main() {
                       ElevatedButton(
                         onPressed: () async {
                           try {
-                            final testCrypto = VaultCrypto(fakePlatform);
+                            final testCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
                             await testCrypto.initialize('0000');
                           } catch (_) {
                             setState(() {
@@ -467,7 +468,7 @@ void main() {
       '8 · vault key is stored in Riverpod/memory only — never in flutter_secure_storage after unlock',
       () async {
         final platform = FakePlatformService();
-        final crypto = VaultCrypto(platform);
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
         await crypto.initialize('5678');
 
         // The crypto layer IS unlocked.
@@ -802,7 +803,7 @@ void main() {
       () async {
         // "Real" user vault.
         final realPlatform = FakePlatformService();
-        final realCrypto = VaultCrypto(realPlatform);
+        final realCrypto = VaultCrypto(realPlatform, FakeKeystoreService());
         await realCrypto.initialize('1234');
 
         // Encrypt a secret using the real key.
@@ -811,7 +812,7 @@ void main() {
 
         // "Decoy" vault — a completely separate platform (different salt).
         final decoyPlatform = FakePlatformService();
-        final decoyCrypto = VaultCrypto(decoyPlatform);
+        final decoyCrypto = VaultCrypto(decoyPlatform, FakeKeystoreService());
         await decoyCrypto.initialize('0000'); // decoy PIN
 
         expect(decoyCrypto.isUnlocked, isTrue,
@@ -904,7 +905,7 @@ void main() {
         // Verify that the data a BreakInLog would store (the photo path)
         // points to an .enc file, and the photo bytes would be encrypted.
         final fakePlatform = FakePlatformService();
-        final crypto = VaultCrypto(fakePlatform);
+        final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
         await crypto.initialize('1234');
 
         // Simulate what BreakInLogService.recordAttempt does (lines 92-100):
@@ -986,7 +987,7 @@ void main() {
 
   group('VaultCrypto lock/unlock guards', () {
     test('encrypt throws when vault is locked', () async {
-      final crypto = VaultCrypto(FakePlatformService());
+      final crypto = VaultCrypto(FakePlatformService(), FakeKeystoreService());
       await crypto.initialize('1234');
       crypto.lock();
 
@@ -998,7 +999,7 @@ void main() {
     });
 
     test('encryptString throws when vault is locked', () async {
-      final crypto = VaultCrypto(FakePlatformService());
+      final crypto = VaultCrypto(FakePlatformService(), FakeKeystoreService());
       await crypto.initialize('1234');
       crypto.lock();
 
@@ -1010,7 +1011,7 @@ void main() {
     });
 
     test('clearKey is equivalent to lock', () async {
-      final crypto = VaultCrypto(FakePlatformService());
+      final crypto = VaultCrypto(FakePlatformService(), FakeKeystoreService());
       await crypto.initialize('1234');
       expect(crypto.isUnlocked, isTrue);
 

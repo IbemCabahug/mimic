@@ -6,16 +6,22 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import '../../core/services/platform_service.dart';
 import '../../core/services/biometric_unlock_store.dart';
+import '../crypto/keystore_service.dart';
 
 class PinWipeService {
   final PlatformService _platformService;
   final BiometricUnlockStore _biometricUnlockStore;
+  final KeystoreService _keystoreService;
 
-  PinWipeService(this._platformService, {BiometricUnlockStore? biometricUnlockStore})
-      : _biometricUnlockStore = biometricUnlockStore ?? BiometricUnlockStore();
+  PinWipeService(this._platformService, {BiometricUnlockStore? biometricUnlockStore, KeystoreService? keystoreService})
+      : _biometricUnlockStore = biometricUnlockStore ?? BiometricUnlockStore(),
+        _keystoreService = keystoreService ?? AndroidKeystoreService();
 
   Future<void> wipePin() async {
     if (kIsWeb) return;
+    try {
+      await _keystoreService.deleteKey();
+    } catch (_) {}
     await _platformService.secureDelete('vault_pin_hash');
     await _platformService.secureDelete('vault_pin_salt');
     await _platformService.secureDelete('vault_salt');

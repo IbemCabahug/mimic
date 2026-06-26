@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 // test/vault/crypto/vault_crypto_test.dart
 
 import 'dart:convert';
@@ -126,7 +127,7 @@ void main() {
     late VaultCrypto crypto;
 
     setUp(() async {
-      crypto = VaultCrypto(FakePlatformService());
+      crypto = VaultCrypto(FakePlatformService(), FakeKeystoreService());
       await crypto.initialize('testpin');
     });
 
@@ -197,7 +198,7 @@ void main() {
     late VaultCrypto crypto;
 
     setUp(() async {
-      crypto = VaultCrypto(FakePlatformService());
+      crypto = VaultCrypto(FakePlatformService(), FakeKeystoreService());
       await crypto.initialize('testpin');
     });
 
@@ -250,7 +251,7 @@ void main() {
     test('9 — derived key never appears in flutter_secure_storage in plain text',
         () async {
       final fakePlatform = FakePlatformService();
-      final crypto = VaultCrypto(fakePlatform);
+      final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
       await crypto.initialize('mySecretPin');
 
       // Derive the key independently so we know what to look for.
@@ -281,7 +282,7 @@ void main() {
       final fakePlatform = FakePlatformService();
 
       // --- First run: initialize creates & stores a salt ---
-      final crypto1 = VaultCrypto(fakePlatform);
+      final crypto1 = VaultCrypto(fakePlatform, FakeKeystoreService());
       await crypto1.initialize('1234');
 
       expect(fakePlatform.store.containsKey('vault_salt'), isTrue,
@@ -300,7 +301,7 @@ void main() {
 
       // --- Second run: new VaultCrypto, same FakePlatformService (simulates
       //     a cold restart — storage persists, in-memory state is gone) ---
-      final crypto2 = VaultCrypto(fakePlatform);
+      final crypto2 = VaultCrypto(fakePlatform, FakeKeystoreService());
       await crypto2.initialize('1234'); // same PIN
 
       // The salt should NOT have been regenerated.
@@ -317,11 +318,11 @@ void main() {
     test('10b — initialize with wrong PIN on second run throws', () async {
       final fakePlatform = FakePlatformService();
 
-      final crypto1 = VaultCrypto(fakePlatform);
+      final crypto1 = VaultCrypto(fakePlatform, FakeKeystoreService());
       await crypto1.initialize('correctPin');
 
       // Second run with wrong PIN.
-      final crypto2 = VaultCrypto(fakePlatform);
+      final crypto2 = VaultCrypto(fakePlatform, FakeKeystoreService());
       expect(
         () => crypto2.initialize('wrongPin'),
         throwsA(isA<Exception>()),
@@ -344,7 +345,7 @@ void main() {
 
     setUp(() {
       fakePlatform = FakePlatformService();
-      crypto = VaultCrypto(fakePlatform);
+      crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
     });
 
     test('storeRecoveryBlob throws if vault is locked', () async {

@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 // test/integration/disguise_test.dart
 //
 // Integration tests for Mimic's disguise, stealth, and security mechanisms.
@@ -98,7 +99,7 @@ void main() {
 
   setUp(() async {
     fakePlatform = FakePlatformService();
-    fakeCrypto = VaultCrypto(fakePlatform);
+    fakeCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
     secureFlagsList.clear();
   });
 

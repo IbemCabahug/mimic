@@ -11,6 +11,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/core/services/platform_service.dart';
+import 'package:mimic/vault/crypto/keystore_service.dart';
 
 class FakePlatformService implements PlatformService {
   final Map<String, String> store = {};
@@ -60,7 +61,7 @@ void main() {
       'reset PIN via recovery phrase keeps existing data decryptable',
       () async {
         final platform = FakePlatformService();
-        final crypto = VaultCrypto(platform);
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
         await crypto.initialize('1111'); // first-time setup
 
         // Recovery phrase wraps the data key.
@@ -71,7 +72,7 @@ void main() {
         final ciphertext = crypto.encrypt(secret);
 
         // Simulate the "Forgot PIN" flow: fresh instance -> recover -> reset PIN.
-        final crypto2 = VaultCrypto(platform);
+        final crypto2 = VaultCrypto(platform, FakeKeystoreService());
         final recovered = await crypto2.recoverWithPhrase(kRecoveryWords);
         expect(recovered, isTrue);
         await crypto2.changePin('2222');
@@ -81,7 +82,7 @@ void main() {
             reason: 'Data must survive a PIN reset via recovery phrase');
 
         // A fresh unlock with the NEW PIN must also read it.
-        final crypto3 = VaultCrypto(platform);
+        final crypto3 = VaultCrypto(platform, FakeKeystoreService());
         await crypto3.initialize('2222');
         expect(crypto3.decrypt(ciphertext), equals(secret));
       },
@@ -91,7 +92,7 @@ void main() {
       'changePin re-wraps the same data key (no orphaning)',
       () async {
         final platform = FakePlatformService();
-        final crypto = VaultCrypto(platform);
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
         await crypto.initialize('1111');
 
         final secret = Uint8List.fromList(utf8.encode('unchanged-key proof'));
@@ -103,13 +104,13 @@ void main() {
         expect(crypto.decrypt(ciphertext), equals(secret));
 
         // Fresh unlock with the new PIN decrypts pre-change data.
-        final crypto2 = VaultCrypto(platform);
+        final crypto2 = VaultCrypto(platform, FakeKeystoreService());
         await crypto2.initialize('9999');
         expect(crypto2.decrypt(ciphertext), equals(secret),
             reason: 'changePin must not orphan previously-encrypted data');
 
         // The old PIN must no longer unlock.
-        final crypto3 = VaultCrypto(platform);
+        final crypto3 = VaultCrypto(platform, FakeKeystoreService());
         await expectLater(
           crypto3.initialize('1111'),
           throwsA(isA<Exception>()),
@@ -122,7 +123,7 @@ void main() {
       'legacy vault with no wrapped key migrates and keeps data',
       () async {
         final platform = FakePlatformService();
-        final crypto = VaultCrypto(platform);
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
         await crypto.initialize('4321');
 
         final secret = Uint8List.fromList(utf8.encode('legacy data'));
@@ -134,7 +135,7 @@ void main() {
 
         // Unlock with a fresh instance: should adopt the existing data key,
         // persist a wrapped copy, and still decrypt the old data.
-        final crypto2 = VaultCrypto(platform);
+        final crypto2 = VaultCrypto(platform, FakeKeystoreService());
         await crypto2.initialize('4321');
         expect(platform.store.containsKey('master_key_wrapped'), isTrue,
             reason: 'Legacy unlock must persist a wrapped data key');
@@ -142,7 +143,7 @@ void main() {
             reason: 'Legacy data must remain decryptable after migration');
 
         // A later unlock (now via the wrapped path) must also work.
-        final crypto3 = VaultCrypto(platform);
+        final crypto3 = VaultCrypto(platform, FakeKeystoreService());
         await crypto3.initialize('4321');
         expect(crypto3.decrypt(ciphertext), equals(secret));
       },
@@ -152,7 +153,7 @@ void main() {
       'changePin throws when the vault is locked',
       () async {
         final platform = FakePlatformService();
-        final locked = VaultCrypto(platform);
+        final locked = VaultCrypto(platform, FakeKeystoreService());
         expect(locked.isUnlocked, isFalse);
         await expectLater(
           locked.changePin('2222'),
@@ -168,7 +169,7 @@ void main() {
         final platform = FakePlatformService();
 
         // 1) Initial setup + save recovery phrase (mirrors RecoveryPhraseScreen).
-        final setup = VaultCrypto(platform);
+        final setup = VaultCrypto(platform, FakeKeystoreService());
         await setup.initialize('1111');
         await setup.storeRecoveryBlob(kRecoveryWords);
         final secret = Uint8List.fromList(utf8.encode('device secret'));
@@ -176,14 +177,14 @@ void main() {
 
         // 2) Forgot-PIN flow on one shared instance (like the singleton provider):
         //    EnterRecoveryScreen.recoverWithPhrase -> ResetPinScreen.changePin + storeRecoveryBlob().
-        final session = VaultCrypto(platform);
+        final session = VaultCrypto(platform, FakeKeystoreService());
         final recovered1 = await session.recoverWithPhrase(kRecoveryWords);
         expect(recovered1, isTrue, reason: 'first recovery must succeed');
         await session.changePin('2222');
         await session.storeRecoveryBlob(); // NO ARGS — exactly what reset_pin_screen does
 
         // 3) Later: Forgot PIN again, fresh instance, SAME 12 words.
-        final again = VaultCrypto(platform);
+        final again = VaultCrypto(platform, FakeKeystoreService());
         final recovered2 = await again.recoverWithPhrase(kRecoveryWords);
         expect(recovered2, isTrue,
             reason: 'recovery with the SAME words must still work after a PIN reset');
@@ -194,7 +195,7 @@ void main() {
 
     test('photos survive a PIN change and an app restart (DEK preserved)', () async {
       final platform = FakePlatformService();
-      final crypto = VaultCrypto(platform);
+      final crypto = VaultCrypto(platform, FakeKeystoreService());
       await crypto.initialize('11111111');
 
       final secret = Uint8List.fromList(utf8.encode('my secret photo bytes'));
@@ -206,7 +207,7 @@ void main() {
       expect(afterChange, equals(secret));
 
       // Fresh app instance unlocking with the new PIN must still decrypt.
-      final crypto2 = VaultCrypto(platform);
+      final crypto2 = VaultCrypto(platform, FakeKeystoreService());
       await crypto2.initialize('22222222');
       final afterRestart = await crypto2.decryptSystem(encrypted);
       expect(afterRestart, equals(secret));

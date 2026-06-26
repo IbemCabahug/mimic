@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'dart:io';
 // test/vault/screens/reset_pin_screen_test.dart
 import 'dart:typed_data';
@@ -37,7 +38,7 @@ class FakePlatformService implements PlatformService {
 void main() {
   testWidgets('ResetPinScreen UI Flow and Logic Test', (WidgetTester tester) async {
     final fakePlatform = FakePlatformService();
-    final crypto = VaultCrypto(fakePlatform);
+    final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
     
     // Lock/Unlock doesn't matter for changePin but let's initialize to set singleton
     await crypto.initialize('1234');

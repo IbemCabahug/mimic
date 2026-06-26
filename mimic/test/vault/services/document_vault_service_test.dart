@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -110,7 +111,7 @@ void main() {
   group('DocumentVaultService', () {
     test('saveDocumentFromFile encrypts and saves document metadata correctly', () async {
       final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService);
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('123456');
       final documentService = DocumentVaultService(platformService, crypto);
 
@@ -133,7 +134,7 @@ void main() {
 
     test('getDocumentToTempFile decrypts stream to a temp file safely', () async {
       final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService);
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('123456');
       final documentService = DocumentVaultService(platformService, crypto);
 
@@ -158,7 +159,7 @@ void main() {
 
     test('getDocumentToTempFile returns null for missing blob id', () async {
       final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService);
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('123456');
       final documentService = DocumentVaultService(platformService, crypto);
 

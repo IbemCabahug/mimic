@@ -9,6 +9,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pointycastle/export.dart';
 import '../../core/services/platform_service.dart';
 import 'recovery_phrase.dart';
+import 'keystore_service.dart';
 
 class SystemKeyMissingException implements Exception {
   final String message;
@@ -28,6 +29,7 @@ class VaultCrypto extends ChangeNotifier {
   }
 
   final PlatformService _platformService;
+  final KeystoreService _keystoreService;
   static final Map<String, String> _webKeyStore = {};
 
   static const int _keyLength = 32;
@@ -40,14 +42,20 @@ class VaultCrypto extends ChangeNotifier {
   static const List<int> _mediaMagicCtr = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x63, 0x31, 0x00]; // "MVKEYc1\0"
 
   Uint8List? _derivedKey;
+  Uint8List? _temporaryKek;
   bool _isUnlocked = false;
   List<String>? _recoveryWords;
+  bool _needsHardwareMigration = false;
+  bool _hasRecoveryPhrase = false;
 
-  VaultCrypto(this._platformService) {
+  VaultCrypto(this._platformService, [KeystoreService? keystoreService]) 
+      : _keystoreService = keystoreService ?? AndroidKeystoreService() {
     _instance = this;
   }
 
   bool get isUnlocked => _isUnlocked;
+  bool get needsHardwareMigration => _needsHardwareMigration;
+  bool get hasRecoveryPhrase => _hasRecoveryPhrase;
 
   Future<void> initialize(String pin) async {
     if (kIsWeb) {
@@ -86,16 +94,31 @@ class VaultCrypto extends ChangeNotifier {
       final wrapped =
           await _platformService.secureRead(_storageKeyMasterWrapped);
       Uint8List dek;
+      bool needsHwMigration = false;
       if (wrapped == null) {
-        // Legacy vault: the PIN-derived key IS the current data key. Adopt it as
-        // the permanent DEK and wrap it for the future. No data is re-encrypted.
+        // Legacy vault: the PIN-derived key IS the current data key.
         dek = candidateKey;
         await _platformService.secureWrite(
             _storageKeyMasterWrapped, _wrapKey(dek, kek));
+        needsHwMigration = true;
       } else {
-        dek = _unwrapKey(wrapped, kek);
+        if (wrapped.startsWith('hw1:')) {
+          final actualWrapped = wrapped.substring(4);
+          final inner = await _keystoreService.unwrap(actualWrapped);
+          if (inner == 'KEY_INVALID') {
+            throw KeystoreInvalidException();
+          }
+          dek = _unwrapKey(inner, kek);
+        } else {
+          dek = _unwrapKey(wrapped, kek);
+          needsHwMigration = true;
+        }
       }
       _derivedKey = dek;
+      _needsHardwareMigration = needsHwMigration;
+      if (needsHwMigration) {
+        _temporaryKek = kek;
+      }
       _isUnlocked = true;
       if (needsMigration) {
         await _platformService.secureWrite(
@@ -103,6 +126,10 @@ class VaultCrypto extends ChangeNotifier {
       }
       await _platformService.secureWrite('vault_setup_completed', 'true');
       await _platformService.secureDelete('vault_wiped');
+      
+      final blob = await _platformService.secureRead('recovery_blob');
+      _hasRecoveryPhrase = blob != null;
+      
       notifyListeners();
       return;
     }
@@ -115,9 +142,13 @@ class VaultCrypto extends ChangeNotifier {
     // New vault: the data key (DEK) starts as the PIN-derived key, then is
     // wrapped by the PIN-derived KEK so the PIN can change without data loss.
     final kek = _deriveKek(candidateKey);
+    final innerWrapped = _wrapKey(candidateKey, kek);
+    final hwWrapped = await _keystoreService.wrap(innerWrapped);
     await _platformService.secureWrite(
-        _storageKeyMasterWrapped, _wrapKey(candidateKey, kek));
+        _storageKeyMasterWrapped, 'hw1:$hwWrapped');
     _derivedKey = candidateKey;
+    _needsHardwareMigration = false;
+    _hasRecoveryPhrase = false;
     await _platformService.secureWrite('vault_setup_completed', 'true');
     await _platformService.secureDelete('vault_wiped');
     _isUnlocked = true;
@@ -156,6 +187,10 @@ class VaultCrypto extends ChangeNotifier {
       _derivedKey!.fillRange(0, _derivedKey!.length, 0);
     }
     _derivedKey = null;
+    if (_temporaryKek != null) {
+      _temporaryKek!.fillRange(0, _temporaryKek!.length, 0);
+      _temporaryKek = null;
+    }
     notifyListeners();
   }
 
@@ -185,6 +220,7 @@ class VaultCrypto extends ChangeNotifier {
 
     await _platformService.secureWrite('recovery_blob', base64Encode(blob));
     await _platformService.secureWrite('recovery_salt', base64Encode(salt));
+    _hasRecoveryPhrase = true;
   }
 
   Future<void> changePin(String newPin) async {
@@ -200,8 +236,10 @@ class VaultCrypto extends ChangeNotifier {
     await _platformService.secureWrite(
         _storageKeyPinHash, _verifierForKey(newCandidateKey));
     final newKek = _deriveKek(newCandidateKey);
+    final innerWrapped = _wrapKey(dek, newKek);
+    final hwWrapped = await _keystoreService.wrap(innerWrapped);
     await _platformService.secureWrite(
-        _storageKeyMasterWrapped, _wrapKey(dek, newKek));
+        _storageKeyMasterWrapped, 'hw1:$hwWrapped');
     if (!kIsWeb) {
       await _platformService.secureWrite('vault_pin', newPin);
       await _platformService.secureWrite('wrong_attempts', '0');
@@ -209,7 +247,23 @@ class VaultCrypto extends ChangeNotifier {
       await _platformService.secureDelete('vault_wiped');
     }
     _derivedKey = dek; // unchanged — the whole point of the fix
+    _needsHardwareMigration = false;
     _isUnlocked = true;
+    notifyListeners();
+  }
+
+  Future<void> migrateToHardwareBinding() async {
+    if (!_isUnlocked || _derivedKey == null || _temporaryKek == null) {
+      throw Exception('Vault locked or missing KEK');
+    }
+    if (!_needsHardwareMigration) return;
+    
+    final innerWrapped = _wrapKey(_derivedKey!, _temporaryKek!);
+    final hwWrapped = await _keystoreService.wrap(innerWrapped);
+    await _platformService.secureWrite(_storageKeyMasterWrapped, 'hw1:$hwWrapped');
+    _needsHardwareMigration = false;
+    _temporaryKek!.fillRange(0, _temporaryKek!.length, 0);
+    _temporaryKek = null;
     notifyListeners();
   }
 

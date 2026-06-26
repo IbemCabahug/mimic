@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 // test/vault/screens/vault_screens_test.dart
 //
 // Complete widget tests for all Mimic vault screens:
@@ -367,7 +368,7 @@ void main() {
 
   setUp(() async {
     fakePlatform = FakePlatformService();
-    fakeCrypto = VaultCrypto(fakePlatform);
+    fakeCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
     // Initialize the crypto layer so that isUnlocked is true.
     // If not unlocked, screens will post-frame redirect to /vault-pin.
     await fakeCrypto.initialize('1234');

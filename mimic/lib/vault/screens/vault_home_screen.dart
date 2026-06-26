@@ -14,6 +14,7 @@ import '../widgets/vault_scaffold.dart';
 import '../security/shake_wipe_service.dart';
 import '../widgets/blood_splatter_overlay.dart';
 import '../widgets/backup_out_of_date_banner.dart';
+import 'recovery_phrase_screen.dart';
 
 class VaultHomeScreen extends ConsumerStatefulWidget {
   const VaultHomeScreen({super.key});

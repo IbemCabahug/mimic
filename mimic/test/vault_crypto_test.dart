@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -41,7 +42,7 @@ class FakePlatformService implements PlatformService {
 void main() {
   group('VaultCrypto', () {
     test('encrypt and decrypt are inverses', () async {
-      final vaultCrypto = VaultCrypto(FakePlatformService());
+      final vaultCrypto = VaultCrypto(FakePlatformService(), FakeKeystoreService());
 
       await vaultCrypto.initialize('1234');
 
@@ -53,7 +54,7 @@ void main() {
     });
 
     test('Empty data encrypt/decrypt works', () async {
-      final vaultCrypto = VaultCrypto(FakePlatformService());
+      final vaultCrypto = VaultCrypto(FakePlatformService(), FakeKeystoreService());
 
       await vaultCrypto.initialize('1234');
 
@@ -63,7 +64,7 @@ void main() {
     });
 
     test('Single byte encrypt/decrypt works', () async {
-      final vaultCrypto = VaultCrypto(FakePlatformService());
+      final vaultCrypto = VaultCrypto(FakePlatformService(), FakeKeystoreService());
 
       await vaultCrypto.initialize('1234');
 
@@ -73,7 +74,7 @@ void main() {
     });
 
     test('Large data encrypt/decrypt works', () async {
-      final vaultCrypto = VaultCrypto(FakePlatformService());
+      final vaultCrypto = VaultCrypto(FakePlatformService(), FakeKeystoreService());
 
       await vaultCrypto.initialize('1234');
 
@@ -84,7 +85,7 @@ void main() {
     });
 
     test('lock clears derived key', () async {
-      final vaultCrypto = VaultCrypto(FakePlatformService());
+      final vaultCrypto = VaultCrypto(FakePlatformService(), FakeKeystoreService());
 
       await vaultCrypto.initialize('1234');
       expect(vaultCrypto.isUnlocked, isTrue);
@@ -94,7 +95,7 @@ void main() {
     });
 
     test('Phase B: encryptSystem -> decryptSystem round-trips a payload', () async {
-      final vaultCrypto = VaultCrypto(FakePlatformService());
+      final vaultCrypto = VaultCrypto(FakePlatformService(), FakeKeystoreService());
       await vaultCrypto.initialize('1234');
       final payload = Uint8List.fromList([10, 20, 30]);
       final cipher = await vaultCrypto.encryptSystem(payload);
@@ -104,7 +105,7 @@ void main() {
 
     test('Phase B: CROSS-INSTALL simulate fresh install decrypts media', () async {
       final oldService = FakePlatformService();
-      final oldCrypto = VaultCrypto(oldService);
+      final oldCrypto = VaultCrypto(oldService, FakeKeystoreService());
       await oldCrypto.initialize('1234');
       final recoveryWords = [
         'abandon', 'abandon', 'abandon', 'abandon',
@@ -124,7 +125,7 @@ void main() {
       await newService.secureWrite('recovery_blob', blobStr!);
       await newService.secureWrite('recovery_salt', saltStr!);
 
-      final newCrypto = VaultCrypto(newService);
+      final newCrypto = VaultCrypto(newService, FakeKeystoreService());
       final recovered = await newCrypto.recoverWithPhrase(recoveryWords);
       expect(recovered, isTrue);
 
@@ -154,7 +155,7 @@ void main() {
       legacyBlob.setRange(iv.length, legacyBlob.length, encrypted);
 
       // Now use the NEW vault crypto
-      final vaultCrypto = VaultCrypto(oldService); // Same service so it reads system_key
+      final vaultCrypto = VaultCrypto(oldService, FakeKeystoreService()); // Same service so it reads system_key
       await vaultCrypto.initialize('1234');
       
       final decrypted = await vaultCrypto.decryptSystem(legacyBlob);

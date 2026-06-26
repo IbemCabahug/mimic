@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'dart:io';
 // test/vault/screens/recovery_phrase_screen_test.dart
 import 'dart:typed_data';
@@ -36,7 +37,7 @@ class FakePlatformService implements PlatformService {
 void main() {
   testWidgets('RecoveryPhraseScreen UI Flow Test', (WidgetTester tester) async {
     final fakePlatform = FakePlatformService();
-    final crypto = VaultCrypto(fakePlatform);
+    final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
     
     // Unlock the vault first since storeRecoveryBlob requires unlocked state
     await crypto.initialize('pin1234');

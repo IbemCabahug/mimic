@@ -6,7 +6,7 @@ import 'package:flutter/services.dart';
 
 Future<void> testExecutable(FutureOr<void> Function() testMain) async {
   TestWidgetsFlutterBinding.ensureInitialized();
-  setUpAll(() {
+  setUp(() {
     GoogleFonts.config.allowRuntimeFetching = false;
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(const MethodChannel('mimic/storage'), (MethodCall methodCall) async {
@@ -14,6 +14,32 @@ Future<void> testExecutable(FutureOr<void> Function() testMain) async {
         return 1 << 50;
       }
       return null;
+    });
+
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('mimic/keystore'), (MethodCall methodCall) async {
+      switch (methodCall.method) {
+        case 'ensureKey':
+          return null;
+        case 'wrap':
+          final Uint8List original = methodCall.arguments['bytes'] as Uint8List;
+          final iv = Uint8List(12); // dummy IV
+          final combined = Uint8List(iv.length + original.length);
+          combined.setRange(0, iv.length, iv);
+          combined.setRange(iv.length, combined.length, original);
+          return combined;
+        case 'unwrap':
+          final Uint8List combined = methodCall.arguments['bytes'] as Uint8List;
+          if (combined.length < 12) {
+            throw PlatformException(code: 'KEY_INVALID', message: 'Invalid wrapped key length');
+          }
+          final original = combined.sublist(12);
+          return original;
+        case 'deleteKey':
+          return null;
+        default:
+          return null;
+      }
     });
   });
   await testMain();

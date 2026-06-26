@@ -7,7 +7,14 @@ import '../widgets/vault_scaffold.dart';
 import '../../core/theme/app_theme.dart';
 
 class RecoveryPhraseScreen extends ConsumerStatefulWidget {
-  const RecoveryPhraseScreen({super.key});
+  final bool forcedSetup;
+  final bool migrateAfter;
+
+  const RecoveryPhraseScreen({
+    super.key,
+    this.forcedSetup = false,
+    this.migrateAfter = false,
+  });
 
   @override
   ConsumerState<RecoveryPhraseScreen> createState() => RecoveryPhraseScreenState();
@@ -87,10 +94,13 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return VaultScaffold(
-      title: 'Recovery Phrase',
-      showLockButton: false,
-      body: SafeArea(
+    return PopScope(
+      canPop: !widget.forcedSetup,
+      child: VaultScaffold(
+        title: 'Recovery Phrase',
+        showLockButton: false,
+        showBackButton: !widget.forcedSetup,
+        body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
           children: [
@@ -100,7 +110,7 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
           ],
         ),
       ),
-    );
+    ));
   }
 
   Widget _buildGenerateStep() {
@@ -435,7 +445,14 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
         const SizedBox(height: 48),
         ElevatedButton(
           onPressed: () {
-            Navigator.of(context).pop();
+            if (widget.forcedSetup) {
+              if (widget.migrateAfter) {
+                ref.read(vaultCryptoProvider).migrateToHardwareBinding();
+              }
+              Navigator.of(context).pushReplacementNamed('/vault-home');
+            } else {
+              Navigator.of(context).pop();
+            }
           },
           style: ElevatedButton.styleFrom(
             backgroundColor: VaultColors.accent,

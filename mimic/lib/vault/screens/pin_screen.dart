@@ -12,7 +12,9 @@ import '../security/auto_lock.dart';
 import '../security/duress_service.dart';
 import '../security/pin_wipe_service.dart';
 import '../security/vault_conceal_service.dart';
+import '../crypto/keystore_service.dart';
 import 'wiped_vault_screen.dart';
+import 'recovery_phrase_screen.dart';
 import 'package:mimic/core/providers/provider_registration.dart'
     show vaultConcealServiceProvider;
 
@@ -159,7 +161,41 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           PanicMode().init(context, ref);
           AutoLock().init(context, ref);
 
-          navigator.pushReplacementNamed('/vault-home');
+          if (!_crypto.hasRecoveryPhrase) {
+            navigator.pushReplacement(
+              MaterialPageRoute(
+                builder: (_) => RecoveryPhraseScreen(
+                  forcedSetup: true,
+                  migrateAfter: _crypto.needsHardwareMigration,
+                ),
+              ),
+            );
+          } else {
+            if (_crypto.needsHardwareMigration) {
+               try {
+                 await _crypto.migrateToHardwareBinding();
+               } catch (e) {
+                 navigator.pushReplacement(
+                   MaterialPageRoute(
+                     builder: (_) => const RecoveryPhraseScreen(
+                       forcedSetup: true,
+                       migrateAfter: false,
+                     ),
+                   ),
+                 );
+                 return;
+               }
+            }
+            navigator.pushReplacementNamed('/vault-home');
+          }
+        }
+      } on KeystoreInvalidException catch (e) {
+        if (mounted) {
+          setState(() => _isLoading = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent, duration: const Duration(seconds: 4)),
+          );
+          Navigator.of(context).pushNamed('/vault-enter-recovery');
         }
       } catch (e) {
         if (!kIsWeb) {

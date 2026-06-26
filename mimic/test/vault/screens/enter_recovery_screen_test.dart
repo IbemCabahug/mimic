@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'dart:io';
 // test/vault/screens/enter_recovery_screen_test.dart
 import 'dart:typed_data';
@@ -38,7 +39,7 @@ class FakePlatformService implements PlatformService {
 void main() {
   testWidgets('EnterRecoveryScreen UI Flow Test', (WidgetTester tester) async {
     final fakePlatform = FakePlatformService();
-    final crypto = VaultCrypto(fakePlatform);
+    final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
 
     // Set up a valid recovery phrase in the vault crypto instance
     // 1. Initialize the vault first (unlock)

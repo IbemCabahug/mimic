@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 // test/vault/export/vault_export_import_test.dart
 
 import 'dart:convert';
@@ -115,7 +116,7 @@ void main() {
     // Initialize VaultCrypto with AndroidPlatformService to use the
     // secure storage mock channel.
     final platformService = AndroidPlatformService();
-    VaultCrypto(platformService); // registers VaultCrypto.instance
+    VaultCrypto(platformService, FakeKeystoreService()); // registers VaultCrypto.instance
   });
 
   tearDown(() {
@@ -335,7 +336,7 @@ void main() {
 
       // Reinitialize VaultCrypto to locked state
       final platformService = AndroidPlatformService();
-      VaultCrypto(platformService);
+      VaultCrypto(platformService, FakeKeystoreService());
 
       // 5. Perform import
       final importSuccess = await VaultImporter.importWithPhrase(exportedFile, recoveryWords);
@@ -439,7 +440,7 @@ void main() {
       await corruptedFile.writeAsBytes(corruptedBytes);
 
       // Reinitialize VaultCrypto
-      VaultCrypto(AndroidPlatformService());
+      VaultCrypto(AndroidPlatformService(), FakeKeystoreService());
 
       // Import should throw
       bool threw = false;
@@ -499,7 +500,7 @@ void main() {
       final photosDbPath = '$dbDirPath/vault_files.db';
       if (await File(photosDbPath).exists()) await File(photosDbPath).delete();
 
-      VaultCrypto(AndroidPlatformService());
+      VaultCrypto(AndroidPlatformService(), FakeKeystoreService());
 
       // Import the v1 file
       final importSuccess = await VaultImporter.importWithPhrase(v1File, recoveryWords);
@@ -676,7 +677,7 @@ void main() {
       if (await photoFile.exists()) await photoFile.delete();
 
       final platformService = AndroidPlatformService();
-      VaultCrypto(platformService);
+      VaultCrypto(platformService, FakeKeystoreService());
 
       final dirtyWords = [
         'abandon\u200B',    // zero-width space
@@ -701,7 +702,7 @@ void main() {
 
     test('FRESH install simulation: vault_files directory does not exist on import', () async {
       final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService);
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('123456');
       await crypto.storeRecoveryBlob(recoveryWords);
 
@@ -727,7 +728,7 @@ void main() {
 
       expect(await vaultFilesDir.exists(), isFalse);
 
-      VaultCrypto(AndroidPlatformService());
+      VaultCrypto(AndroidPlatformService(), FakeKeystoreService());
 
       // Perform import
       final importSuccess = await VaultImporter.importWithPhrase(exportedFile, recoveryWords);
@@ -747,7 +748,7 @@ void main() {
 
     test('EXISTING db simulation: DB exists but with NO tables (gating bug reproduction)', () async {
       final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService);
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('123456');
       await crypto.storeRecoveryBlob(recoveryWords);
 
@@ -774,7 +775,7 @@ void main() {
       final emptyDb = await openDatabase(photosDbPath, version: 1);
       await emptyDb.close();
 
-      VaultCrypto(AndroidPlatformService());
+      VaultCrypto(AndroidPlatformService(), FakeKeystoreService());
 
       final importSuccess = await VaultImporter.importWithPhrase(exportedFile, recoveryWords);
       expect(importSuccess, isTrue, reason: 'Import should succeed');
@@ -788,7 +789,7 @@ void main() {
 
     test('EXISTING db simulation: DB exists WITH empty table (FileVaultService actual behavior)', () async {
       final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService);
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('123456');
       await crypto.storeRecoveryBlob(recoveryWords);
 
@@ -830,7 +831,7 @@ void main() {
       );
       await db.close();
 
-      VaultCrypto(AndroidPlatformService());
+      VaultCrypto(AndroidPlatformService(), FakeKeystoreService());
 
       final importSuccess = await VaultImporter.importWithPhrase(exportedFile, recoveryWords);
       expect(importSuccess, isTrue, reason: 'Import should succeed');
@@ -844,7 +845,7 @@ void main() {
 
     test('SHARED DB HANDLE simulation: database_closed error on getAllPhotos after import', () async {
       final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService);
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('123456');
       await crypto.storeRecoveryBlob(recoveryWords);
 
@@ -889,7 +890,7 @@ void main() {
       );
       await db.close();
 
-      VaultCrypto(AndroidPlatformService());
+      VaultCrypto(AndroidPlatformService(), FakeKeystoreService());
 
       // (2) Run importWithPhrase
       final importSuccess = await VaultImporter.importWithPhrase(exportedFile, recoveryWords);
@@ -981,7 +982,7 @@ void main() {
       if (await File(photosDbPath).exists()) await File(photosDbPath).delete();
       if (await hugeFile.exists()) await hugeFile.delete();
 
-      VaultCrypto(AndroidPlatformService());
+      VaultCrypto(AndroidPlatformService(), FakeKeystoreService());
 
       try {
         final result = await VaultImporter.importWithPhrase(exportFile, recoveryWords);

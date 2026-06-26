@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'dart:io';
 import 'dart:math';
 
@@ -87,7 +88,7 @@ void main() {
   group('VideoVaultService', () {
     test('saveVideoFromFile encrypts and saves video metadata correctly', () async {
       final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService);
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('1234');
       final videoVaultService = VideoVaultService(platformService, crypto);
 
@@ -129,7 +130,7 @@ void main() {
 
     test('getVideoToTempFile decrypts stream to a temp file safely', () async {
       final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService);
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('1234');
       final videoVaultService = VideoVaultService(platformService, crypto);
 
@@ -169,7 +170,7 @@ void main() {
 
     test('ensureVideoStreamable: CBC blob migrates to CTR', () async {
       final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService);
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('1234');
       final videoVaultService = VideoVaultService(platformService, crypto);
 
@@ -216,7 +217,7 @@ void main() {
 
     test('ensureVideoStreamable: idempotent — second call is a no-op', () async {
       final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService);
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('1234');
       final videoVaultService = VideoVaultService(platformService, crypto);
 
@@ -266,7 +267,7 @@ void main() {
       // the original CBC blob is never truncated or deleted before rename.
 
       final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService);
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('1234');
       final videoVaultService = VideoVaultService(platformService, crypto);
 
@@ -306,7 +307,7 @@ void main() {
       // There is no equivalent on DocumentVaultService or the photo service.
       // Calling it with a non-existent ID is a no-op.
       final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService);
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('1234');
       final videoVaultService = VideoVaultService(platformService, crypto);
 

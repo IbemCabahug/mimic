@@ -1,3 +1,4 @@
+import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'dart:io';
 // test/vault/screens/pin_screen_test.dart
 import 'dart:typed_data';
@@ -36,7 +37,7 @@ class FakePlatformService implements PlatformService {
 void main() {
   testWidgets('PinScreen Forgot PIN Behavior Test', (WidgetTester tester) async {
     final fakePlatform = FakePlatformService();
-    final crypto = VaultCrypto(fakePlatform);
+    final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
     
     // Setup correct PIN in platform and initialize crypto
     await crypto.initialize('1234');
