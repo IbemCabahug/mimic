@@ -21,6 +21,7 @@ class KeystoreChannel : MethodChannel.MethodCallHandler {
             "wrap" -> wrapKey(call, result)
             "unwrap" -> unwrapKey(call, result)
             "deleteKey" -> deleteKey(result)
+            "elapsedRealtime" -> result.success(android.os.SystemClock.elapsedRealtime())
             else -> result.notImplemented()
         }
     }

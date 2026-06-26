@@ -37,6 +37,8 @@ Future<void> testExecutable(FutureOr<void> Function() testMain) async {
           return original;
         case 'deleteKey':
           return null;
+        case 'elapsedRealtime':
+          return 1000000;
         default:
           return null;
       }
