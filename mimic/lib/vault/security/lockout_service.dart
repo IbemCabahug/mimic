@@ -1,4 +1,5 @@
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/core/services/platform_service.dart';
 
 abstract class MonotonicClock {
@@ -37,14 +38,16 @@ Duration cooldownForAttempts(int attempts) {
 class LockoutService {
   final PlatformService _storage;
   final MonotonicClock _clock;
+  final DateTime Function() _now;
 
-  LockoutService(this._storage, this._clock);
+  LockoutService(this._storage, this._clock, {DateTime Function()? now}) 
+      : _now = now ?? DateTime.now;
 
   Future<void> setLockout(int attempts) async {
     final duration = cooldownForAttempts(attempts);
     if (duration == Duration.zero) return;
 
-    final nowWall = DateTime.now().toUtc().millisecondsSinceEpoch;
+    final nowWall = _now().toUtc().millisecondsSinceEpoch;
     final nowElapsed = await _clock.elapsedRealtime();
 
     await _storage.secureWrite('lockout_set_wall', nowWall.toString());
@@ -67,7 +70,7 @@ class LockoutService {
 
     final duration = Duration(milliseconds: durationMs);
 
-    final nowWall = DateTime.now().toUtc().millisecondsSinceEpoch;
+    final nowWall = _now().toUtc().millisecondsSinceEpoch;
     final nowElapsed = await _clock.elapsedRealtime();
 
     Duration wallRemaining = duration - Duration(milliseconds: nowWall - setWall);
@@ -99,3 +102,7 @@ class LockoutService {
     await _storage.secureDelete('wrong_attempts');
   }
 }
+
+final lockoutServiceProvider = Provider<LockoutService>((ref) {
+  return LockoutService(ref.read(platformServiceProvider), AndroidMonotonicClock());
+});

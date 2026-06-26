@@ -1,4 +1,5 @@
 // mimic/lib/vault/screens/pin_screen.dart
+import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -12,6 +13,7 @@ import '../security/auto_lock.dart';
 import '../security/duress_service.dart';
 import '../security/pin_wipe_service.dart';
 import '../security/vault_conceal_service.dart';
+import '../security/lockout_service.dart';
 import '../crypto/keystore_service.dart';
 import 'wiped_vault_screen.dart';
 import 'recovery_phrase_screen.dart';
@@ -36,6 +38,8 @@ class _PinScreenState extends ConsumerState<PinScreen> {
   bool _isCreateMode = false;
   bool _isConfirming = false;
   String _firstEnteredPin = '';
+  Duration _remainingLockout = Duration.zero;
+  Timer? _lockoutTimer;
 
   @override
   void initState() {
@@ -45,6 +49,49 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     _checkCreateMode();
     _checkIfWiped();
     _loadWrongAttempts();
+    _checkLockout();
+  }
+
+  Future<void> _checkLockout() async {
+    final lockoutService = ref.read(lockoutServiceProvider);
+    final remaining = await lockoutService.remainingLockout();
+    if (mounted && remaining > Duration.zero) {
+      setState(() {
+        _remainingLockout = remaining;
+        _error = 'Try again in ${_formatDuration(remaining)}';
+      });
+      _startLockoutTimer();
+    }
+  }
+
+  void _startLockoutTimer() {
+    _lockoutTimer?.cancel();
+    _lockoutTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      final lockoutService = ref.read(lockoutServiceProvider);
+      final remaining = await lockoutService.remainingLockout();
+      if (mounted) {
+        if (remaining <= Duration.zero) {
+          timer.cancel();
+          setState(() {
+            _remainingLockout = Duration.zero;
+            _error = null;
+          });
+        } else {
+          setState(() {
+            _remainingLockout = remaining;
+            _error = 'Try again in ${_formatDuration(remaining)}';
+          });
+        }
+      } else {
+        timer.cancel();
+      }
+    });
+  }
+
+  String _formatDuration(Duration duration) {
+    final minutes = duration.inMinutes;
+    final seconds = duration.inSeconds % 60;
+    return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 
   Future<void> _checkCreateMode() async {
@@ -83,6 +130,19 @@ class _PinScreenState extends ConsumerState<PinScreen> {
   }
 
   Future<void> _authenticate([String? overridePin]) async {
+    final lockoutService = ref.read(lockoutServiceProvider);
+    final remaining = await lockoutService.remainingLockout();
+    if (remaining > Duration.zero) {
+      if (mounted) {
+        setState(() {
+          _remainingLockout = remaining;
+          _error = 'Try again in ${_formatDuration(remaining)}';
+        });
+        _startLockoutTimer();
+      }
+      return;
+    }
+
     final pin = overridePin ?? _pinController.text;
     if (pin.isEmpty) {
       setState(() => _error = 'Enter your PIN');
@@ -124,6 +184,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
 
         if (isFakePin) {
           _pinController.clear();
+          await ref.read(lockoutServiceProvider).reset();
           if (mounted) {
             setState(() {
               _error = null;
@@ -156,7 +217,9 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           setState(() {
             _error = null;
             _wrongAttempts = 0;
+            _remainingLockout = Duration.zero;
           });
+          await ref.read(lockoutServiceProvider).reset();
 
           PanicMode().init(context, ref);
           AutoLock().init(context, ref);
@@ -206,15 +269,32 @@ class _PinScreenState extends ConsumerState<PinScreen> {
               _intruderService.captureIntruder(_crypto);
             }
             await ref.read(platformServiceProvider).secureWrite('wrong_attempts', currentCount.toString());
+            await ref.read(lockoutServiceProvider).setLockout(currentCount);
             if (mounted) setState(() => _wrongAttempts = currentCount);
+
+            final newRemaining = await ref.read(lockoutServiceProvider).remainingLockout();
+            if (newRemaining > Duration.zero && mounted) {
+              setState(() {
+                _remainingLockout = newRemaining;
+                _error = 'Try again in ${_formatDuration(newRemaining)}';
+              });
+              _startLockoutTimer();
+            } else if (mounted) {
+              setState(() => _error = 'Invalid PIN');
+            }
           } catch (ex) {
             debugPrint('Failed to save wrong attempts log: $ex');
-            if (mounted) setState(() => _wrongAttempts++);
+            if (mounted) setState(() {
+              _wrongAttempts++;
+              _error = 'Invalid PIN';
+            });
           }
         } else {
-          if (mounted) setState(() => _wrongAttempts++);
+          if (mounted) setState(() {
+            _wrongAttempts++;
+            _error = 'Invalid PIN';
+          });
         }
-        if (mounted) setState(() => _error = 'Invalid PIN');
       } finally {
         if (mounted) setState(() => _isLoading = false);
       }
@@ -240,6 +320,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
 
   @override
   void dispose() {
+    _lockoutTimer?.cancel();
     _pinController.dispose();
     super.dispose();
   }
@@ -277,6 +358,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
               controller: _pinController,
               obscureText: true,
               keyboardType: TextInputType.number,
+              readOnly: _remainingLockout > Duration.zero,
               maxLength: 8,
               style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
@@ -322,7 +404,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
             if (!kIsWeb && !_isCreateMode)
               const SizedBox(height: 16),
             ElevatedButton(
-              onPressed: _isLoading ? null : _authenticate,
+              onPressed: (_isLoading || _remainingLockout > Duration.zero) ? null : _authenticate,
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF7F77DD),
                 foregroundColor: Colors.white,

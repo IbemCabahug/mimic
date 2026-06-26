@@ -4,6 +4,7 @@ import 'dart:math';
 import '../crypto/vault_crypto.dart';
 import '../crypto/recovery_phrase.dart';
 import '../widgets/vault_scaffold.dart';
+import '../security/lockout_service.dart';
 import '../../core/theme/app_theme.dart';
 
 class RecoveryPhraseScreen extends ConsumerStatefulWidget {
@@ -81,6 +82,7 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
     try {
       final crypto = ref.read(vaultCryptoProvider);
       await crypto.storeRecoveryBlob(_generatedWords);
+      await ref.read(lockoutServiceProvider).reset();
       setState(() {
         _step = 3;
         _errorMessage = null;
