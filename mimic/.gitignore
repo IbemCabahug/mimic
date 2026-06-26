@@ -53,3 +53,6 @@ android/.kotlin/
 *.apk
 /app-release.apk
 test_90mb.bin
+
+docs/PROJECT_STATUS.md/tools/
+assets/icon/app_icon_backup.png
