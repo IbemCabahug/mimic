@@ -4,6 +4,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/game/data/word_packs.dart';
 import 'package:mimic/game/data/language_store.dart';
 
+const int kMinPlayers = 3;
+
+
 enum GameMode {
   classic, nightmare, survival;
 

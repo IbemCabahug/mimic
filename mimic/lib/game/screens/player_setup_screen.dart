@@ -31,7 +31,8 @@ class _PlayerSetupScreenState extends ConsumerState<PlayerSetupScreen> {
   @override
   void initState() {
     super.initState();
-    // Initialize with 2 players by default
+    // Initialize with 3 players by default
+    _addPlayer();
     _addPlayer();
     _addPlayer();
 
@@ -59,7 +60,7 @@ class _PlayerSetupScreenState extends ConsumerState<PlayerSetupScreen> {
 
   void _startGame() {
     final namedPlayers = _players.where((p) => p.nameController.text.trim().isNotEmpty).toList();
-    if (namedPlayers.length < 2) return;
+    if (namedPlayers.length < kMinPlayers) return;
 
     final gameStateNotifier = ref.read(gameStateProvider.notifier);
     
@@ -77,7 +78,7 @@ class _PlayerSetupScreenState extends ConsumerState<PlayerSetupScreen> {
     Navigator.of(context).pushNamed(MimicGame.packSelectRoute);
   }
 
-  bool get _canStart => _players.where((p) => p.nameController.text.trim().isNotEmpty).length >= 2;
+  bool get _canStart => _players.where((p) => p.nameController.text.trim().isNotEmpty).length >= kMinPlayers;
 
   @override
   void dispose() {
@@ -199,8 +200,8 @@ class _PlayerSetupScreenState extends ConsumerState<PlayerSetupScreen> {
                               ),
                             ),
                           ),
-                          // Delete button if we have more than 2 entries
-                          if (_players.length > 2)
+                          // Delete button if we have more than kMinPlayers entries
+                          if (_players.length > kMinPlayers)
                             IconButton(
                               icon: const Icon(Icons.close, color: HorrorColors.ashGray),
                               onPressed: () => _removePlayer(index),

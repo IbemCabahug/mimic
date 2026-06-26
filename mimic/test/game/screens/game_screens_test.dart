@@ -128,28 +128,39 @@ void main() {
       await tester.pumpWidget(buildGameTestApp(home: const PlayerSetupScreen(), container: container));
       await pumpScreen(tester);
 
-      expect(find.byType(TextField), findsNWidgets(2));
+      // Starts with 3 text fields by default
+      expect(find.byType(TextField), findsNWidgets(3));
 
       final startGameFinder = find.widgetWithText(ElevatedButton, 'START GAME');
       expect(startGameFinder, findsOneWidget);
       ElevatedButton startGameButton = tester.widget<ElevatedButton>(startGameFinder);
       expect(startGameButton.onPressed, isNull,
-          reason: 'START GAME must be disabled with less than 2 named players');
+          reason: 'START GAME must be disabled with less than 3 named players');
 
       final addPlayerButton = find.widgetWithText(OutlinedButton, 'ADD PLAYER');
       expect(addPlayerButton, findsOneWidget);
       await tester.tap(addPlayerButton);
       await pumpScreen(tester);
 
-      expect(find.byType(TextField), findsNWidgets(3));
+      // Now 4 fields
+      expect(find.byType(TextField), findsNWidgets(4));
 
       await tester.enterText(find.byType(TextField).at(0), 'Alice');
       await tester.enterText(find.byType(TextField).at(1), 'Bob');
       await pumpScreen(tester);
 
+      // Still disabled because only 2 players are named
+      startGameButton = tester.widget<ElevatedButton>(startGameFinder);
+      expect(startGameButton.onPressed, isNull,
+          reason: 'START GAME must be disabled with only 2 named players');
+
+      // Add third player
+      await tester.enterText(find.byType(TextField).at(2), 'Charlie');
+      await pumpScreen(tester);
+
       startGameButton = tester.widget<ElevatedButton>(startGameFinder);
       expect(startGameButton.onPressed, isNotNull,
-          reason: 'START GAME must be enabled when 2+ named players are populated');
+          reason: 'START GAME must be enabled when 3+ named players are populated');
 
       await tester.tap(startGameFinder);
       await pumpScreen(tester);
@@ -158,9 +169,10 @@ void main() {
       expect(find.byType(PackSelectScreen), findsOneWidget);
 
       final state = container.read(gameStateProvider);
-      expect(state.players.length, 2);
+      expect(state.players.length, 3);
       expect(state.players[0].name, 'Alice');
       expect(state.players[1].name, 'Bob');
+      expect(state.players[2].name, 'Charlie');
     });
   });
 

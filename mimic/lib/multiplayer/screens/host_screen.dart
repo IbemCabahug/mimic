@@ -139,7 +139,7 @@ class _HostScreenState extends ConsumerState<HostScreen> {
   }
 
   void _startGame() {
-    if (_playerNames.length < 2) return;
+    if (_playerNames.length < kMinPlayers) return;
 
     final gameStateNotifier = ref.read(gameStateProvider.notifier);
     gameStateNotifier.resetGame();
@@ -447,7 +447,7 @@ class _HostScreenState extends ConsumerState<HostScreen> {
                           width: double.infinity,
                           height: 52,
                           child: ElevatedButton(
-                            onPressed: _playerNames.length >= 2 ? _startGame : null,
+                            onPressed: _playerNames.length >= kMinPlayers ? _startGame : null,
                             style: ElevatedButton.styleFrom(
                               backgroundColor: HorrorColors.crimson,
                               foregroundColor: HorrorColors.fogWhite,
@@ -457,7 +457,7 @@ class _HostScreenState extends ConsumerState<HostScreen> {
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(10),
                                 side: BorderSide(
-                                  color: _playerNames.length >= 2
+                                  color: _playerNames.length >= kMinPlayers
                                       ? HorrorColors.bloodRed
                                       : Colors.transparent,
                                   width: 1.5,
