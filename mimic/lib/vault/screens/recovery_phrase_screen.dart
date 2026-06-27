@@ -82,12 +82,13 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
     try {
       final crypto = ref.read(vaultCryptoProvider);
       await crypto.storeRecoveryBlob(_generatedWords);
-      await ref.read(lockoutServiceProvider).reset();
+      if (!mounted) return;
       setState(() {
         _step = 3;
         _errorMessage = null;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _errorMessage = 'Failed to save recovery phrase: $e';
       });

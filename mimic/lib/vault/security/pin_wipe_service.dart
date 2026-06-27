@@ -27,6 +27,13 @@ class PinWipeService {
     await _platformService.secureDelete('vault_salt');
     await _platformService.secureDelete('vault_pin');
     await _platformService.secureDelete('wrong_attempts');
+    await _platformService.secureDelete('master_key_wrapped');
+    await _platformService.secureDelete('recovery_blob');
+    await _platformService.secureDelete('recovery_salt');
+    await _platformService.secureDelete('lockout_set_wall');
+    await _platformService.secureDelete('lockout_set_elapsed');
+    await _platformService.secureDelete('lockout_duration_ms');
+    await _platformService.secureDelete('vault_setup_completed');
     await _biometricUnlockStore.wipeAll();
     
     // Deleting encrypted files and databases from filesystem

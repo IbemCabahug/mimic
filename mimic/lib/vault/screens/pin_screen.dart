@@ -129,6 +129,47 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     await _authenticate(secret);
   }
 
+  Future<void> _createVault(String pin) async {
+    setState(() => _isLoading = true);
+    final navigator = Navigator.of(context);
+    try {
+      await _crypto.initialize(pin);
+      
+      if (mounted) {
+        setState(() {
+          _error = null;
+          _wrongAttempts = 0;
+          _remainingLockout = Duration.zero;
+        });
+        await ref.read(lockoutServiceProvider).reset();
+
+        PanicMode().init(context, ref);
+        AutoLock().init(context, ref);
+
+        navigator.pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => RecoveryPhraseScreen(
+              forcedSetup: true,
+              migrateAfter: _crypto.needsHardwareMigration,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = 'Couldn\'t create vault, please try again';
+          _isConfirming = false;
+          _firstEnteredPin = '';
+          _isLoading = false;
+        });
+        _pinController.clear();
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
   Future<void> _authenticate([String? overridePin]) async {
     final lockoutService = ref.read(lockoutServiceProvider);
     final remaining = await lockoutService.remainingLockout();
@@ -170,6 +211,10 @@ class _PinScreenState extends ConsumerState<PinScreen> {
             _firstEnteredPin = '';
           });
           _pinController.clear();
+          return;
+        } else {
+          // Explicit return path for vault creation to avoid fall-through
+          _createVault(pin);
           return;
         }
       }

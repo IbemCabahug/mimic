@@ -8,7 +8,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/vault/screens/pin_screen.dart';
 import 'package:mimic/vault/security/lockout_service.dart';
 import 'package:mimic/vault/security/duress_service.dart';
-import 'package:mimic/vault/screens/pin_screen.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/security/auto_lock.dart';
@@ -43,6 +42,17 @@ class FakePlatformService implements PlatformService {
 
   @override
   Future<File> resolveVaultFile(String path) async => throw UnimplementedError();
+}
+
+class ThrowingFakeKeystoreService implements KeystoreService {
+  @override
+  Future<void> ensureKey() async {}
+  @override
+  Future<String> wrap(String base64Data) async => throw Exception('Simulated wrap failure');
+  @override
+  Future<String> unwrap(String base64Data) async => throw Exception('Simulated unwrap failure');
+  @override
+  Future<void> deleteKey() async {}
 }
 
 void main() {
@@ -217,5 +227,51 @@ void main() {
     expect(fakePlatform.store['lockout_set_wall'], isNull);
     expect(fakePlatform.intruderStorageUntouched, isTrue); 
   });
-}
 
+  testWidgets('PinScreen Create Mode initialize throw does not write lockout keys', (WidgetTester tester) async {
+    final fakePlatform = FakePlatformService();
+    // Use a throwing keystore so initialize() fails
+    final crypto = VaultCrypto(fakePlatform, ThrowingFakeKeystoreService());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          vaultCryptoProvider.overrideWith((ref) => crypto),
+        ],
+        child: MaterialApp(
+          initialRoute: '/vault-pin',
+          routes: {
+            '/vault-pin': (_) => const PinScreen(),
+            '/vault-enter-recovery': (_) => const Scaffold(body: Text('ENTER_RECOVERY_SCREEN')),
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Verify Create Mode
+    expect(find.text('Create PIN'), findsWidgets);
+
+    // Enter PIN once
+    await tester.enterText(find.byType(TextField), '1234');
+    await tester.tap(find.byType(ElevatedButton));
+    await tester.pumpAndSettle();
+    expect(find.text('Confirm PIN'), findsWidgets);
+
+    // Enter PIN again (confirm)
+    await tester.enterText(find.byType(TextField), '1234');
+    await tester.tap(find.byType(ElevatedButton));
+    await tester.pumpAndSettle();
+
+    // Verify error is creation-specific, NOT "Invalid PIN"
+    expect(find.text('Couldn\'t create vault, please try again'), findsOneWidget);
+
+    // Verify it did not write lockout keys or wrong_attempts
+    expect(fakePlatform.store['wrong_attempts'], isNull);
+    expect(fakePlatform.store['lockout_set_wall'], isNull);
+
+    // Verify it reset state to Create PIN again
+    expect(find.text('Create PIN'), findsWidgets);
+  });
+}

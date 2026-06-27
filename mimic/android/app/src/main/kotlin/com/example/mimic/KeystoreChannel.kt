@@ -65,26 +65,38 @@ class KeystoreChannel : MethodChannel.MethodCallHandler {
     }
 
     private fun wrapKey(call: MethodCall, result: MethodChannel.Result) {
+        val data = call.argument<ByteArray>("bytes") ?: return result.error("INVALID_ARG", "bytes required", null)
         try {
-            val data = call.argument<ByteArray>("bytes") ?: return result.error("INVALID_ARG", "bytes required", null)
-            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-            val secretKey = keyStore.getKey(KEY_ALIAS, null) as? SecretKey
-                ?: return result.error("KEY_INVALID", "Key missing", null)
-
-            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-            cipher.init(Cipher.ENCRYPT_MODE, secretKey)
-            
-            val iv = cipher.iv
-            val ciphertext = cipher.doFinal(data)
-            
-            val combined = ByteArray(iv.size + ciphertext.size)
-            System.arraycopy(iv, 0, combined, 0, iv.size)
-            System.arraycopy(ciphertext, 0, combined, iv.size, ciphertext.size)
-            
-            result.success(combined)
+            result.success(performWrap(data))
         } catch (e: Exception) {
-            result.error("WRAP_ERROR", e.message, null)
+            // [REQUIRES ON-DEVICE VERIFICATION] Fall back to TEE if StrongBox throws on wrap
+            try {
+                val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+                keyStore.deleteEntry(KEY_ALIAS)
+                generateKey(false) // Fall back to TEE
+                result.success(performWrap(data))
+            } catch (fallbackEx: Exception) {
+                result.error("WRAP_ERROR", fallbackEx.message, null)
+            }
         }
+    }
+
+    private fun performWrap(data: ByteArray): ByteArray {
+        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        val secretKey = keyStore.getKey(KEY_ALIAS, null) as? SecretKey
+            ?: throw Exception("Key missing")
+
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+        
+        val iv = cipher.iv
+        val ciphertext = cipher.doFinal(data)
+        
+        val combined = ByteArray(iv.size + ciphertext.size)
+        System.arraycopy(iv, 0, combined, 0, iv.size)
+        System.arraycopy(ciphertext, 0, combined, iv.size, ciphertext.size)
+        
+        return combined
     }
 
     private fun unwrapKey(call: MethodCall, result: MethodChannel.Result) {

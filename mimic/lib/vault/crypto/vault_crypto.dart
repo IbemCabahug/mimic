@@ -135,17 +135,29 @@ class VaultCrypto extends ChangeNotifier {
     }
 
     salt = _generateSecureRandomBytes(16);
-    await _platformService.secureWrite(_storageKeySalt, base64Encode(salt));
-    final candidateKey = await _deriveKey(pin, base64Encode(salt));
-    await _platformService.secureWrite(
-        _storageKeyPinHash, _verifierForKey(candidateKey));
-    // New vault: the data key (DEK) starts as the PIN-derived key, then is
-    // wrapped by the PIN-derived KEK so the PIN can change without data loss.
+    final saltBase64 = base64Encode(salt);
+    final candidateKey = await _deriveKey(pin, saltBase64);
+    final hashVerifier = _verifierForKey(candidateKey);
     final kek = _deriveKek(candidateKey);
     final innerWrapped = _wrapKey(candidateKey, kek);
+    
+    // Do hardware wrap first. If this throws, nothing is persisted.
     final hwWrapped = await _keystoreService.wrap(innerWrapped);
-    await _platformService.secureWrite(
-        _storageKeyMasterWrapped, 'hw1:$hwWrapped');
+
+    // Clear stale vault keys to avoid AutoBackup corruption
+    await _platformService.secureDelete(_storageKeyMasterWrapped);
+    await _platformService.secureDelete('recovery_blob');
+    await _platformService.secureDelete('recovery_salt');
+    await _platformService.secureDelete('wrong_attempts');
+    await _platformService.secureDelete('lockout_set_wall');
+    await _platformService.secureDelete('lockout_set_elapsed');
+    await _platformService.secureDelete('lockout_duration_ms');
+
+    // Persist new vault data atomically
+    await _platformService.secureWrite(_storageKeySalt, saltBase64);
+    await _platformService.secureWrite(_storageKeyPinHash, hashVerifier);
+    await _platformService.secureWrite(_storageKeyMasterWrapped, 'hw1:$hwWrapped');
+    
     _derivedKey = candidateKey;
     _needsHardwareMigration = false;
     _hasRecoveryPhrase = false;
