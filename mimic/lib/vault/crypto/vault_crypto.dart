@@ -210,29 +210,37 @@ class VaultCrypto extends ChangeNotifier {
     lock();
   }
 
+  bool _isStoringRecovery = false;
+
   Future<void> storeRecoveryBlob([List<String>? recoveryWords]) async {
-    if (!_isUnlocked || _derivedKey == null) {
-      throw Exception('Vault is locked; cannot store recovery blob');
+    if (_isStoringRecovery) return;
+    _isStoringRecovery = true;
+    try {
+      if (!_isUnlocked || _derivedKey == null) {
+        throw Exception('Vault is locked; cannot store recovery blob');
+      }
+
+      final words = recoveryWords ?? _recoveryWords;
+      if (words == null || words.length != 12) {
+        throw Exception('Invalid or missing recovery phrase');
+      }
+
+      final salt = _generateSecureRandomBytes(16);
+      final recoveryKey = RecoveryPhrase.deriveKey(words, salt);
+      final iv = _generateSecureRandomBytes(_ivLength);
+      final cipher = _createCipher(recoveryKey, iv, true);
+      final encryptedMasterKey = cipher.process(_derivedKey!);
+
+      final blob = Uint8List(iv.length + encryptedMasterKey.length);
+      blob.setRange(0, iv.length, iv);
+      blob.setRange(iv.length, blob.length, encryptedMasterKey);
+
+      await _platformService.secureWrite('recovery_blob', base64Encode(blob));
+      await _platformService.secureWrite('recovery_salt', base64Encode(salt));
+      _hasRecoveryPhrase = true;
+    } finally {
+      _isStoringRecovery = false;
     }
-
-    final words = recoveryWords ?? _recoveryWords;
-    if (words == null || words.length != 12) {
-      throw Exception('Invalid or missing recovery phrase');
-    }
-
-    final salt = _generateSecureRandomBytes(16);
-    final recoveryKey = RecoveryPhrase.deriveKey(words, salt);
-    final iv = _generateSecureRandomBytes(_ivLength);
-    final cipher = _createCipher(recoveryKey, iv, true);
-    final encryptedMasterKey = cipher.process(_derivedKey!);
-
-    final blob = Uint8List(iv.length + encryptedMasterKey.length);
-    blob.setRange(0, iv.length, iv);
-    blob.setRange(iv.length, blob.length, encryptedMasterKey);
-
-    await _platformService.secureWrite('recovery_blob', base64Encode(blob));
-    await _platformService.secureWrite('recovery_salt', base64Encode(salt));
-    _hasRecoveryPhrase = true;
   }
 
   Future<void> changePin(String newPin) async {

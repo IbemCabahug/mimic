@@ -1,6 +1,5 @@
 import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'dart:io';
-// test/vault/screens/recovery_phrase_screen_test.dart
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -34,12 +33,32 @@ class FakePlatformService implements PlatformService {
   Future<File> resolveVaultFile(String path) async => throw UnimplementedError();
 }
 
+class SpyVaultCrypto extends VaultCrypto {
+  int storeRecoveryBlobCalls = 0;
+  int migrateCalls = 0;
+
+  SpyVaultCrypto(PlatformService platformService, KeystoreService keystoreService) 
+      : super(platformService, keystoreService);
+
+  @override
+  Future<void> storeRecoveryBlob([List<String>? recoveryWords]) async {
+    storeRecoveryBlobCalls++;
+    await Future.delayed(const Duration(milliseconds: 50));
+    await super.storeRecoveryBlob(recoveryWords);
+  }
+
+  @override
+  Future<void> migrateToHardwareBinding() async {
+    migrateCalls++;
+    await Future.delayed(const Duration(milliseconds: 50));
+  }
+}
+
 void main() {
   testWidgets('RecoveryPhraseScreen UI Flow Test', (WidgetTester tester) async {
     final fakePlatform = FakePlatformService();
     final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
     
-    // Unlock the vault first since storeRecoveryBlob requires unlocked state
     await crypto.initialize('pin1234');
 
     await tester.pumpWidget(
@@ -54,36 +73,28 @@ void main() {
       ),
     );
 
-    // --- STEP 1: Generate phrase ---
     expect(find.text('Backup Your Vault'), findsOneWidget);
     expect(find.text('Generate Recovery Phrase'), findsOneWidget);
 
-    // Tap generate
     await tester.tap(find.text('Generate Recovery Phrase'));
     await tester.pumpAndSettle();
 
-    // Verify 12 words are shown (their numbered indicators 1. to 12. should exist)
     expect(find.text('1. '), findsOneWidget);
     expect(find.text('12. '), findsOneWidget);
     expect(find.text("I've Written Them Down"), findsOneWidget);
 
-    // Tap written down button to proceed to Step 2 (Confirm)
     final writtenDownBtn = find.text("I've Written Them Down");
     await tester.ensureVisible(writtenDownBtn);
     await tester.pumpAndSettle();
     await tester.tap(writtenDownBtn);
     await tester.pumpAndSettle();
 
-    // --- STEP 2: Confirm phrase ---
     expect(find.text('Confirm Recovery Phrase'), findsOneWidget);
     expect(find.text('Confirm & Save'), findsOneWidget);
 
-    // Find the 3 textfields
     final textFields = find.byType(TextField);
     expect(textFields, findsNWidgets(3));
 
-    // Get the word numbers from the textfield labels
-    // E.g. "Enter word #4"
     final List<int> requestedIndices = [];
     for (int i = 0; i < 3; i++) {
       final TextField textFieldWidget = tester.widget<TextField>(textFields.at(i));
@@ -96,7 +107,6 @@ void main() {
 
     expect(requestedIndices.length, equals(3));
 
-    // Try entering incorrect words first
     await tester.enterText(textFields.at(0), 'invalidword1');
     await tester.enterText(textFields.at(1), 'invalidword2');
     await tester.enterText(textFields.at(2), 'invalidword3');
@@ -106,15 +116,11 @@ void main() {
     await tester.tap(confirmSaveBtn);
     await tester.pumpAndSettle();
 
-    // Verify error message is shown
     expect(find.text('Incorrect words. Please verify your recovery phrase.'), findsOneWidget);
 
-    // Get the correct words
     final state = tester.state<RecoveryPhraseScreenState>(find.byType(RecoveryPhraseScreen));
-    // Since we need to access _generatedWords, let's retrieve them
     final List<String> generatedWords = state.generatedWords;
     
-    // Enter the correct words
     await tester.enterText(textFields.at(0), generatedWords[requestedIndices[0]]);
     await tester.enterText(textFields.at(1), generatedWords[requestedIndices[1]]);
     await tester.enterText(textFields.at(2), generatedWords[requestedIndices[2]]);
@@ -124,13 +130,125 @@ void main() {
     await tester.tap(confirmSaveBtn);
     await tester.pumpAndSettle();
 
-    // --- STEP 3: Saved successfully ---
     expect(find.text('Recovery Phrase Saved!'), findsOneWidget);
     expect(find.text('Done'), findsOneWidget);
 
-    // Verify blob is stored in fake secure storage
     expect(fakePlatform.store.containsKey('recovery_blob'), isTrue);
     expect(fakePlatform.store.containsKey('recovery_salt'), isTrue);
   });
-}
 
+  testWidgets('Rapid double-tap Confirm & Save calls storeRecoveryBlob exactly once', (WidgetTester tester) async {
+    final fakePlatform = FakePlatformService();
+    final crypto = SpyVaultCrypto(fakePlatform, FakeKeystoreService());
+    await crypto.initialize('pin1234');
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          vaultCryptoProvider.overrideWith((ref) => crypto),
+        ],
+        child: const MaterialApp(
+          home: RecoveryPhraseScreen(),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Generate Recovery Phrase'));
+    await tester.pumpAndSettle();
+    
+    await tester.ensureVisible(find.text("I've Written Them Down"));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text("I've Written Them Down"));
+    await tester.pumpAndSettle();
+
+    final textFields = find.byType(TextField);
+    final List<int> requestedIndices = [];
+    for (int i = 0; i < 3; i++) {
+      final TextField tf = tester.widget<TextField>(textFields.at(i));
+      final match = RegExp(r'#(\d+)').firstMatch(tf.decoration?.labelText ?? '');
+      if (match != null) {
+        requestedIndices.add(int.parse(match.group(1)!) - 1);
+      }
+    }
+    final state = tester.state<RecoveryPhraseScreenState>(find.byType(RecoveryPhraseScreen));
+    final generatedWords = state.generatedWords;
+    
+    await tester.enterText(textFields.at(0), generatedWords[requestedIndices[0]]);
+    await tester.enterText(textFields.at(1), generatedWords[requestedIndices[1]]);
+    await tester.enterText(textFields.at(2), generatedWords[requestedIndices[2]]);
+
+    final confirmBtn = find.text('Confirm & Save');
+    await tester.ensureVisible(confirmBtn);
+    await tester.pumpAndSettle();
+
+    for (int i = 0; i < 5; i++) {
+      await tester.tap(confirmBtn);
+    }
+    
+    await tester.pumpAndSettle();
+
+    expect(crypto.storeRecoveryBlobCalls, equals(1));
+    expect(find.text('Recovery Phrase Saved!'), findsOneWidget);
+  });
+
+  testWidgets('Rapid double-tap Done with forcedSetup+migrateAfter calls migrateToHardwareBinding exactly once', (WidgetTester tester) async {
+    final fakePlatform = FakePlatformService();
+    final crypto = SpyVaultCrypto(fakePlatform, FakeKeystoreService());
+    await crypto.initialize('pin1234');
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          vaultCryptoProvider.overrideWith((ref) => crypto),
+        ],
+        child: MaterialApp(
+          home: const RecoveryPhraseScreen(forcedSetup: true, migrateAfter: true),
+          routes: {
+            '/vault-home': (context) => const SizedBox(),
+          },
+        ),
+      ),
+    );
+
+    final state = tester.state<RecoveryPhraseScreenState>(find.byType(RecoveryPhraseScreen));
+    await tester.tap(find.text('Generate Recovery Phrase'));
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text("I've Written Them Down"));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text("I've Written Them Down"));
+    await tester.pumpAndSettle();
+
+    final textFields = find.byType(TextField);
+    final List<int> requestedIndices = [];
+    for (int i = 0; i < 3; i++) {
+      final TextField tf = tester.widget<TextField>(textFields.at(i));
+      final match = RegExp(r'#(\d+)').firstMatch(tf.decoration?.labelText ?? '');
+      if (match != null) {
+        requestedIndices.add(int.parse(match.group(1)!) - 1);
+      }
+    }
+    final generatedWords = state.generatedWords;
+    
+    await tester.enterText(textFields.at(0), generatedWords[requestedIndices[0]]);
+    await tester.enterText(textFields.at(1), generatedWords[requestedIndices[1]]);
+    await tester.enterText(textFields.at(2), generatedWords[requestedIndices[2]]);
+
+    await tester.ensureVisible(find.text('Confirm & Save'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Confirm & Save'));
+    await tester.pumpAndSettle();
+
+    final doneBtn = find.text('Done');
+    expect(doneBtn, findsOneWidget);
+
+    for (int i = 0; i < 5; i++) {
+      await tester.tap(doneBtn);
+    }
+    
+    await tester.pumpAndSettle();
+
+    expect(crypto.migrateCalls, equals(1));
+  });
+}

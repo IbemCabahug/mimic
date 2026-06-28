@@ -28,6 +28,8 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
   List<int> _confirmIndices = [];
   final List<TextEditingController> _confirmControllers = List.generate(3, (_) => TextEditingController());
   String? _errorMessage;
+  bool _isSaving = false;
+  bool _isFinishing = false;
 
   @override
   void dispose() {
@@ -62,6 +64,7 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
   }
 
   void _verifyConfirmation() async {
+    if (_isSaving) return;
     bool allValid = true;
     for (int i = 0; i < 3; i++) {
       final enteredWord = _confirmControllers[i].text.trim().toLowerCase();
@@ -79,6 +82,7 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
       return;
     }
 
+    setState(() => _isSaving = true);
     try {
       final crypto = ref.read(vaultCryptoProvider);
       await crypto.storeRecoveryBlob(_generatedWords);
@@ -92,6 +96,8 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
       setState(() {
         _errorMessage = 'Failed to save recovery phrase: $e';
       });
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
@@ -344,7 +350,7 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
         ],
         const SizedBox(height: 32),
         ElevatedButton(
-          onPressed: _verifyConfirmation,
+          onPressed: _isSaving ? null : _verifyConfirmation,
           style: ElevatedButton.styleFrom(
             backgroundColor: VaultColors.accent,
             foregroundColor: Colors.white,
@@ -352,10 +358,19 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
             elevation: 0,
           ),
-          child: const Text(
-            'Confirm & Save',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
-          ),
+          child: _isSaving
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text(
+                  'Confirm & Save',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+                ),
         ),
         const SizedBox(height: 12),
         TextButton(
@@ -447,11 +462,14 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
         ),
         const SizedBox(height: 48),
         ElevatedButton(
-          onPressed: () {
+          onPressed: _isFinishing ? null : () async {
+            if (_isFinishing) return;
+            setState(() => _isFinishing = true);
             if (widget.forcedSetup) {
               if (widget.migrateAfter) {
-                ref.read(vaultCryptoProvider).migrateToHardwareBinding();
+                await ref.read(vaultCryptoProvider).migrateToHardwareBinding();
               }
+              if (!mounted) return;
               Navigator.of(context).pushReplacementNamed('/vault-home');
             } else {
               Navigator.of(context).pop();
