@@ -7,7 +7,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:pointycastle/export.dart';
+import 'package:mimic/vault/crypto/vault_kdf.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/core/services/platform_service.dart';
 
@@ -52,19 +52,7 @@ class FakePlatformService implements PlatformService {
   Future<File> resolveVaultFile(String path) async => throw UnimplementedError();
 }
 
-// ---------------------------------------------------------------------------
-// Standalone PBKDF2 helper — mirrors VaultCrypto._deriveKey exactly so we can
-// test key derivation properties (tests 1-3) without accessing private members.
-// ---------------------------------------------------------------------------
-Uint8List deriveKeyStandalone(String pin, String saltBase64) {
-  const keyLength = 32;
-  const iterations = 100000;
-  final salt = base64Decode(saltBase64);
-  final pinBytes = Uint8List.fromList(utf8.encode(pin));
-  final pbkdf2 = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64));
-  pbkdf2.init(Pbkdf2Parameters(salt, iterations, keyLength));
-  return pbkdf2.process(pinBytes);
-}
+
 
 /// Generates a random base64-encoded salt, matching VaultCrypto's internal format.
 String generateTestSalt() {
@@ -84,8 +72,8 @@ void main() {
     test('1 — same PIN + same salt produces the same key every time', () {
       final salt = generateTestSalt();
 
-      final key1 = deriveKeyStandalone('5678', salt);
-      final key2 = deriveKeyStandalone('5678', salt);
+      final key1 = deriveVaultPinKek('5678', salt);
+      final key2 = deriveVaultPinKek('5678', salt);
 
       expect(key1, equals(key2),
           reason: 'PBKDF2 must be deterministic for identical inputs');
@@ -96,8 +84,8 @@ void main() {
     test('2 — different PINs produce different keys', () {
       final salt = generateTestSalt();
 
-      final keyA = deriveKeyStandalone('1111', salt);
-      final keyB = deriveKeyStandalone('9999', salt);
+      final keyA = deriveVaultPinKek('1111', salt);
+      final keyB = deriveVaultPinKek('9999', salt);
 
       expect(keyA, isNot(equals(keyB)),
           reason: 'Different PINs must derive different keys');
@@ -112,11 +100,30 @@ void main() {
       expect(salt1, isNot(equals(salt2)),
           reason: 'Test setup: salts must differ');
 
-      final key1 = deriveKeyStandalone('1234', salt1);
-      final key2 = deriveKeyStandalone('1234', salt2);
+      final key1 = deriveVaultPinKek('1234', salt1);
+      final key2 = deriveVaultPinKek('1234', salt2);
 
       expect(key1, isNot(equals(key2)),
           reason: 'Same PIN with different salts must derive different keys');
+    });
+
+    test('3b — fixed backward-compatibility vector for vault PIN-derived KEK',
+        () {
+      final result =
+          deriveVaultPinKek('246810', 'AAECAwQFBgcICQoLDA0ODw==');
+
+      final expected = Uint8List.fromList([
+        180, 129, 108, 27, 8, 133, 44, 134,
+        39, 208, 226, 161, 83, 20, 243, 98,
+        139, 248, 14, 113, 250, 98, 63, 41,
+        228, 3, 43, 234, 148, 211, 211, 28,
+      ]);
+
+      expect(result.length, equals(32),
+          reason: 'PIN-derived KEK must remain 32 bytes');
+      expect(result, equals(expected),
+          reason:
+              'Changing any derived byte would break compatibility with existing wrapped vault keys');
     });
   });
 
@@ -256,7 +263,7 @@ void main() {
 
       // Derive the key independently so we know what to look for.
       final saltB64 = fakePlatform.store['vault_salt']!;
-      final rawKey = deriveKeyStandalone('mySecretPin', saltB64);
+      final rawKey = deriveVaultPinKek('mySecretPin', saltB64);
       final rawKeyB64 = base64Encode(rawKey);
       final rawKeyHex = rawKey
           .map((b) => b.toRadixString(16).padLeft(2, '0'))

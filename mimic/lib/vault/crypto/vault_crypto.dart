@@ -7,6 +7,8 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pointycastle/export.dart';
+import 'vault_kdf.dart';
+
 import '../../core/services/platform_service.dart';
 import 'recovery_phrase.dart';
 import 'keystore_service.dart';
@@ -34,7 +36,7 @@ class VaultCrypto extends ChangeNotifier {
 
   static const int _keyLength = 32;
   static const int _ivLength = 16;
-  static const int _pbkdf2Iterations = 100000;
+
   static const String _storageKeySalt = 'vault_salt';
   static const String _storageKeyPinHash = 'vault_pin_hash';
   static const String _storageKeyMasterWrapped = 'master_key_wrapped';
@@ -924,11 +926,8 @@ class VaultCrypto extends ChangeNotifier {
   }
 
   Future<Uint8List> _deriveKey(String pin, String saltBase64) async {
-    final salt = base64Decode(saltBase64);
-    final pinBytes = Uint8List.fromList(utf8.encode(pin));
-    final pbkdf2 = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64));
-    pbkdf2.init(Pbkdf2Parameters(salt, _pbkdf2Iterations, _keyLength));
-    return pbkdf2.process(pinBytes);
+    // Delegates to the production KDF helper.
+    return deriveVaultPinKek(pin, saltBase64);
   }
 
   BlockCipher _createCipher(Uint8List key, Uint8List iv, bool forEncryption) {
