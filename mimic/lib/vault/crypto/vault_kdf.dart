@@ -7,11 +7,29 @@ import 'package:pointycastle/export.dart';
 /// Public constant for the current PBKDF2 iteration count.
 const int kPbkdf2Iterations = 100000;
 
+/// FROZEN: PBKDF2 iteration count for recovery phrases.
+/// Changing this iteration count permanently destroys existing recovery phrases.
+/// It can only move once the recovery record format carries a version and iteration field.
+const int kRecoveryPhraseIterations = 100000;
+
+/// FROZEN: PBKDF2 iteration count for duress PINs.
+/// Changing this iteration count permanently destroys existing duress PINs.
+/// It can only move once the duress record format carries a version and iteration field.
+const int kDuressIterations = 100000;
+
+/// FROZEN: v2 verifier records were always written at exactly this count.
+/// This is a historical fact about bytes already on disk, not a policy knob.
+/// Changing it locks out every vault still holding a v2 record.
+const int kLegacyV2Iterations = 100000;
+
 /// Public constant for the derived key length in bytes (AES-256).
 const int kDerivedKeyLength = 32;
 
-/// Maximum allowable PBKDF2 iterations for defensive bounds checking (10 million).
-const int kMaxPbkdf2Iterations = 10000000;
+/// Minimum allowable PBKDF2 iterations for PIN verifiers (floor).
+const int kMinPbkdf2Iterations = 100000;
+
+/// Maximum allowable PBKDF2 iterations for PIN verifiers (ceiling).
+const int kMaxPbkdf2Iterations = 1000000;
 
 /// Typed exception thrown when a PIN verifier string is malformed or uses an unsupported format.
 class InvalidVerifierException implements Exception {
@@ -44,7 +62,7 @@ class ParsedVerifier {
 /// - 'v2:<base64 sha256 of key>' (treated as 100,000 iterations)
 ///
 /// Fails closed with [InvalidVerifierException] for any malformed, missing,
-/// non-numeric, non-positive, absurdly large, or unsupported verifier string.
+/// non-numeric, out-of-bounds, or unsupported verifier string.
 ParsedVerifier parseVerifier(String storedHash) {
   if (storedHash.startsWith('v3:')) {
     final parts = storedHash.split(':');
@@ -59,14 +77,9 @@ ParsedVerifier parseVerifier(String storedHash) {
         'Malformed v3 verifier: non-numeric iteration count "${parts[1]}"',
       );
     }
-    if (iterations <= 0) {
+    if (iterations < kMinPbkdf2Iterations || iterations > kMaxPbkdf2Iterations) {
       throw InvalidVerifierException(
-        'Malformed v3 verifier: iteration count must be positive, got $iterations',
-      );
-    }
-    if (iterations > kMaxPbkdf2Iterations) {
-      throw InvalidVerifierException(
-        'Malformed v3 verifier: iteration count $iterations exceeds maximum allowable ($kMaxPbkdf2Iterations)',
+        'Malformed v3 verifier: iteration count $iterations out of allowable bounds [$kMinPbkdf2Iterations, $kMaxPbkdf2Iterations]',
       );
     }
     if (parts[2].isEmpty) {
@@ -89,7 +102,7 @@ ParsedVerifier parseVerifier(String storedHash) {
     }
     return ParsedVerifier(
       version: 2,
-      iterations: kPbkdf2Iterations,
+      iterations: kLegacyV2Iterations,
       digestBase64: parts[1],
       raw: storedHash,
     );

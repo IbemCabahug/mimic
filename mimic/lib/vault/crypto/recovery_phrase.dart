@@ -33,7 +33,7 @@ class RecoveryPhrase {
     final mnemonicBytes = Uint8List.fromList(utf8.encode(mnemonic));
     
     final pbkdf2 = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64));
-    pbkdf2.init(Pbkdf2Parameters(salt, kPbkdf2Iterations, kDerivedKeyLength));
+    pbkdf2.init(Pbkdf2Parameters(salt, kRecoveryPhraseIterations, kDerivedKeyLength));
     
     return pbkdf2.process(mnemonicBytes);
   }

@@ -494,10 +494,10 @@ void main() {
     });
 
     test('4. A v3: record with custom iteration count derives using the record value', () async {
-      const customIterations = 42;
+      const customIterations = 250000;
       final salt = generateTestSalt();
 
-      // Key derived with custom iteration count (42)
+      // Key derived with custom iteration count (250000)
       final customKey = deriveVaultPinKek('customPin', salt, customIterations);
       // Key derived with standard constant (100000)
       final standardKey = deriveVaultPinKek('customPin', salt, kPbkdf2Iterations);
@@ -537,12 +537,15 @@ void main() {
       expect(decrypted, equals(testPlaintext));
     });
 
-    test('5. Malformed v3 records fail closed', () async {
+    test('5. Malformed and out-of-bounds v3 records fail closed', () async {
       final badRecords = [
         'v3:',
         'v3:abc:xxx',
         'v3:0:xxx',
         'v3:-1:xxx',
+        'v3:42:xxx',
+        'v3:99999:xxx',
+        'v3:1000001:xxx',
         'v3:999999999999999999:xxx',
         'v3:100000:',
         'unknown:format:123',
@@ -626,6 +629,103 @@ void main() {
 
       final isNotDuress = await duressService.isFakePin('1234');
       expect(isNotDuress, isFalse, reason: 'DuressService must reject non-fake PIN');
+    });
+
+    test('8. Recovery phrase generation and consumption uses kRecoveryPhraseIterations', () async {
+      final words = [
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'about'
+      ];
+      final salt = Uint8List.fromList(List.generate(16, (i) => i));
+
+      // Derive key via RecoveryPhrase
+      final key1 = RecoveryPhrase.deriveKey(words, salt);
+
+      // Verify it matches PBKDF2 derived specifically with kRecoveryPhraseIterations (100000)
+      final cleanWords = RecoveryPhrase.normalizeWords(words);
+      final mnemonic = cleanWords.join(' ');
+      final mnemonicBytes = Uint8List.fromList(utf8.encode(mnemonic));
+      final pbkdf2 = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64));
+      pbkdf2.init(Pbkdf2Parameters(salt, kRecoveryPhraseIterations, kDerivedKeyLength));
+      final expectedKey = pbkdf2.process(mnemonicBytes);
+
+      expect(key1, equals(expectedKey),
+          reason: 'Recovery phrase key must be derived using kRecoveryPhraseIterations');
+      expect(key1.length, equals(kDerivedKeyLength));
+    });
+
+    test('9. Duress PIN set and verification matches using kDuressIterations', () async {
+      final duressPlatform = FakePlatformService();
+      final duressService = DuressService(duressPlatform);
+
+      await duressService.setFakePin('8888');
+      final storedHash = duressPlatform.store['duress_pin_hash']!;
+      final storedSalt = duressPlatform.store['duress_pin_salt']!;
+
+      // Verify stored verifier was derived specifically using kDuressIterations
+      final pinBytes = Uint8List.fromList(utf8.encode('8888'));
+      final saltBytes = Uint8List.fromList(utf8.encode(storedSalt));
+      final pbkdf2 = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64))
+        ..init(Pbkdf2Parameters(saltBytes, kDuressIterations, kDerivedKeyLength));
+      final expectedDerived = pbkdf2.process(pinBytes);
+      final expectedHash = 'v2:${base64Encode(expectedDerived)}';
+
+      expect(storedHash, equals(expectedHash),
+          reason: 'Duress verifier must be generated using kDuressIterations');
+
+      final isMatch = await duressService.isFakePin('8888');
+      expect(isMatch, isTrue);
+      final isWrong = await duressService.isFakePin('1111');
+      expect(isWrong, isFalse);
+    });
+
+    test('10. Boundary tests: floor and ceiling iteration counts are accepted inclusively', () {
+      const dummyDigest = 'dGVzdGRpZ2VzdA==';
+
+      // Floor (100000) is accepted
+      final floorVerifier = 'v3:$kMinPbkdf2Iterations:$dummyDigest';
+      final parsedFloor = parseVerifier(floorVerifier);
+      expect(parsedFloor.version, equals(3));
+      expect(parsedFloor.iterations, equals(100000));
+      expect(parsedFloor.digestBase64, equals(dummyDigest));
+
+      // Ceiling (1000000) is accepted
+      final ceilingVerifier = 'v3:$kMaxPbkdf2Iterations:$dummyDigest';
+      final parsedCeiling = parseVerifier(ceilingVerifier);
+      expect(parsedCeiling.version, equals(3));
+      expect(parsedCeiling.iterations, equals(1000000));
+      expect(parsedCeiling.digestBase64, equals(dummyDigest));
+
+      // Just below floor (99999) is rejected
+      expect(
+        () => parseVerifier('v3:99999:$dummyDigest'),
+        throwsA(isA<InvalidVerifierException>()),
+      );
+
+      // Just above ceiling (1000001) is rejected
+      expect(
+        () => parseVerifier('v3:1000001:$dummyDigest'),
+        throwsA(isA<InvalidVerifierException>()),
+      );
+    });
+
+    test('11. Parsing v2: verifier yields iterations == kLegacyV2Iterations', () {
+      const dummyDigest = 'dGVzdGRpZ2VzdA==';
+      final v2Verifier = 'v2:$dummyDigest';
+
+      final parsed = parseVerifier(v2Verifier);
+      expect(parsed.version, equals(2));
+      expect(parsed.iterations, equals(kLegacyV2Iterations),
+          reason: 'Legacy v2 records must parse to kLegacyV2Iterations, never kPbkdf2Iterations');
+      expect(parsed.digestBase64, equals(dummyDigest));
+    });
+
+    test('12. Regression guard: kLegacyV2Iterations is strictly frozen at 100000', () {
+      // If this assertion ever fails, every legacy v2 vault will derive at the wrong
+      // iteration count, mismatch its stored verifier, and lock the user out permanently.
+      expect(kLegacyV2Iterations, equals(100000),
+          reason: 'kLegacyV2Iterations is a historical constant and must remain 100000 forever');
     });
   });
 }

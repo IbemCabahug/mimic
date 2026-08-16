@@ -22,7 +22,7 @@ class DuressService {
     final pinBytes = Uint8List.fromList(utf8.encode(pin));
     final saltBytes = Uint8List.fromList(utf8.encode(salt));
     final pbkdf2 = pc.PBKDF2KeyDerivator(pc.HMac(pc.SHA256Digest(), 64))
-      ..init(pc.Pbkdf2Parameters(saltBytes, kPbkdf2Iterations, kDerivedKeyLength));
+      ..init(pc.Pbkdf2Parameters(saltBytes, kDuressIterations, kDerivedKeyLength));
     final derived = pbkdf2.process(pinBytes);
     return 'v2:${base64Encode(derived)}';
   }

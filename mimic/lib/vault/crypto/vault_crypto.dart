@@ -80,6 +80,8 @@ class VaultCrypto extends ChangeNotifier {
 
   Future<void> initialize(String pin) async {
     if (kIsWeb) {
+      // Web storage is ephemeral/in-memory for mock/testing only (creation/session-setup only).
+      // A fresh random salt and key are generated on each initialize call; no persistent stored record unlock.
       _webKeyStore[_storageKeySalt] = _generateRandomSalt();
       final key = await _deriveKey(pin, _webKeyStore[_storageKeySalt]!);
       _webKeyStore[_storageKeyPinHash] = _verifierForKey(key);
