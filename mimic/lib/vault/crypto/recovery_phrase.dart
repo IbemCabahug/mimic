@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 import 'package:pointycastle/export.dart';
 import 'bip39_wordlist.dart';
+import 'vault_kdf.dart';
 
 class RecoveryPhrase {
   /// Uses dart:math Random.secure to pick 12 random words from kBip39Wordlist
@@ -32,7 +33,7 @@ class RecoveryPhrase {
     final mnemonicBytes = Uint8List.fromList(utf8.encode(mnemonic));
     
     final pbkdf2 = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64));
-    pbkdf2.init(Pbkdf2Parameters(salt, 100000, 32));
+    pbkdf2.init(Pbkdf2Parameters(salt, kPbkdf2Iterations, kDerivedKeyLength));
     
     return pbkdf2.process(mnemonicBytes);
   }

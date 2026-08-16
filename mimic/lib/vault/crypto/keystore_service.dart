@@ -22,9 +22,13 @@ class AndroidKeystoreService implements KeystoreService {
   Future<String> wrap(String base64Data) async {
     if (kIsWeb) return base64Data;
     final bytes = base64Decode(base64Data);
-    final result = await _channel.invokeMethod<Uint8List>('wrap', {'bytes': bytes});
-    if (result == null) throw Exception('Keystore wrap failed');
-    return base64Encode(result);
+    try {
+      final result = await _channel.invokeMethod<Uint8List>('wrap', {'bytes': bytes});
+      if (result == null) throw KeystoreWrapException();
+      return base64Encode(result);
+    } on PlatformException catch (e) {
+      throw KeystoreWrapException(e.message ?? 'Keystore wrap failed');
+    }
   }
 
   @override
@@ -80,4 +84,11 @@ class KeystoreInvalidException implements Exception {
   final String message = "Your device's secure key is unavailable. Restore your vault with your recovery phrase.";
   @override
   String toString() => message;
+}
+
+class KeystoreWrapException implements Exception {
+  final String message;
+  KeystoreWrapException([this.message = 'Keystore wrap failed']);
+  @override
+  String toString() => 'KeystoreWrapException: $message';
 }

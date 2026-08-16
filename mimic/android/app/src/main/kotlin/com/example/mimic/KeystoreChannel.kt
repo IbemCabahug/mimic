@@ -69,15 +69,7 @@ class KeystoreChannel : MethodChannel.MethodCallHandler {
         try {
             result.success(performWrap(data))
         } catch (e: Exception) {
-            // [REQUIRES ON-DEVICE VERIFICATION] Fall back to TEE if StrongBox throws on wrap
-            try {
-                val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-                keyStore.deleteEntry(KEY_ALIAS)
-                generateKey(false) // Fall back to TEE
-                result.success(performWrap(data))
-            } catch (fallbackEx: Exception) {
-                result.error("WRAP_ERROR", fallbackEx.message, null)
-            }
+            result.error("WRAP_ERROR", e.message, null)
         }
     }
 
@@ -132,6 +124,8 @@ class KeystoreChannel : MethodChannel.MethodCallHandler {
     private fun deleteKey(result: MethodChannel.Result) {
         try {
             val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            // Alias deletion is safe here: this is only called during a full vault wipe/reset
+            // when no live wrapped data depends on this key anymore.
             keyStore.deleteEntry(KEY_ALIAS)
             result.success(true)
         } catch (e: Exception) {

@@ -7,8 +7,11 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pointycastle/export.dart';
 import 'package:mimic/vault/crypto/vault_kdf.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
+import 'package:mimic/vault/crypto/recovery_phrase.dart';
+import 'package:mimic/vault/security/duress_service.dart';
 import 'package:mimic/core/services/platform_service.dart';
 
 // ---------------------------------------------------------------------------
@@ -396,6 +399,233 @@ void main() {
     test('recoverWithPhrase returns false if no stored blob exists', () async {
       final success = await crypto.recoverWithPhrase(words);
       expect(success, isFalse);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Group 6: Phase 2A - Versioned PIN verifier & KDF parameters record
+  // -------------------------------------------------------------------------
+  group('Phase 2A - Versioned PIN verifier & KDF parameters record', () {
+    late FakePlatformService fakePlatform;
+    late FakeKeystoreService fakeKeystore;
+    late VaultCrypto crypto;
+
+    setUp(() {
+      fakePlatform = FakePlatformService();
+      fakeKeystore = FakeKeystoreService();
+      crypto = VaultCrypto(fakePlatform, fakeKeystore);
+    });
+
+    test('1. A vault created now writes a v3: verifier containing 100000', () async {
+      await crypto.initialize('4321');
+      expect(crypto.isUnlocked, isTrue);
+
+      final storedHash = fakePlatform.store['vault_pin_hash'];
+      expect(storedHash, isNotNull);
+      expect(storedHash!.startsWith('v3:100000:'), isTrue,
+          reason: 'New vault creation must write a v3: verifier with current iteration count 100000');
+
+      final parsed = parseVerifier(storedHash);
+      expect(parsed.version, equals(3));
+      expect(parsed.iterations, equals(100000));
+      expect(parsed.digestBase64.isNotEmpty, isTrue);
+    });
+
+    test('2. A stored v2: verifier still unlocks with the correct PIN', () async {
+      final salt = generateTestSalt();
+      final candidateKey = deriveVaultPinKek('1234', salt, 100000);
+      final digest = SHA256Digest().process(candidateKey);
+      final v2Verifier = 'v2:${base64Encode(digest)}';
+
+      final kekInput = Uint8List.fromList([...candidateKey, ...utf8.encode('mimic-kek-v1')]);
+      final kek = SHA256Digest().process(kekInput);
+      
+      final iv = Uint8List.fromList(List.generate(16, (i) => i));
+      final cipher = CBCBlockCipher(AESEngine());
+      final padded = PaddedBlockCipherImpl(PKCS7Padding(), cipher)
+        ..init(true, PaddedBlockCipherParameters(ParametersWithIV(KeyParameter(kek), iv), null));
+      final enc = padded.process(candidateKey);
+      final innerWrapped = Uint8List(iv.length + enc.length);
+      innerWrapped.setRange(0, iv.length, iv);
+      innerWrapped.setRange(iv.length, innerWrapped.length, enc);
+      final hwWrapped = await fakeKeystore.wrap(base64Encode(innerWrapped));
+
+      fakePlatform.store['vault_salt'] = salt;
+      fakePlatform.store['vault_pin_hash'] = v2Verifier;
+      fakePlatform.store['master_key_wrapped'] = 'hw1:$hwWrapped';
+
+      final unlockCrypto = VaultCrypto(fakePlatform, fakeKeystore);
+      await unlockCrypto.initialize('1234');
+
+      expect(unlockCrypto.isUnlocked, isTrue,
+          reason: 'Stored v2: verifier must successfully unlock with correct PIN');
+    });
+
+    test('3. A stored v2: verifier rejects a wrong PIN', () async {
+      final salt = generateTestSalt();
+      final candidateKey = deriveVaultPinKek('1234', salt, 100000);
+      final digest = SHA256Digest().process(candidateKey);
+      final v2Verifier = 'v2:${base64Encode(digest)}';
+
+      final kekInput = Uint8List.fromList([...candidateKey, ...utf8.encode('mimic-kek-v1')]);
+      final kek = SHA256Digest().process(kekInput);
+      
+      final iv = Uint8List.fromList(List.generate(16, (i) => i));
+      final cipher = CBCBlockCipher(AESEngine());
+      final padded = PaddedBlockCipherImpl(PKCS7Padding(), cipher)
+        ..init(true, PaddedBlockCipherParameters(ParametersWithIV(KeyParameter(kek), iv), null));
+      final enc = padded.process(candidateKey);
+      final innerWrapped = Uint8List(iv.length + enc.length);
+      innerWrapped.setRange(0, iv.length, iv);
+      innerWrapped.setRange(iv.length, innerWrapped.length, enc);
+      final hwWrapped = await fakeKeystore.wrap(base64Encode(innerWrapped));
+
+      fakePlatform.store['vault_salt'] = salt;
+      fakePlatform.store['vault_pin_hash'] = v2Verifier;
+      fakePlatform.store['master_key_wrapped'] = 'hw1:$hwWrapped';
+
+      final unlockCrypto = VaultCrypto(fakePlatform, fakeKeystore);
+      await expectLater(
+        () => unlockCrypto.initialize('wrongPin'),
+        throwsA(isA<Exception>()),
+        reason: 'Stored v2: verifier must reject wrong PIN',
+      );
+      expect(unlockCrypto.isUnlocked, isFalse);
+    });
+
+    test('4. A v3: record with custom iteration count derives using the record value', () async {
+      const customIterations = 42;
+      final salt = generateTestSalt();
+
+      // Key derived with custom iteration count (42)
+      final customKey = deriveVaultPinKek('customPin', salt, customIterations);
+      // Key derived with standard constant (100000)
+      final standardKey = deriveVaultPinKek('customPin', salt, kPbkdf2Iterations);
+
+      expect(customKey, isNot(equals(standardKey)),
+          reason: 'Custom iteration count must derive a different key than standard 100k');
+
+      final customDigest = SHA256Digest().process(customKey);
+      final v3CustomVerifier = 'v3:$customIterations:${base64Encode(customDigest)}';
+
+      final kekInput = Uint8List.fromList([...customKey, ...utf8.encode('mimic-kek-v1')]);
+      final kek = SHA256Digest().process(kekInput);
+      
+      final iv = Uint8List.fromList(List.generate(16, (i) => i));
+      final cipher = CBCBlockCipher(AESEngine());
+      final padded = PaddedBlockCipherImpl(PKCS7Padding(), cipher)
+        ..init(true, PaddedBlockCipherParameters(ParametersWithIV(KeyParameter(kek), iv), null));
+      final enc = padded.process(customKey);
+      final innerWrapped = Uint8List(iv.length + enc.length);
+      innerWrapped.setRange(0, iv.length, iv);
+      innerWrapped.setRange(iv.length, innerWrapped.length, enc);
+      final hwWrapped = await fakeKeystore.wrap(base64Encode(innerWrapped));
+
+      fakePlatform.store['vault_salt'] = salt;
+      fakePlatform.store['vault_pin_hash'] = v3CustomVerifier;
+      fakePlatform.store['master_key_wrapped'] = 'hw1:$hwWrapped';
+
+      final unlockCrypto = VaultCrypto(fakePlatform, fakeKeystore);
+      await unlockCrypto.initialize('customPin');
+
+      expect(unlockCrypto.isUnlocked, isTrue,
+          reason: 'Vault must unlock using the iteration count from the v3 record');
+
+      final testPlaintext = Uint8List.fromList(utf8.encode('custom iteration verification data'));
+      final encrypted = unlockCrypto.encrypt(testPlaintext);
+      final decrypted = unlockCrypto.decrypt(encrypted);
+      expect(decrypted, equals(testPlaintext));
+    });
+
+    test('5. Malformed v3 records fail closed', () async {
+      final badRecords = [
+        'v3:',
+        'v3:abc:xxx',
+        'v3:0:xxx',
+        'v3:-1:xxx',
+        'v3:999999999999999999:xxx',
+        'v3:100000:',
+        'unknown:format:123',
+      ];
+
+      for (final bad in badRecords) {
+        // Direct parseVerifier unit test fails closed
+        expect(
+          () => parseVerifier(bad),
+          throwsA(isA<InvalidVerifierException>()),
+          reason: 'parseVerifier must throw InvalidVerifierException for "$bad"',
+        );
+
+        // Vault initialization with bad verifier fails closed and does not unlock
+        final platform = FakePlatformService();
+        platform.store['vault_salt'] = generateTestSalt();
+        platform.store['vault_pin_hash'] = bad;
+        platform.store['master_key_wrapped'] = 'hw1:dummy';
+
+        final badCrypto = VaultCrypto(platform, fakeKeystore);
+        await expectLater(
+          () => badCrypto.initialize('anyPin'),
+          throwsA(isA<InvalidVerifierException>()),
+          reason: 'initialize must throw InvalidVerifierException on malformed verifier "$bad"',
+        );
+        expect(badCrypto.isUnlocked, isFalse);
+      }
+    });
+
+    test('6. changePin writes a v3 verifier and the vault reopens with the new PIN', () async {
+      await crypto.initialize('1234');
+      expect(crypto.isUnlocked, isTrue);
+
+      const testSecret = 'Important secret data';
+      final ciphertext = crypto.encryptString(testSecret);
+
+      await crypto.changePin('5678');
+      expect(crypto.isUnlocked, isTrue);
+
+      final newStoredHash = fakePlatform.store['vault_pin_hash'];
+      expect(newStoredHash, isNotNull);
+      expect(newStoredHash!.startsWith('v3:100000:'), isTrue,
+          reason: 'changePin must write a v3: verifier with 100000 iterations');
+
+      // Cold restart / reopen with new PIN
+      final restartCrypto = VaultCrypto(fakePlatform, fakeKeystore);
+      await restartCrypto.initialize('5678');
+      expect(restartCrypto.isUnlocked, isTrue);
+      expect(restartCrypto.decryptString(ciphertext), equals(testSecret));
+
+      // Attempt with old PIN fails
+      final oldPinCrypto = VaultCrypto(fakePlatform, fakeKeystore);
+      await expectLater(
+        () => oldPinCrypto.initialize('1234'),
+        throwsA(isA<Exception>()),
+      );
+      expect(oldPinCrypto.isUnlocked, isFalse);
+    });
+
+    test('7. Recovery phrase and duress PIN both still work after consolidation', () async {
+      // Test RecoveryPhrase with consolidated constants
+      final words = [
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'about'
+      ];
+      final salt = Uint8List.fromList(List.generate(16, (i) => i));
+      final recoveryKey = RecoveryPhrase.deriveKey(words, salt);
+      expect(recoveryKey.length, equals(kDerivedKeyLength));
+
+      // Test DuressService with consolidated constants
+      final duressPlatform = FakePlatformService();
+      final duressService = DuressService(duressPlatform);
+
+      await duressService.setFakePin('9876');
+      expect(duressPlatform.store.containsKey('duress_pin_hash'), isTrue);
+      expect(duressPlatform.store['duress_pin_hash']!.startsWith('v2:'), isTrue);
+
+      final isDuress = await duressService.isFakePin('9876');
+      expect(isDuress, isTrue, reason: 'DuressService must verify correct fake PIN');
+
+      final isNotDuress = await duressService.isFakePin('1234');
+      expect(isNotDuress, isFalse, reason: 'DuressService must reject non-fake PIN');
     });
   });
 }
