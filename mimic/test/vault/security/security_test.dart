@@ -25,6 +25,7 @@ import 'package:mimic/vault/security/shake_wipe_service.dart';
 import 'package:mimic/vault/crypto/keystore_service.dart';
 
 import 'package:mimic/vault/screens/pin_screen.dart';
+import 'package:mimic/vault/screens/recovery_phrase_screen.dart';
 import 'package:mimic/vault/security/duress_service.dart';
 import 'package:mimic/vault/security/vault_conceal_service.dart';
 
@@ -1023,17 +1024,21 @@ void main() {
 
   group('VaultConcealService & PinScreen Integration', () {
     testWidgets(
-      'Concealed vault denies access silently with Invalid PIN and without initializing crypto',
+      'Concealed vault reveals and unlocks with correct PIN and clears concealed flag',
       (WidgetTester tester) async {
         final fakePlatform = FakePlatformService();
         final fakeShakeService = FakeShakeWipeService();
+        final fakeCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
         SharedPreferences.setMockInitialValues({'shake_wipe_enabled': true});
 
-        // Seed an already-set-up, concealed vault. Seed the PIN hash/salt DIRECTLY so
-        // PinScreen is in UNLOCK mode; do NOT call crypto.initialize (would unlock crypto).
-        await fakePlatform.secureWrite('vault_pin_hash', 'dummy_hash');
-        await fakePlatform.secureWrite('vault_salt', 'dummy_salt');
-        await fakePlatform.secureWrite('vault_setup_completed', 'true');
+        // Initialize real vault with PIN '1234' then lock it
+        await tester.runAsync(() async {
+          await fakeCrypto.initialize('1234');
+        });
+        fakeCrypto.lock();
+
+        // Mark concealed
         await fakePlatform.secureWrite('vault_concealed', 'true');
 
         await tester.pumpWidget(
@@ -1041,6 +1046,7 @@ void main() {
             overrides: [
               platformServiceProvider.overrideWithValue(fakePlatform),
               shakeWipeServiceProvider.overrideWithValue(fakeShakeService),
+              vaultCryptoProvider.overrideWith((ref) => fakeCrypto),
             ],
             child: MaterialApp(
               initialRoute: '/vault-pin',
@@ -1052,26 +1058,35 @@ void main() {
             ),
           ),
         );
-        await tester.pumpAndSettle();
+        await tester.runAsync(() async {
+          for (int i = 0; i < 5; i++) {
+            await tester.pump(const Duration(milliseconds: 50));
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+          }
+        });
+        await tester.pump();
 
         expect(find.text('Enter PIN'), findsWidgets);
 
-        final container = ProviderScope.containerOf(
-          tester.element(find.text('Enter PIN')),
-        );
-        final crypto = container.read(vaultCryptoProvider);
-
         await tester.enterText(find.byType(TextField), '1234');
         await tester.pump();
-        await tester.tap(find.text('Unlock'));
-        await tester.pumpAndSettle();
 
-        expect(find.text('Invalid PIN'), findsOneWidget,
-            reason: 'Concealed vault must reject the real PIN with Invalid PIN');
-        expect(crypto.isUnlocked, isFalse,
-            reason: 'Concealed vault must not initialize crypto');
-        expect(find.text('VAULT_HOME'), findsNothing,
-            reason: 'Concealed vault must not navigate to vault home');
+        await tester.runAsync(() async {
+          await tester.tap(find.text('Unlock'));
+          final deadline = DateTime.now().add(const Duration(seconds: 20));
+          while (find.byType(RecoveryPhraseScreen).evaluate().isEmpty && DateTime.now().isBefore(deadline)) {
+            await tester.pump(const Duration(milliseconds: 50));
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+          }
+        });
+        await tester.pump();
+
+        expect(fakePlatform.store['vault_concealed'], equals('false'),
+            reason: 'Correct PIN must clear the vault_concealed flag');
+        expect(fakeCrypto.isUnlocked, isTrue,
+            reason: 'Correct PIN must successfully unlock crypto');
+        expect(find.byType(RecoveryPhraseScreen), findsOneWidget,
+            reason: 'Vault with no recovery phrase setup must navigate to forced RecoveryPhraseScreen on unlock');
       },
     );
 

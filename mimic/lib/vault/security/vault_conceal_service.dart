@@ -160,8 +160,12 @@ class VaultConcealService {
     }
   }
 
+  @visibleForTesting
+  Future<void> toggleConceal() => _toggleConceal();
+
   Future<void> _toggleConceal() async {
-    final nextState = !_isConcealed;
+    final current = await isConcealed();
+    final nextState = !current;
     await setConcealed(nextState);
 
     if (nextState) {
