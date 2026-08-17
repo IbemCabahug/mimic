@@ -26,11 +26,13 @@ class StealthModeNotifier extends StateNotifier<bool> {
 
   Future<void> _load() async {
     final value = await _service.isStealthModeEnabled();
+    if (!mounted) return;
     state = value;
   }
 
   Future<void> setStealthMode(bool value) async {
     await _service.setStealthMode(value);
+    if (!mounted) return;
     state = value;
   }
 }

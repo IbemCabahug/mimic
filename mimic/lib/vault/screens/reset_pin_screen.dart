@@ -69,6 +69,7 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
   }
 
   void _handlePinSubmission() {
+    if (_isLoading) return;
     if (!_isConfirmStep) {
       // Transition to confirmation step
       setState(() {
@@ -95,6 +96,7 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
   }
 
   Future<void> _saveNewPin(String pin) async {
+    if (_isLoading) return;
     setState(() {
       _isLoading = true;
       _error = null;

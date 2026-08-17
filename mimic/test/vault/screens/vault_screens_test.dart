@@ -717,6 +717,9 @@ void main() {
       expect(find.text('BREAKIN_LOGS_SCREEN'), findsOneWidget);
 
       // Reload settings screen
+      await tester.runAsync(() async {
+        await fakeCrypto.initialize('1234');
+      });
       await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
       await tester.pumpAndSettle();
 
@@ -733,8 +736,16 @@ void main() {
       await tester.enterText(find.widgetWithText(TextField, 'New PIN'), '9999');
       await tester.enterText(find.widgetWithText(TextField, 'Confirm New PIN'), '9999');
 
-      await tester.tap(find.text('Change'));
-      await tester.pumpAndSettle();
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Change'));
+        final deadline = DateTime.now().add(const Duration(seconds: 20));
+        while (fakePlatform.secureStore['vault_pin'] != '9999' &&
+               DateTime.now().isBefore(deadline)) {
+          await tester.pump(const Duration(milliseconds: 50));
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pump();
 
       // Verify PIN updated in secure platform storage
       expect(fakePlatform.secureStore['vault_pin'], equals('9999'),

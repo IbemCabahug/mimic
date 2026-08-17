@@ -95,10 +95,10 @@ class _PinScreenState extends ConsumerState<PinScreen> {
   }
 
   Future<void> _checkCreateMode() async {
-    final hash = await ref.read(platformServiceProvider).secureRead('vault_pin_hash');
+    final salt = await ref.read(platformServiceProvider).secureRead('vault_salt');
     if (mounted) {
       setState(() {
-        _isCreateMode = (hash == null || hash.isEmpty);
+        _isCreateMode = (salt == null || salt.isEmpty);
       });
     }
   }
@@ -130,6 +130,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
   }
 
   Future<void> _createVault(String pin) async {
+    if (_isLoading) return;
     setState(() => _isLoading = true);
     final navigator = Navigator.of(context);
     try {
@@ -171,6 +172,8 @@ class _PinScreenState extends ConsumerState<PinScreen> {
   }
 
   Future<void> _authenticate([String? overridePin]) async {
+    if (_isLoading) return;
+
     final lockoutService = ref.read(lockoutServiceProvider);
     final remaining = await lockoutService.remainingLockout();
     if (remaining > Duration.zero) {
@@ -222,128 +225,134 @@ class _PinScreenState extends ConsumerState<PinScreen> {
 
     final navigator = Navigator.of(context);
     setState(() => _isLoading = true);
-    () async {
-      try {
-        final duressService = ref.read(duressServiceProvider);
-        final isFakePin = await duressService.isFakePin(pin);
+    try {
+      final duressService = ref.read(duressServiceProvider);
+      final isFakePin = await duressService.isFakePin(pin);
 
-        if (isFakePin) {
-          _pinController.clear();
-          await ref.read(lockoutServiceProvider).reset();
-          if (mounted) {
-            setState(() {
-              _error = null;
-              _wrongAttempts = 0;
-            });
-            navigator.pushReplacementNamed('/admin-panel');
-          }
-          return;
-        }
-
-        // Conceal check runs AFTER duress so the decoy PIN still opens the
-        // admin panel while concealed. Real PIN is denied silently.
-        if (!_isCreateMode) {
-          final concealed = await _concealService.isConcealed();
-          if (concealed) {
-            _pinController.clear();
-            if (mounted) setState(() => _error = 'Invalid PIN');
-            return;
-          }
-        }
-
-        await _crypto.initialize(pin);
-        if (!kIsWeb) {
-          await ref.read(platformServiceProvider).secureWrite('vault_pin', pin);
-          await ref.read(platformServiceProvider).secureWrite('wrong_attempts', '0');
-          await ref.read(platformServiceProvider).secureWrite('vault_setup_completed', 'true');
-        }
-
+      if (isFakePin) {
+        _pinController.clear();
+        await ref.read(lockoutServiceProvider).reset();
         if (mounted) {
           setState(() {
             _error = null;
             _wrongAttempts = 0;
-            _remainingLockout = Duration.zero;
           });
-          await ref.read(lockoutServiceProvider).reset();
+          navigator.pushReplacementNamed('/admin-panel');
+        }
+        return;
+      }
 
-          PanicMode().init(context, ref);
-          AutoLock().init(context, ref);
+      // Conceal check runs AFTER duress so the decoy PIN still opens the
+      // admin panel while concealed. Real PIN is denied silently.
+      if (!_isCreateMode) {
+        final concealed = await _concealService.isConcealed();
+        if (concealed) {
+          _pinController.clear();
+          if (mounted) setState(() => _error = 'Invalid PIN');
+          return;
+        }
+      }
 
-          if (!_crypto.hasRecoveryPhrase) {
-            navigator.pushReplacement(
-              MaterialPageRoute(
-                builder: (_) => RecoveryPhraseScreen(
-                  forcedSetup: true,
-                  migrateAfter: _crypto.needsHardwareMigration,
-                ),
+      await _crypto.initialize(pin);
+      if (!kIsWeb) {
+        await ref.read(platformServiceProvider).secureWrite('vault_pin', pin);
+        await ref.read(platformServiceProvider).secureWrite('wrong_attempts', '0');
+        await ref.read(platformServiceProvider).secureWrite('vault_setup_completed', 'true');
+      }
+
+      if (mounted) {
+        setState(() {
+          _error = null;
+          _wrongAttempts = 0;
+          _remainingLockout = Duration.zero;
+        });
+        await ref.read(lockoutServiceProvider).reset();
+
+        PanicMode().init(context, ref);
+        AutoLock().init(context, ref);
+
+        if (!_crypto.hasRecoveryPhrase) {
+          navigator.pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => RecoveryPhraseScreen(
+                forcedSetup: true,
+                migrateAfter: _crypto.needsHardwareMigration,
               ),
-            );
-          } else {
-            if (_crypto.needsHardwareMigration) {
-               try {
-                 await _crypto.migrateToHardwareBinding();
-               } catch (e) {
-                 navigator.pushReplacement(
-                   MaterialPageRoute(
-                     builder: (_) => const RecoveryPhraseScreen(
-                       forcedSetup: true,
-                       migrateAfter: false,
-                     ),
-                   ),
-                 );
-                 return;
-               }
-            }
-            navigator.pushReplacementNamed('/vault-home');
-          }
-        }
-      } on KeystoreInvalidException catch (e) {
-        if (mounted) {
-          setState(() => _isLoading = false);
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent, duration: const Duration(seconds: 4)),
+            ),
           );
-          Navigator.of(context).pushNamed('/vault-enter-recovery');
-        }
-      } catch (e) {
-        if (!kIsWeb) {
-          try {
-            final stored = await ref.read(platformServiceProvider).secureRead('wrong_attempts');
-            final currentCount = (int.tryParse(stored ?? '') ?? 0) + 1;
-            if (currentCount % 3 == 0) {
-              _intruderService.captureIntruder(_crypto);
-            }
-            await ref.read(platformServiceProvider).secureWrite('wrong_attempts', currentCount.toString());
-            await ref.read(lockoutServiceProvider).setLockout(currentCount);
-            if (mounted) setState(() => _wrongAttempts = currentCount);
-
-            final newRemaining = await ref.read(lockoutServiceProvider).remainingLockout();
-            if (newRemaining > Duration.zero && mounted) {
-              setState(() {
-                _remainingLockout = newRemaining;
-                _error = 'Try again in ${_formatDuration(newRemaining)}';
-              });
-              _startLockoutTimer();
-            } else if (mounted) {
-              setState(() => _error = 'Invalid PIN');
-            }
-          } catch (ex) {
-            debugPrint('Failed to save wrong attempts log: $ex');
-            if (mounted) setState(() {
-              _wrongAttempts++;
-              _error = 'Invalid PIN';
-            });
-          }
         } else {
+          if (_crypto.needsHardwareMigration) {
+             try {
+               await _crypto.migrateToHardwareBinding();
+             } catch (e) {
+               navigator.pushReplacement(
+                 MaterialPageRoute(
+                   builder: (_) => const RecoveryPhraseScreen(
+                     forcedSetup: true,
+                     migrateAfter: false,
+                   ),
+                 ),
+               );
+               return;
+             }
+          }
+          navigator.pushReplacementNamed('/vault-home');
+        }
+      }
+    } on KeystoreInvalidException catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent, duration: const Duration(seconds: 4)),
+        );
+        Navigator.of(context).pushNamed('/vault-enter-recovery');
+      }
+    } on InvalidPinException catch (_) {
+      if (!kIsWeb) {
+        try {
+          final stored = await ref.read(platformServiceProvider).secureRead('wrong_attempts');
+          final currentCount = (int.tryParse(stored ?? '') ?? 0) + 1;
+          if (currentCount % 3 == 0) {
+            _intruderService.captureIntruder(_crypto);
+          }
+          await ref.read(platformServiceProvider).secureWrite('wrong_attempts', currentCount.toString());
+          await ref.read(lockoutServiceProvider).setLockout(currentCount);
+          if (mounted) setState(() => _wrongAttempts = currentCount);
+
+          final newRemaining = await ref.read(lockoutServiceProvider).remainingLockout();
+          if (newRemaining > Duration.zero && mounted) {
+            setState(() {
+              _remainingLockout = newRemaining;
+              _error = 'Try again in ${_formatDuration(newRemaining)}';
+            });
+            _startLockoutTimer();
+          } else if (mounted) {
+            setState(() => _error = 'Invalid PIN');
+          }
+        } catch (ex) {
+          debugPrint('Failed to save wrong attempts log: $ex');
           if (mounted) setState(() {
             _wrongAttempts++;
             _error = 'Invalid PIN';
           });
         }
-      } finally {
-        if (mounted) setState(() => _isLoading = false);
+      } else {
+        if (mounted) setState(() {
+          _wrongAttempts++;
+          _error = 'Invalid PIN';
+        });
       }
-    }();
+    } catch (e) {
+      // Operational failure (e.g. storage error, keystore wrap error, serialization wait): do not increment wrong_attempts!
+      debugPrint('Operational failure during unlock: $e');
+      if (mounted) {
+        setState(() {
+          _error = 'An error occurred';
+        });
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   String? _biometricResultToMessage(BiometricResult result) {

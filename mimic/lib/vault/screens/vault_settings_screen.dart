@@ -159,9 +159,11 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     final newPinController = TextEditingController();
     final confirmPinController = TextEditingController();
     String? error;
+    bool isProcessing = false;
 
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
           backgroundColor: Colors.white,
@@ -193,11 +195,11 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           ),
           actions: [
             TextButton(
-              onPressed: () => Navigator.of(dialogContext).pop(),
+              onPressed: isProcessing ? null : () => Navigator.of(dialogContext).pop(),
               child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
             ),
             TextButton(
-              onPressed: () async {
+              onPressed: isProcessing ? null : () async {
                 final newPin = newPinController.text;
                 final confirmPin = confirmPinController.text;
 
@@ -210,6 +212,11 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                   return;
                 }
 
+                setDialogState(() {
+                  isProcessing = true;
+                  error = null;
+                });
+
                 try {
                   final crypto = ref.read(vaultCryptoProvider);
                   // Preserve the data key (DEK): changePin re-wraps the SAME key under the new PIN.
@@ -217,8 +224,10 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                   // and permanently orphans all encrypted photos, videos, and documents.
                   await crypto.changePin(newPin);
 
-                  if (context.mounted && dialogContext.mounted) {
+                  if (dialogContext.mounted) {
                     Navigator.of(dialogContext).pop();
+                  }
+                  if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: const Text('PIN changed successfully'),
@@ -229,13 +238,27 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                     );
                   }
                 } catch (e) {
-                  setDialogState(() => error = 'Failed to change PIN: $e');
+                  if (dialogContext.mounted) {
+                    setDialogState(() {
+                      isProcessing = false;
+                      error = 'Failed to change PIN: $e';
+                    });
+                  }
                 }
               },
-              child: const Text(
-                'Change',
-                style: TextStyle(color: VaultColors.accent, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
-              ),
+              child: isProcessing
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: VaultColors.accent,
+                      ),
+                    )
+                  : const Text(
+                      'Change',
+                      style: TextStyle(color: VaultColors.accent, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+                    ),
             ),
           ],
         ),

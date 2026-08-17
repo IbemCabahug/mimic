@@ -72,6 +72,7 @@ class NetworkService extends ChangeNotifier {
   MimicServer? _server;
   MimicClient? _client;
   NetworkRole _role = NetworkRole.none;
+  bool _disposed = false;
 
   /// Subscription to the active server/client message stream, so we can
   /// cancel it on disconnect and avoid dangling listeners.
@@ -197,6 +198,7 @@ class NetworkService extends ChangeNotifier {
       );
 
       _log('Joined as guest at $ip:$port');
+      if (_disposed) return;
       notifyListeners();
     } catch (e) {
       _log('Failed to join as guest: $e');
@@ -207,6 +209,7 @@ class NetworkService extends ChangeNotifier {
   Future<void> reconnect() async {
     if (_role == NetworkRole.guest && _client != null) {
       await _client!.reconnect();
+      if (_disposed) return;
       notifyListeners();
     }
   }
@@ -290,6 +293,12 @@ class NetworkService extends ChangeNotifier {
 
     _log('Session ended — role reset to none.');
     notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
   }
 }
 

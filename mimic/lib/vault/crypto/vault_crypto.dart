@@ -2,6 +2,7 @@
 // WEB NOTE: web storage is not secure. For testing only. Android uses full encryption.
 
 import 'dart:io';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
@@ -12,6 +13,14 @@ import 'vault_kdf.dart';
 import '../../core/services/platform_service.dart';
 import 'recovery_phrase.dart';
 import 'keystore_service.dart';
+
+class InvalidPinException implements Exception {
+  final String message;
+  const InvalidPinException([this.message = 'Invalid PIN']);
+
+  @override
+  String toString() => 'InvalidPinException: $message';
+}
 
 class SystemKeyMissingException implements Exception {
   final String message;
@@ -30,6 +39,11 @@ class VaultSwapRecoveryException implements Exception {
 }
 
 class VaultCrypto extends ChangeNotifier {
+  static const int _ivLength = 16;
+  static const int _keyLength = 32;
+  static const List<int> _mediaMagic = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x76, 0x31, 0x00];
+  static const List<int> _mediaMagicCtr = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x63, 0x31, 0x00];
+
   static VaultCrypto? _instance;
   static VaultCrypto get instance {
     if (_instance == null) {
@@ -40,34 +54,29 @@ class VaultCrypto extends ChangeNotifier {
 
   final PlatformService _platformService;
   final KeystoreService _keystoreService;
-  static final Map<String, String> _webKeyStore = {};
-
-  static const int _keyLength = 32;
-  static const int _ivLength = 16;
-
-  static const String _storageKeySalt = 'vault_salt';
-  static const String _storageKeyPinHash = 'vault_pin_hash';
-  static const String _storageKeyMasterWrapped = 'master_key_wrapped';
-  static const List<int> _mediaMagic = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x76, 0x31, 0x00]; // "MVKEYv1\0"
-  static const List<int> _mediaMagicCtr = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x63, 0x31, 0x00]; // "MVKEYc1\0"
-
-  // Atomic swap: temporary staging keys
-  static const String _tmpSalt = '_tmp_vault_salt';
-  static const String _tmpPinHash = '_tmp_vault_pin_hash';
-  static const String _tmpMasterWrapped = '_tmp_master_key_wrapped';
-  // Atomic swap: backup keys for rollback
-  static const String _bakSalt = '_bak_vault_salt';
-  static const String _bakPinHash = '_bak_vault_pin_hash';
-  static const String _bakMasterWrapped = '_bak_master_key_wrapped';
-  // Atomic swap: in-progress marker
-  static const String _swapMarker = '_swap_in_progress';
-
   Uint8List? _derivedKey;
   Uint8List? _temporaryKek;
-  bool _isUnlocked = false;
   List<String>? _recoveryWords;
+  bool _isUnlocked = false;
   bool _needsHardwareMigration = false;
   bool _hasRecoveryPhrase = false;
+  int _lockEpoch = 0;
+
+  static final Map<String, String> _webKeyStore = {};
+
+  Future<void> _mutex = Future<void>.value();
+
+  Future<T> _synchronized<T>(Future<T> Function() action) {
+    final previous = _mutex;
+    final completer = Completer<void>();
+    _mutex = completer.future;
+
+    return previous.catchError((_) {}).then((_) {
+      return action();
+    }).whenComplete(() {
+      completer.complete();
+    });
+  }
 
   VaultCrypto(this._platformService, [KeystoreService? keystoreService]) 
       : _keystoreService = keystoreService ?? AndroidKeystoreService() {
@@ -78,34 +87,37 @@ class VaultCrypto extends ChangeNotifier {
   bool get needsHardwareMigration => _needsHardwareMigration;
   bool get hasRecoveryPhrase => _hasRecoveryPhrase;
 
-  Future<void> initialize(String pin) async {
+  Future<void> initialize(String pin) {
+    final epoch = _lockEpoch;
+    return _synchronized(() => _initializeInternal(pin, epoch));
+  }
+
+  Future<void> _initializeInternal(String pin, int capturedEpoch) async {
     if (kIsWeb) {
-      // Web storage is ephemeral/in-memory for mock/testing only (creation/session-setup only).
-      // A fresh random salt and key are generated on each initialize call; no persistent stored record unlock.
       _webKeyStore[_storageKeySalt] = _generateRandomSalt();
       final key = await _deriveKey(pin, _webKeyStore[_storageKeySalt]!);
       _webKeyStore[_storageKeyPinHash] = _verifierForKey(key);
-      _derivedKey = key;
-      _isUnlocked = true;
-      notifyListeners();
+      if (_lockEpoch == capturedEpoch) {
+        _derivedKey = key;
+        _isUnlocked = true;
+        notifyListeners();
+      } else {
+        key.fillRange(0, key.length, 0);
+      }
       return;
     }
 
-    // Recover from any interrupted atomic swap (e.g. changePin crash).
     await _recoverSwapIfNeeded();
 
-    Uint8List salt;
     final storedSalt = await _platformService.secureRead(_storageKeySalt);
     if (storedSalt != null) {
-      salt = base64Decode(storedSalt);
+      final salt = base64Decode(storedSalt);
       final storedHash = await _platformService.secureRead(_storageKeyPinHash);
       if (storedHash == null) {
-        throw Exception('Invalid PIN');
+        throw SystemKeyMissingException('vault_pin_hash missing');
       }
-      // Parse the verifier defensively to get the version and iteration count.
       final parsed = parseVerifier(storedHash);
 
-      // Derive the candidate master key using the iteration count from the record.
       final candidateKey = await _deriveKey(pin, storedSalt, parsed.iterations);
       final digest = SHA256Digest().process(candidateKey);
       final expectedVerifier = parsed.version == 3
@@ -113,16 +125,14 @@ class VaultCrypto extends ChangeNotifier {
           : 'v2:${base64Encode(digest)}';
       final ok = _constantTimeEquals(storedHash, expectedVerifier);
       if (!ok) {
-        throw Exception('Invalid PIN');
+        throw const InvalidPinException();
       }
-      // Resolve the stable data key (DEK) through the PIN-derived wrapping key.
       final kek = _deriveKek(candidateKey);
       final wrapped =
           await _platformService.secureRead(_storageKeyMasterWrapped);
       Uint8List dek;
       bool needsHwMigration = false;
       if (wrapped == null) {
-        // Legacy vault: the PIN-derived key IS the current data key.
         dek = candidateKey;
         await _platformService.secureWrite(
             _storageKeyMasterWrapped, _wrapKey(dek, kek));
@@ -140,54 +150,72 @@ class VaultCrypto extends ChangeNotifier {
           needsHwMigration = true;
         }
       }
-      _derivedKey = dek;
-      _needsHardwareMigration = needsHwMigration;
-      if (needsHwMigration) {
-        _temporaryKek = kek;
+      if (_lockEpoch == capturedEpoch) {
+        _derivedKey = dek;
+        _isUnlocked = true;
+        _needsHardwareMigration = needsHwMigration;
+        if (needsHwMigration) {
+          _temporaryKek = kek;
+        }
+        notifyListeners();
+      } else {
+        dek.fillRange(0, dek.length, 0);
+        kek.fillRange(0, kek.length, 0);
       }
-      _isUnlocked = true;
       await _platformService.secureWrite('vault_setup_completed', 'true');
       await _platformService.secureDelete('vault_wiped');
       
       final blob = await _platformService.secureRead('recovery_blob');
-      _hasRecoveryPhrase = blob != null;
-      
-      notifyListeners();
-      return;
+      if (_lockEpoch == capturedEpoch) {
+        _hasRecoveryPhrase = blob != null;
+      }
+    } else {
+      final freshSalt = _generateSecureRandomBytes(16);
+      final freshSaltBase64 = base64Encode(freshSalt);
+      final candidateKey = await _deriveKey(pin, freshSaltBase64);
+      final kek = _deriveKek(candidateKey);
+
+      final innerWrapped = _wrapKey(candidateKey, kek);
+      final hwWrapped = await _keystoreService.wrap(innerWrapped);
+
+      await _platformService.secureDelete(_storageKeyMasterWrapped);
+      await _platformService.secureDelete('recovery_blob');
+      await _platformService.secureDelete('recovery_salt');
+      await _platformService.secureDelete('wrong_attempts');
+      await _platformService.secureDelete('lockout_set_wall');
+      await _platformService.secureDelete('lockout_set_elapsed');
+      await _platformService.secureDelete('lockout_duration_ms');
+
+      await _platformService.secureWrite(
+          _storageKeyPinHash, _verifierForKey(candidateKey));
+      await _platformService.secureWrite(
+          _storageKeyMasterWrapped, 'hw1:$hwWrapped');
+      await _platformService.secureWrite(_storageKeySalt, freshSaltBase64);
+
+      if (_lockEpoch == capturedEpoch) {
+        _derivedKey = candidateKey;
+        _isUnlocked = true;
+        _needsHardwareMigration = false;
+        _hasRecoveryPhrase = false;
+        notifyListeners();
+      } else {
+        candidateKey.fillRange(0, candidateKey.length, 0);
+        kek.fillRange(0, kek.length, 0);
+      }
     }
-
-    salt = _generateSecureRandomBytes(16);
-    final saltBase64 = base64Encode(salt);
-    final candidateKey = await _deriveKey(pin, saltBase64);
-    final hashVerifier = _verifierForKey(candidateKey);
-    final kek = _deriveKek(candidateKey);
-    final innerWrapped = _wrapKey(candidateKey, kek);
-    
-    // Do hardware wrap first. If this throws, nothing is persisted.
-    final hwWrapped = await _keystoreService.wrap(innerWrapped);
-
-    // Clear stale vault keys to avoid AutoBackup corruption
-    await _platformService.secureDelete(_storageKeyMasterWrapped);
-    await _platformService.secureDelete('recovery_blob');
-    await _platformService.secureDelete('recovery_salt');
-    await _platformService.secureDelete('wrong_attempts');
-    await _platformService.secureDelete('lockout_set_wall');
-    await _platformService.secureDelete('lockout_set_elapsed');
-    await _platformService.secureDelete('lockout_duration_ms');
-
-    // Persist new vault data atomically
-    await _platformService.secureWrite(_storageKeySalt, saltBase64);
-    await _platformService.secureWrite(_storageKeyPinHash, hashVerifier);
-    await _platformService.secureWrite(_storageKeyMasterWrapped, 'hw1:$hwWrapped');
-    
-    _derivedKey = candidateKey;
-    _needsHardwareMigration = false;
-    _hasRecoveryPhrase = false;
-    await _platformService.secureWrite('vault_setup_completed', 'true');
-    await _platformService.secureDelete('vault_wiped');
-    _isUnlocked = true;
-    notifyListeners();
   }
+
+  static const String _storageKeyMasterWrapped = 'master_key_wrapped';
+  static const String _storageKeyPinHash = 'vault_pin_hash';
+  static const String _storageKeySalt = 'vault_salt';
+
+  static const String _tmpSalt = '_tmp_vault_salt';
+  static const String _tmpPinHash = '_tmp_vault_pin_hash';
+  static const String _tmpMasterWrapped = '_tmp_master_key_wrapped';
+  static const String _bakSalt = '_bak_vault_salt';
+  static const String _bakPinHash = '_bak_vault_pin_hash';
+  static const String _bakMasterWrapped = '_bak_master_key_wrapped';
+  static const String _swapMarker = '_swap_in_progress';
 
   Uint8List encrypt(Uint8List plaintext) {
     if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
@@ -217,14 +245,49 @@ class VaultCrypto extends ChangeNotifier {
 
   void lock() {
     _isUnlocked = false;
+    _lockEpoch++;
+    final keyToZero = _derivedKey;
+    final kekToZero = _temporaryKek;
+    _derivedKey = null;
+    _temporaryKek = null;
+
+    _synchronized(() async {
+      _lockInternal(keyToZero, kekToZero);
+    }).catchError((e, st) {
+      debugPrint('Error during vault lock zeroing: $e\n$st');
+    });
+  }
+
+  /// Clears in-memory keys and marks the vault as locked.
+  ///
+  /// CRITICAL / LOAD-BEARING:
+  /// In addition to zeroing [keyToZero] and [kekToZero] (the instances captured at the
+  /// moment [lock] was synchronously invoked), the block below inspecting [_derivedKey]
+  /// and [_temporaryKek] MUST NOT BE REMOVED.
+  ///
+  /// With request-time lock epoch capture in place, all ordinary in-flight operations
+  /// detect intervening locks at commit time and abort their own key assignments.
+  /// This block serves as a last-resort safety net (defense-in-depth) with no remaining
+  /// ordinary execution path that reaches it; it catches and zero-fills key material from
+  /// any future guarded operations added to the codebase without an epoch check,
+  /// guaranteeing that the vault always finishes in a completely locked state with zero plaintext key
+  /// material remaining in instance fields.
+  void _lockInternal(Uint8List? keyToZero, Uint8List? kekToZero) {
+    if (keyToZero != null) {
+      keyToZero.fillRange(0, keyToZero.length, 0);
+    }
+    if (kekToZero != null) {
+      kekToZero.fillRange(0, kekToZero.length, 0);
+    }
     if (_derivedKey != null) {
       _derivedKey!.fillRange(0, _derivedKey!.length, 0);
+      _derivedKey = null;
     }
-    _derivedKey = null;
     if (_temporaryKek != null) {
       _temporaryKek!.fillRange(0, _temporaryKek!.length, 0);
       _temporaryKek = null;
     }
+    _isUnlocked = false;
     notifyListeners();
   }
 
@@ -234,11 +297,16 @@ class VaultCrypto extends ChangeNotifier {
 
   bool _isStoringRecovery = false;
 
-  Future<void> storeRecoveryBlob([List<String>? recoveryWords]) async {
+  Future<void> storeRecoveryBlob([List<String>? recoveryWords]) {
+    return _synchronized(() => _storeRecoveryBlobInternal(recoveryWords));
+  }
+
+  Future<void> _storeRecoveryBlobInternal([List<String>? recoveryWords]) async {
     if (_isStoringRecovery) return;
     _isStoringRecovery = true;
     try {
-      if (!_isUnlocked || _derivedKey == null) {
+      final rawKey = _derivedKey;
+      if (!_isUnlocked || rawKey == null) {
         throw Exception('Vault is locked; cannot store recovery blob');
       }
 
@@ -251,7 +319,7 @@ class VaultCrypto extends ChangeNotifier {
       final recoveryKey = RecoveryPhrase.deriveKey(words, salt);
       final iv = _generateSecureRandomBytes(_ivLength);
       final cipher = _createCipher(recoveryKey, iv, true);
-      final encryptedMasterKey = cipher.process(_derivedKey!);
+      final encryptedMasterKey = cipher.process(rawKey);
 
       final blob = Uint8List(iv.length + encryptedMasterKey.length);
       blob.setRange(0, iv.length, iv);
@@ -266,18 +334,20 @@ class VaultCrypto extends ChangeNotifier {
   }
 
   Future<void> changePin(String newPin) async {
-    // The data key (DEK) must NOT change when the PIN changes, or all existing
-    // vault data would be orphaned. Re-wrap the SAME DEK under the new PIN.
-    if (_derivedKey == null) {
+    final rawKey = _derivedKey;
+    if (!_isUnlocked || rawKey == null) {
       throw Exception('Vault must be unlocked before changing the PIN');
     }
+    final epoch = _lockEpoch;
+    final capturedDek = Uint8List.fromList(rawKey);
+    return _synchronized(() => _changePinInternal(newPin, capturedDek, epoch));
+  }
 
-    // Ensure any previously interrupted swap is resolved first.
+  Future<void> _changePinInternal(String newPin, Uint8List capturedDek, int capturedEpoch) async {
+    final dek = capturedDek;
+
     await _recoverSwapIfNeeded();
 
-    final dek = Uint8List.fromList(_derivedKey!);
-
-    // 1. Compute everything in memory.
     final salt = _generateSecureRandomBytes(16);
     final saltBase64 = base64Encode(salt);
     final newCandidateKey = await _deriveKey(newPin, saltBase64);
@@ -285,16 +355,13 @@ class VaultCrypto extends ChangeNotifier {
     final newKek = _deriveKek(newCandidateKey);
     final innerWrapped = _wrapKey(dek, newKek);
 
-    // 2. Hardware wrap — if this throws, nothing is persisted.
     final hwWrapped = await _keystoreService.wrap(innerWrapped);
     final wrappedValue = 'hw1:$hwWrapped';
 
-    // 3. Stage new values under temporary keys.
     await _platformService.secureWrite(_tmpSalt, saltBase64);
     await _platformService.secureWrite(_tmpPinHash, hashVerifier);
     await _platformService.secureWrite(_tmpMasterWrapped, wrappedValue);
 
-    // 4. Read back and verify end-to-end (re-derive and unwrap the DEK).
     final readSalt = await _platformService.secureRead(_tmpSalt);
     final readHash = await _platformService.secureRead(_tmpPinHash);
     final readWrapped = await _platformService.secureRead(_tmpMasterWrapped);
@@ -312,8 +379,7 @@ class VaultCrypto extends ChangeNotifier {
     }
 
     final parsedStaged = parseVerifier(readHash);
-    final verifyCandidateKey = await _deriveKey(newPin, readSalt, parsedStaged.iterations);
-    final verifyDigest = SHA256Digest().process(verifyCandidateKey);
+    final verifyDigest = SHA256Digest().process(newCandidateKey);
     final expectedStagedVerifier = parsedStaged.version == 3
         ? 'v3:${parsedStaged.iterations}:${base64Encode(verifyDigest)}'
         : 'v2:${base64Encode(verifyDigest)}';
@@ -321,7 +387,7 @@ class VaultCrypto extends ChangeNotifier {
       await _cleanupTempKeys();
       throw StateError('Staged verifier mismatch');
     }
-    final verifyKek = _deriveKek(verifyCandidateKey);
+    final verifyKek = newKek;
     if (!readWrapped.startsWith('hw1:')) {
       await _cleanupTempKeys();
       throw StateError('Staged wrapped key missing hw1 prefix');
@@ -343,7 +409,6 @@ class VaultCrypto extends ChangeNotifier {
       throw StateError('Staged wrapped key failed verification: $e');
     }
 
-    // 5. Backup current canonical triple.
     final canonSalt = await _platformService.secureRead(_storageKeySalt);
     final canonHash = await _platformService.secureRead(_storageKeyPinHash);
     final canonWrapped =
@@ -358,18 +423,14 @@ class VaultCrypto extends ChangeNotifier {
       await _platformService.secureWrite(_bakMasterWrapped, canonWrapped);
     }
 
-    // 6. Mark swap in progress: staged.
     await _platformService.secureWrite(_swapMarker, 'pin:staged');
 
-    // 7. Swap: overwrite canonical keys from staged values.
     await _platformService.secureWrite(_storageKeySalt, saltBase64);
     await _platformService.secureWrite(_storageKeyPinHash, hashVerifier);
     await _platformService.secureWrite(_storageKeyMasterWrapped, wrappedValue);
 
-    // 7b. Commit swap: canonical keys are fully written.
     await _platformService.secureWrite(_swapMarker, 'pin:swapped');
 
-    // 8. Cleanup swap artifacts.
     await _cleanupSwapArtifacts();
 
     if (!kIsWeb) {
@@ -378,30 +439,37 @@ class VaultCrypto extends ChangeNotifier {
       await _platformService.secureWrite('vault_setup_completed', 'true');
       await _platformService.secureDelete('vault_wiped');
     }
-    _derivedKey = dek; // unchanged — the whole point of the fix
-    _needsHardwareMigration = false;
-    _isUnlocked = true;
-    notifyListeners();
+    if (_lockEpoch == capturedEpoch) {
+      _derivedKey = dek;
+      _needsHardwareMigration = false;
+      notifyListeners();
+    } else {
+      dek.fillRange(0, dek.length, 0);
+    }
   }
 
-  Future<void> migrateToHardwareBinding() async {
-    if (!_isUnlocked || _derivedKey == null || _temporaryKek == null) {
+  Future<void> migrateToHardwareBinding() {
+    final epoch = _lockEpoch;
+    return _synchronized(() => _migrateToHardwareBindingInternal(epoch));
+  }
+
+  Future<void> _migrateToHardwareBindingInternal(int capturedEpoch) async {
+    final rawDek = _derivedKey;
+    final rawKek = _temporaryKek;
+    if (!_isUnlocked || rawDek == null || rawKek == null) {
       throw Exception('Vault locked or missing KEK');
     }
     if (!_needsHardwareMigration) return;
 
-    final dek = _derivedKey!;
-    final kek = _temporaryKek!;
+    final dek = rawDek;
+    final kek = rawKek;
 
-    // 1. Wrap in memory. If wrap throws, persist nothing and rethrow.
     final innerWrapped = _wrapKey(dek, kek);
     final hwWrapped = await _keystoreService.wrap(innerWrapped);
     final wrappedValue = 'hw1:$hwWrapped';
 
-    // 2. Stage new value under existing temp key.
     await _platformService.secureWrite(_tmpMasterWrapped, wrappedValue);
 
-    // 3. Read it back. If null or missing 'hw1:' prefix, cleanup and throw.
     final readWrapped = await _platformService.secureRead(_tmpMasterWrapped);
     if (readWrapped == null) {
       await _cleanupTempKeys();
@@ -412,7 +480,6 @@ class VaultCrypto extends ChangeNotifier {
       throw StateError('Staged wrapped key missing hw1 prefix');
     }
 
-    // 4. Unwrap staged value and verify reconstructed DEK.
     try {
       final verifyInner = await _keystoreService.unwrap(readWrapped.substring(4));
       if (verifyInner == 'KEY_INVALID') {
@@ -430,7 +497,6 @@ class VaultCrypto extends ChangeNotifier {
       throw StateError('Staged wrapped key failed verification: $e');
     }
 
-    // 5. Back up current canonical master_key_wrapped, set marker, overwrite, cleanup.
     final canonWrapped =
         await _platformService.secureRead(_storageKeyMasterWrapped);
     if (canonWrapped != null) {
@@ -441,14 +507,20 @@ class VaultCrypto extends ChangeNotifier {
     await _platformService.secureWrite(_swapMarker, 'hw:swapped');
     await _cleanupSwapArtifacts();
 
-    // 6. Only after swap succeeds: clear flag, zero & null KEK.
     _needsHardwareMigration = false;
-    _temporaryKek!.fillRange(0, _temporaryKek!.length, 0);
+    kek.fillRange(0, kek.length, 0);
     _temporaryKek = null;
-    notifyListeners();
+    if (_lockEpoch == capturedEpoch) {
+      notifyListeners();
+    }
   }
 
-  Future<bool> recoverWithPhrase(List<String> recoveryWords) async {
+  Future<bool> recoverWithPhrase(List<String> recoveryWords) {
+    final epoch = _lockEpoch;
+    return _synchronized(() => _recoverWithPhraseInternal(recoveryWords, epoch));
+  }
+
+  Future<bool> _recoverWithPhraseInternal(List<String> recoveryWords, int capturedEpoch) async {
     final storedBlob = await _platformService.secureRead('recovery_blob');
     final storedSalt = await _platformService.secureRead('recovery_salt');
     if (storedBlob == null || storedSalt == null) {
@@ -470,11 +542,16 @@ class VaultCrypto extends ChangeNotifier {
 
       if (masterKey.length != _keyLength) return false;
 
-      _derivedKey = masterKey;
-      _isUnlocked = true;
-      _recoveryWords = recoveryWords;
-      notifyListeners();
-      return true;
+      if (_lockEpoch == capturedEpoch) {
+        _derivedKey = masterKey;
+        _isUnlocked = true;
+        _recoveryWords = recoveryWords;
+        notifyListeners();
+        return true;
+      } else {
+        masterKey.fillRange(0, masterKey.length, 0);
+        return false;
+      }
     } catch (_) {
       return false;
     }

@@ -31,6 +31,7 @@ class LauncherIconNotifier extends StateNotifier<bool> {
 
   Future<void> _load() async {
     final visible = await _service.isIconVisible();
+    if (!mounted) return;
     state = visible;
   }
 

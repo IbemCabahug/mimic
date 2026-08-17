@@ -17,6 +17,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:mimic/game/game.dart';
 import 'package:mimic/core/services/platform_service.dart';
@@ -101,6 +103,7 @@ void main() {
     fakePlatform = FakePlatformService();
     fakeCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
     secureFlagsList.clear();
+    SharedPreferences.setMockInitialValues(<String, Object>{});
   });
 
   /// Build the integration test app environment with Riverpod overrides.
@@ -111,9 +114,12 @@ void main() {
     );
   }
 
-  // Intercept the native platform window manager method calls to track FLAG_SECURE
+  // Intercept native platform calls (FLAG_SECURE, SQLite FFI, and sensors_plus)
   setUpAll(() {
     TestWidgetsFlutterBinding.ensureInitialized();
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(
       const MethodChannel('flutter_windowmanager'),
@@ -129,6 +135,29 @@ void main() {
         return true;
       },
     );
+
+    // sensors_plus method channel (setAccelerationSamplingPeriod)
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('dev.fluttercommunity.plus/sensors/method'),
+      (MethodCall methodCall) async => null,
+    );
+
+    // sensors_plus accelerometer event channel (listen, cancel)
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(
+      const MethodChannel('dev.fluttercommunity.plus/sensors/accelerometer'),
+      (MethodCall methodCall) async => null,
+    );
+  });
+
+  tearDownAll(() {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('flutter_windowmanager'), null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('dev.fluttercommunity.plus/sensors/method'), null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(const MethodChannel('dev.fluttercommunity.plus/sensors/accelerometer'), null);
   });
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -152,7 +181,9 @@ void main() {
     await pumpBootSequence(tester);
 
     // Navigate into the Vault (Unlock)
-    await fakeCrypto.initialize('1234');
+    await tester.runAsync(() async {
+      await fakeCrypto.initialize('1234');
+    });
     expect(fakeCrypto.isUnlocked, isTrue);
 
     // Push the VaultHomeScreen route
@@ -165,7 +196,10 @@ void main() {
     // Simulate backgrounding by directly calling lock() — the production
     // AutoLockWrapper does this via its WidgetsBindingObserver.didChangeAppLifecycleState.
     // security_test.dart test 9 proves AutoLock properly clears the key on lifecycle change.
-    fakeCrypto.lock();
+    await tester.runAsync(() async {
+      fakeCrypto.lock();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
     await pumpFrames(tester);
 
     // Verify vault key has been cleared
@@ -194,7 +228,9 @@ void main() {
     await pumpBootSequence(tester);
 
     // Unlock the vault
-    await fakeCrypto.initialize('1234');
+    await tester.runAsync(() async {
+      await fakeCrypto.initialize('1234');
+    });
     final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
     navigator.pushNamed('/vault-home');
     await pumpFrames(tester);
@@ -252,7 +288,9 @@ void main() {
     await pumpBootSequence(tester);
 
     // Unlock and navigate to vault
-    await fakeCrypto.initialize('1234');
+    await tester.runAsync(() async {
+      await fakeCrypto.initialize('1234');
+    });
     final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
     navigator.pushNamed('/vault-home');
     await pumpFrames(tester);
@@ -263,7 +301,10 @@ void main() {
     // Simulate panic mode: lock vault and navigate back to game home.
     // In production, PanicMode widget triggers this on triple volume-down.
     // security_test.dart test 11 verifies the full PanicMode widget behavior.
-    fakeCrypto.lock();
+    await tester.runAsync(() async {
+      fakeCrypto.lock();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
     navigator.pushNamedAndRemoveUntil('/', (route) => false);
     await pumpFrames(tester);
 
@@ -291,12 +332,17 @@ void main() {
     await tester.pumpWidget(buildIntegrationApp(container));
     await pumpBootSequence(tester);
 
-    await fakeCrypto.initialize('1234');
+    await tester.runAsync(() async {
+      await fakeCrypto.initialize('1234');
+    });
     expect(fakeCrypto.isUnlocked, isTrue);
 
     // Simulate the auto-lock effect — in production, AutoLockWrapper calls
     // crypto.lock() when AppLifecycleState changes to paused/inactive.
-    fakeCrypto.lock();
+    await tester.runAsync(() async {
+      fakeCrypto.lock();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
     await pumpFrames(tester);
 
     // Verify the key has been cleared
@@ -320,13 +366,18 @@ void main() {
     await tester.pumpWidget(buildIntegrationApp(container));
     await pumpBootSequence(tester);
 
-    await fakeCrypto.initialize('1234');
+    await tester.runAsync(() async {
+      await fakeCrypto.initialize('1234');
+    });
     expect(fakeCrypto.isUnlocked, isTrue);
 
     // Advance clock past an inactivity threshold, then simulate the lock
     // that AutoLock's timer callback would invoke.
     await tester.pump(const Duration(seconds: 61));
-    fakeCrypto.lock();
+    await tester.runAsync(() async {
+      fakeCrypto.lock();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
     await pumpFrames(tester);
 
     // Verify inactivity timer fired and locked the vault
@@ -349,7 +400,9 @@ void main() {
     await pumpBootSequence(tester);
 
     // 1. Open Vault
-    await fakeCrypto.initialize('1234');
+    await tester.runAsync(() async {
+      await fakeCrypto.initialize('1234');
+    });
     final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
     navigator.pushNamed('/vault-home');
     await pumpFrames(tester);
