@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:pointycastle/export.dart';
 
 import 'package:flutter/services.dart';
 
@@ -37,6 +38,14 @@ Future<void> testExecutable(FutureOr<void> Function() testMain) async {
           return original;
         case 'deleteKey':
           return null;
+        case 'pbkdf2':
+          final Uint8List password = methodCall.arguments['password'] as Uint8List;
+          final Uint8List salt = methodCall.arguments['salt'] as Uint8List;
+          final int iterations = methodCall.arguments['iterations'] as int;
+          final int keyLength = methodCall.arguments['keyLength'] as int;
+          final pbkdf2 = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64));
+          pbkdf2.init(Pbkdf2Parameters(salt, iterations, keyLength));
+          return pbkdf2.process(password);
         case 'elapsedRealtime':
           return 1000000;
         default:

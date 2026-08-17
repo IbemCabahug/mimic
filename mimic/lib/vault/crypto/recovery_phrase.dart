@@ -38,6 +38,19 @@ class RecoveryPhrase {
     return pbkdf2.process(mnemonicBytes);
   }
 
+  /// Joins words with a space separator and asynchronously derives a 32-byte key using derivePbkdf2Async
+  static Future<Uint8List> deriveKeyAsync(List<String> words, Uint8List salt) async {
+    final cleanWords = normalizeWords(words);
+    final mnemonic = cleanWords.join(' ');
+    final mnemonicBytes = Uint8List.fromList(utf8.encode(mnemonic));
+    return await derivePbkdf2Async(
+      mnemonicBytes,
+      salt,
+      kRecoveryPhraseIterations,
+      kDerivedKeyLength,
+    );
+  }
+
   /// Returns true if the word exists in kBip39Wordlist
   static bool isValidWord(String word) {
     return kBip39Wordlist.contains(normalizeWord(word));

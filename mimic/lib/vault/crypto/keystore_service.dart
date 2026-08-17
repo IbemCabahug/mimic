@@ -1,5 +1,6 @@
 import 'package:flutter/services.dart';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 
 abstract class KeystoreService {
@@ -7,6 +8,24 @@ abstract class KeystoreService {
   Future<String> wrap(String base64Data);
   Future<String> unwrap(String base64Data);
   Future<void> deleteKey();
+}
+
+/// Invokes native PBKDF2-HMAC-SHA256 over MethodChannel('mimic/keystore').
+Future<Uint8List> nativePbkdf2(
+  Uint8List password,
+  Uint8List salt,
+  int iterations,
+  int keyLength,
+) async {
+  const channel = MethodChannel('mimic/keystore');
+  final result = await channel.invokeMethod<Uint8List>('pbkdf2', {
+    'password': password,
+    'salt': salt,
+    'iterations': iterations,
+    'keyLength': keyLength,
+  });
+  if (result == null) throw Exception('PBKDF2 derivation failed or returned null');
+  return result;
 }
 
 class AndroidKeystoreService implements KeystoreService {

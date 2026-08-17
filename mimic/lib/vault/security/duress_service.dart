@@ -27,6 +27,18 @@ class DuressService {
     return 'v2:${base64Encode(derived)}';
   }
 
+  Future<String> _verifierAsync(String pin, String salt) async {
+    final pinBytes = Uint8List.fromList(utf8.encode(pin));
+    final saltBytes = Uint8List.fromList(utf8.encode(salt));
+    final derived = await derivePbkdf2Async(
+      pinBytes,
+      saltBytes,
+      kDuressIterations,
+      kDerivedKeyLength,
+    );
+    return 'v2:${base64Encode(derived)}';
+  }
+
   bool _constantTimeEquals(String a, String b) {
     final ab = utf8.encode(a);
     final bb = utf8.encode(b);
@@ -41,7 +53,7 @@ class DuressService {
   Future<void> setFakePin(String pin) async {
     if (kIsWeb) return;
     final salt = _generateSalt();
-    final hash = _verifier(pin, salt);
+    final hash = await _verifierAsync(pin, salt);
     await _platformService.secureWrite(_pinHashKey, hash);
     await _platformService.secureWrite(_pinSaltKey, salt);
   }
@@ -53,12 +65,14 @@ class DuressService {
     if (storedHash == null || storedSalt == null) return false;
     bool ok;
     if (storedHash.startsWith('v2:')) {
-      ok = _constantTimeEquals(storedHash, _verifier(pin, storedSalt));
+      final computed = await _verifierAsync(pin, storedSalt);
+      ok = _constantTimeEquals(storedHash, computed);
     } else {
       // Legacy single-pass salted SHA-256 — upgrade on success.
       ok = _constantTimeEquals(storedHash, _hashPin(pin, storedSalt));
       if (ok) {
-        await _platformService.secureWrite(_pinHashKey, _verifier(pin, storedSalt));
+        final upgraded = await _verifierAsync(pin, storedSalt);
+        await _platformService.secureWrite(_pinHashKey, upgraded);
       }
     }
     return ok;

@@ -298,10 +298,11 @@ class VaultCrypto extends ChangeNotifier {
   bool _isStoringRecovery = false;
 
   Future<void> storeRecoveryBlob([List<String>? recoveryWords]) {
-    return _synchronized(() => _storeRecoveryBlobInternal(recoveryWords));
+    final epoch = _lockEpoch;
+    return _synchronized(() => _storeRecoveryBlobInternal(recoveryWords, epoch));
   }
 
-  Future<void> _storeRecoveryBlobInternal([List<String>? recoveryWords]) async {
+  Future<void> _storeRecoveryBlobInternal([List<String>? recoveryWords, int? capturedEpoch]) async {
     if (_isStoringRecovery) return;
     _isStoringRecovery = true;
     try {
@@ -316,7 +317,7 @@ class VaultCrypto extends ChangeNotifier {
       }
 
       final salt = _generateSecureRandomBytes(16);
-      final recoveryKey = RecoveryPhrase.deriveKey(words, salt);
+      final recoveryKey = await RecoveryPhrase.deriveKeyAsync(words, salt);
       final iv = _generateSecureRandomBytes(_ivLength);
       final cipher = _createCipher(recoveryKey, iv, true);
       final encryptedMasterKey = cipher.process(rawKey);
@@ -324,6 +325,10 @@ class VaultCrypto extends ChangeNotifier {
       final blob = Uint8List(iv.length + encryptedMasterKey.length);
       blob.setRange(0, iv.length, iv);
       blob.setRange(iv.length, blob.length, encryptedMasterKey);
+
+      if (capturedEpoch != null && _lockEpoch != capturedEpoch) {
+        return;
+      }
 
       await _platformService.secureWrite('recovery_blob', base64Encode(blob));
       await _platformService.secureWrite('recovery_salt', base64Encode(salt));
@@ -531,7 +536,7 @@ class VaultCrypto extends ChangeNotifier {
       final salt = base64Decode(storedSalt);
       final blob = base64Decode(storedBlob);
 
-      final recoveryKey = RecoveryPhrase.deriveKey(recoveryWords, salt);
+      final recoveryKey = await RecoveryPhrase.deriveKeyAsync(recoveryWords, salt);
 
       if (blob.length < _ivLength) return false;
       final iv = blob.sublist(0, _ivLength);
@@ -1246,8 +1251,14 @@ class VaultCrypto extends ChangeNotifier {
   }
 
   Future<Uint8List> _deriveKey(String pin, String saltBase64, [int iterations = kPbkdf2Iterations]) async {
-    // Delegates to the production KDF helper.
-    return deriveVaultPinKek(pin, saltBase64, iterations);
+    final passwordBytes = Uint8List.fromList(utf8.encode(pin));
+    final saltBytes = base64Decode(saltBase64);
+    return await derivePbkdf2Async(
+      passwordBytes,
+      saltBytes,
+      iterations,
+      kDerivedKeyLength,
+    );
   }
 
   BlockCipher _createCipher(Uint8List key, Uint8List iv, bool forEncryption) {

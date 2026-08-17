@@ -2,7 +2,9 @@
 
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:pointycastle/export.dart';
+import 'keystore_service.dart';
 
 /// Public constant for the current PBKDF2 iteration count.
 const int kPbkdf2Iterations = 100000;
@@ -131,5 +133,86 @@ Uint8List deriveVaultPinKek(String pin, String saltBase64, [int iterations = kPb
   final pbkdf2 = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64));
   pbkdf2.init(Pbkdf2Parameters(salt, iterations, kDerivedKeyLength));
   return pbkdf2.process(pinBytes);
+}
+
+// Private known-answer test vector constants
+final Uint8List _kVectorPassword = Uint8List.fromList(utf8.encode('password'));
+final Uint8List _kVectorSalt = Uint8List.fromList(utf8.encode('salt'));
+const int _kVectorIterations = 4096;
+const int _kVectorKeyLength = 32;
+
+Uint8List _computePointycastlePbkdf2(
+  Uint8List password,
+  Uint8List salt,
+  int iterations,
+  int keyLength,
+) {
+  final pbkdf2 = PBKDF2KeyDerivator(HMac(SHA256Digest(), 64));
+  pbkdf2.init(Pbkdf2Parameters(salt, iterations, keyLength));
+  return pbkdf2.process(password);
+}
+
+bool? _isNativePbkdf2Verified;
+
+/// Resets the cached native PBKDF2 verification flag for tests.
+@visibleForTesting
+void resetNativePbkdf2VerificationForTests() {
+  _isNativePbkdf2Verified = null;
+}
+
+/// Asynchronously derives a key using native PBKDF2 if verified, falling back to PointyCastle.
+Future<Uint8List> derivePbkdf2Async(
+  Uint8List password,
+  Uint8List salt,
+  int iterations,
+  int keyLength, {
+  Future<Uint8List> Function(Uint8List, Uint8List, int, int)? native,
+}) async {
+  final nativeDerive = native ?? nativePbkdf2;
+
+  if (kIsWeb) {
+    return _computePointycastlePbkdf2(password, salt, iterations, keyLength);
+  }
+
+  if (_isNativePbkdf2Verified == null) {
+    try {
+      final expected = _computePointycastlePbkdf2(
+        _kVectorPassword,
+        _kVectorSalt,
+        _kVectorIterations,
+        _kVectorKeyLength,
+      );
+      final actual = await nativeDerive(
+        _kVectorPassword,
+        _kVectorSalt,
+        _kVectorIterations,
+        _kVectorKeyLength,
+      );
+      if (actual.length == expected.length) {
+        var match = true;
+        for (var i = 0; i < expected.length; i++) {
+          if (actual[i] != expected[i]) {
+            match = false;
+            break;
+          }
+        }
+        _isNativePbkdf2Verified = match;
+      } else {
+        _isNativePbkdf2Verified = false;
+      }
+    } catch (e) {
+      _isNativePbkdf2Verified = false;
+    }
+  }
+
+  if (_isNativePbkdf2Verified == true) {
+    try {
+      return await nativeDerive(password, salt, iterations, keyLength);
+    } catch (e) {
+      return _computePointycastlePbkdf2(password, salt, iterations, keyLength);
+    }
+  }
+
+  return _computePointycastlePbkdf2(password, salt, iterations, keyLength);
 }
 

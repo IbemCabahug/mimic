@@ -1,19 +1,26 @@
 package com.example.mimic
 
+import android.os.Handler
+import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodCall
 import java.security.KeyStore
+import java.util.concurrent.Executors
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
+import javax.crypto.Mac
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.SecretKeySpec
 
 class KeystoreChannel : MethodChannel.MethodCallHandler {
     private val KEY_ALIAS = "mimic_vault_kek"
     private val ANDROID_KEYSTORE = "AndroidKeyStore"
+    private val executor = Executors.newCachedThreadPool()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
@@ -21,6 +28,7 @@ class KeystoreChannel : MethodChannel.MethodCallHandler {
             "wrap" -> wrapKey(call, result)
             "unwrap" -> unwrapKey(call, result)
             "deleteKey" -> deleteKey(result)
+            "pbkdf2" -> pbkdf2(call, result)
             "elapsedRealtime" -> result.success(android.os.SystemClock.elapsedRealtime())
             else -> result.notImplemented()
         }
@@ -131,5 +139,67 @@ class KeystoreChannel : MethodChannel.MethodCallHandler {
         } catch (e: Exception) {
             result.error("DELETE_ERROR", e.message, null)
         }
+    }
+
+    private fun pbkdf2(call: MethodCall, result: MethodChannel.Result) {
+        val password = call.argument<ByteArray>("password")
+        val salt = call.argument<ByteArray>("salt")
+        val iterations = call.argument<Int>("iterations")
+        val keyLength = call.argument<Int>("keyLength")
+
+        if (password == null || salt == null || iterations == null || keyLength == null) {
+            result.error("INVALID_ARG", "Missing required arguments for pbkdf2", null)
+            return
+        }
+        if (iterations < 1 || keyLength < 1) {
+            result.error("INVALID_ARG", "iterations and keyLength must be >= 1", null)
+            return
+        }
+
+        executor.execute {
+            try {
+                val derived = performPbkdf2(password, salt, iterations, keyLength)
+                mainHandler.post { result.success(derived) }
+            } catch (e: Exception) {
+                mainHandler.post { result.error("PBKDF2_ERROR", e.message, null) }
+            }
+        }
+    }
+
+    private fun performPbkdf2(password: ByteArray, salt: ByteArray, iterations: Int, keyLength: Int): ByteArray {
+        val mac = Mac.getInstance("HmacSHA256")
+        val keySpec = SecretKeySpec(password, "HmacSHA256")
+        mac.init(keySpec)
+
+        val hLen = 32
+        val l = (keyLength + hLen - 1) / hLen
+        val r = keyLength - (l - 1) * hLen
+        val result = ByteArray(keyLength)
+
+        val saltWithInt = ByteArray(salt.size + 4)
+        System.arraycopy(salt, 0, saltWithInt, 0, salt.size)
+
+        for (i in 1..l) {
+            saltWithInt[salt.size] = (i ushr 24).toByte()
+            saltWithInt[salt.size + 1] = (i ushr 16).toByte()
+            saltWithInt[salt.size + 2] = (i ushr 8).toByte()
+            saltWithInt[salt.size + 3] = i.toByte()
+
+            var u = mac.doFinal(saltWithInt)
+            val block = u.clone()
+
+            for (j in 2..iterations) {
+                u = mac.doFinal(u)
+                for (k in block.indices) {
+                    block[k] = (block[k].toInt() xor u[k].toInt()).toByte()
+                }
+            }
+
+            val destPos = (i - 1) * hLen
+            val copyLen = if (i == l) r else hLen
+            System.arraycopy(block, 0, result, destPos, copyLen)
+        }
+
+        return result
     }
 }
