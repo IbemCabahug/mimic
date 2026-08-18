@@ -43,13 +43,6 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
       _currentInput += digit;
       _error = null;
     });
-
-    if (_currentInput.length == 8) {
-      Future.delayed(const Duration(milliseconds: 200), () {
-        if (!mounted) return;
-        _handlePinSubmission();
-      });
-    }
   }
 
   void _backspace() {
@@ -70,12 +63,17 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
 
   void _handlePinSubmission() {
     if (_isLoading) return;
+    if (_currentInput.length < 4) {
+      setState(() => _error = 'PIN must be at least 4 digits');
+      return;
+    }
     if (!_isConfirmStep) {
       // Transition to confirmation step
       setState(() {
         _firstPin = _currentInput;
         _currentInput = '';
         _isConfirmStep = true;
+        _error = null;
       });
     } else {
       // Verify match
@@ -226,96 +224,130 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
         showBackButton: false,
         showLockButton: false,
         body: SafeArea(
-          child: SingleChildScrollView(
-            child: Column(
-              children: [
-                const SizedBox(height: 16),
-                const Icon(
-                  Icons.lock_outline,
-                  size: 56,
-                  color: VaultColors.accent,
-                ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Create New PIN',
-                  style: TextStyle(
-                    fontFamily: 'Inter',
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: VaultColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                  child: Text(
-                    _isConfirmStep
-                        ? 'Re-enter your new PIN to confirm'
-                        : 'Choose a new 8-digit PIN for your vault',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontFamily: 'Inter',
-                      fontSize: 13,
-                      color: VaultColors.textSecondary,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                AnimatedBuilder(
-                  animation: offsetAnimation,
-                  builder: (context, child) {
-                    return Transform.translate(
-                      offset: Offset(offsetAnimation.value, 0.0),
-                      child: child,
-                    );
-                  },
-                  child: PinDotIndicator(
-                    filledCount: _currentInput.length,
-                    totalDots: 8,
-                  ),
-                ),
-                if (_error != null) ...[
-                  const SizedBox(height: 8),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 24),
-                    child: Text(
-                      _error!,
-                      style: const TextStyle(
-                        fontFamily: 'Inter',
-                        fontSize: 13,
-                        color: VaultColors.error,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 16),
-                if (_isLoading)
-                  const SizedBox(
-                    height: 200,
-                    child: Center(
-                      child: CircularProgressIndicator(
-                        color: VaultColors.accent,
-                      ),
-                    ),
-                  )
-                else
-                  Container(
-                    constraints: const BoxConstraints(maxWidth: 270),
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              return SingleChildScrollView(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  child: IntrinsicHeight(
                     child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        _buildNumpadRow(['1', '2', '3']),
-                        _buildNumpadRow(['4', '5', '6']),
-                        _buildNumpadRow(['7', '8', '9']),
-                        _buildNumpadRow(['clear', '0', 'backspace']),
+                        const SizedBox(height: 16),
+                        const Icon(
+                          Icons.lock_outline,
+                          size: 56,
+                          color: VaultColors.accent,
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          'Create New PIN',
+                          style: TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color: VaultColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 24),
+                          child: Text(
+                            _isConfirmStep
+                                ? 'Re-enter your new PIN to confirm'
+                                : 'Choose a new PIN, 4 to 8 digits',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 13,
+                              color: VaultColors.textSecondary,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        AnimatedBuilder(
+                          animation: offsetAnimation,
+                          builder: (context, child) {
+                            return Transform.translate(
+                              offset: Offset(offsetAnimation.value, 0.0),
+                              child: child,
+                            );
+                          },
+                          child: PinDotIndicator(
+                            filledCount: _currentInput.length,
+                            totalDots: 8,
+                          ),
+                        ),
+                        if (_error != null) ...[
+                          const SizedBox(height: 8),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            child: Text(
+                              _error!,
+                              style: const TextStyle(
+                                fontFamily: 'Inter',
+                                fontSize: 13,
+                                color: VaultColors.error,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        if (_isLoading)
+                          const SizedBox(
+                            height: 200,
+                            child: Center(
+                              child: CircularProgressIndicator(
+                                color: VaultColors.accent,
+                              ),
+                            ),
+                          )
+                        else
+                          Container(
+                            constraints: const BoxConstraints(maxWidth: 270),
+                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            child: Column(
+                              children: [
+                                _buildNumpadRow(['1', '2', '3']),
+                                _buildNumpadRow(['4', '5', '6']),
+                                _buildNumpadRow(['7', '8', '9']),
+                                _buildNumpadRow(['clear', '0', 'backspace']),
+                                const SizedBox(height: 16),
+                                ElevatedButton(
+                                  onPressed: (_isLoading || _currentInput.length < 4)
+                                      ? null
+                                      : _handlePinSubmission,
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: VaultColors.accent,
+                                    foregroundColor: Colors.white,
+                                    disabledBackgroundColor: VaultColors.surface,
+                                    disabledForegroundColor: VaultColors.textSecondary,
+                                    minimumSize: const Size(double.infinity, 48),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                  child: Text(
+                                    _isConfirmStep ? 'Confirm PIN' : 'Set PIN',
+                                    style: const TextStyle(
+                                      fontFamily: 'Inter',
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        const SizedBox(height: 16),
                       ],
                     ),
                   ),
-                const SizedBox(height: 16),
-              ],
-            ),
+                ),
+              );
+            },
           ),
         ),
       ),

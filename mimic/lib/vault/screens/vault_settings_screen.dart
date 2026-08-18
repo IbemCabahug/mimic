@@ -593,6 +593,14 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
               Navigator.of(context).pushNamed('/vault-breakin-logs');
             },
           ),
+          _buildSettingsTile(
+            icon: Icons.speed,
+            title: 'Diagnostics',
+            subtitle: 'Timing and hardware checks',
+            onTap: () {
+              Navigator.of(context).pushNamed('/vault-diagnostics');
+            },
+          ),
 
           const SizedBox(height: 24),
 

@@ -92,6 +92,15 @@ class AutoLock with WidgetsBindingObserver {
     resetTimer();
   }
 
+  /// Full teardown for the conceal path: stops the media server, wipes transient
+  /// plaintext, and cancels the idle timer and lifecycle observer. Fire-and-forget
+  /// so that concealment navigation is never delayed by disk I/O.
+  void tearDownForConceal() {
+    unawaited(MediaStreamServer.instance.stop());
+    unawaited(wipeTransientPlaintext());
+    dispose();
+  }
+
   /// Cancels the timer. Called when manually locked or panic mode triggers.
   void dispose() {
     _timer?.cancel();
@@ -169,9 +178,16 @@ class AutoLock with WidgetsBindingObserver {
     final container = _container;
     if (container == null) return;
 
+    final bool wasUnlocked;
     try {
+      final crypto = container.read(vaultCryptoProvider);
+      wasUnlocked = crypto.isUnlocked;
+      if (!wasUnlocked) {
+        dispose();
+        return;
+      }
       // Clear Vault keys
-      container.read(vaultCryptoProvider).clearKey();
+      crypto.clearKey();
     } on StateError {
       dispose();
       return;

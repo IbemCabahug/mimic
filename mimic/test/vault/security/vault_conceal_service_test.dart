@@ -13,6 +13,10 @@ import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/screens/pin_screen.dart';
 import 'package:mimic/vault/screens/recovery_phrase_screen.dart';
 import 'package:mimic/vault/security/vault_conceal_service.dart';
+import 'package:mimic/vault/security/auto_lock.dart';
+import 'package:mimic/core/providers/provider_registration.dart' show vaultConcealServiceProvider;
+import 'package:mimic/core/router/app_router.dart' as router;
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 class FakePlatformService implements PlatformService {
   final Map<String, String> secureStore = {};
@@ -71,6 +75,7 @@ void main() {
   group('VaultConcealService Persistence & Configuration', () {
     setUp(() {
       SharedPreferences.setMockInitialValues({});
+      PathProviderPlatform.instance = MockPathProviderPlatform(Directory.systemTemp.path);
     });
 
     test('3 · init() loads default medium threshold if unset', () async {
@@ -239,4 +244,210 @@ void main() {
       expect(find.text('Invalid PIN'), findsOneWidget);
     });
   });
+
+  group('AutoLock & Conceal Lifecycle', () {
+    late Directory testTempDir;
+
+    setUp(() {
+      AutoLock().dispose();
+      testTempDir = Directory.systemTemp.createTempSync('vault_conceal_test_');
+      // throwOnTemp bypasses native dart:io stream hanging during fakeAsync auto-lock testing
+      PathProviderPlatform.instance = MockPathProviderPlatform(testTempDir.path, throwOnTemp: true);
+    });
+
+    tearDown(() {
+      AutoLock().dispose();
+      try {
+        testTempDir.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+
+    testWidgets('e-control · positive control: auto-lock timer fires and navigates to /vault-pin when unlocked and not concealed', (WidgetTester tester) async {
+      final fakePlatform = FakePlatformService();
+      final fakeCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+      await tester.runAsync(() async {
+        await fakeCrypto.initialize('1234');
+      });
+      expect(fakeCrypto.isUnlocked, isTrue);
+
+      late BuildContext savedContext;
+      late WidgetRef savedRef;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+            vaultCryptoProvider.overrideWith((ref) => fakeCrypto),
+          ],
+          child: MaterialApp(
+            navigatorKey: router.navigatorKey,
+            initialRoute: '/vault-home',
+            routes: {
+              '/': (_) => const Scaffold(body: Text('GAME_HOME')),
+              '/vault-home': (_) => Consumer(
+                builder: (context, ref, _) {
+                  savedContext = context;
+                  savedRef = ref;
+                  return const Scaffold(body: Text('VAULT_HOME'));
+                },
+              ),
+              '/vault-pin': (_) => const Scaffold(body: Text('PIN_SCREEN')),
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Initialize AutoLock with vault unlocked
+      AutoLock().init(savedContext, savedRef);
+
+      // Advance time past auto-lock timeout (60 seconds) without concealing
+      await tester.pump(const Duration(seconds: 70));
+      await tester.runAsync(() async {
+        for (int i = 0; i < 50; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          if (!fakeCrypto.isUnlocked) {
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+            break;
+          }
+        }
+      });
+      for (int i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      await tester.pumpAndSettle();
+
+      // Positive control: auto-lock must navigate to PIN_SCREEN
+      expect(find.text('PIN_SCREEN'), findsOneWidget);
+      expect(fakeCrypto.isUnlocked, isFalse);
+    });
+
+    testWidgets('e · after a conceal, the auto-lock timer no longer fires navigation to /vault-pin', (WidgetTester tester) async {
+      final fakePlatform = FakePlatformService();
+      final fakeCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+      await tester.runAsync(() async {
+        await fakeCrypto.initialize('1234');
+      });
+      expect(fakeCrypto.isUnlocked, isTrue);
+
+      late BuildContext savedContext;
+      late WidgetRef savedRef;
+      late VaultConcealService concealService;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+            vaultCryptoProvider.overrideWith((ref) => fakeCrypto),
+          ],
+          child: MaterialApp(
+            navigatorKey: router.navigatorKey,
+            initialRoute: '/vault-home',
+            routes: {
+              '/': (_) => const Scaffold(body: Text('GAME_HOME')),
+              '/vault-home': (_) => Consumer(
+                builder: (context, ref, _) {
+                  savedContext = context;
+                  savedRef = ref;
+                  concealService = ref.read(vaultConcealServiceProvider);
+                  return const Scaffold(body: Text('VAULT_HOME'));
+                },
+              ),
+              '/vault-pin': (_) => const Scaffold(body: Text('PIN_SCREEN')),
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Initialize AutoLock as happens on vault unlock
+      AutoLock().init(savedContext, savedRef);
+
+      // Trigger concealment
+      await tester.runAsync(() async {
+        await concealService.toggleConceal();
+      });
+      await tester.pumpAndSettle();
+
+      // Navigation should be at game home
+      expect(find.text('GAME_HOME'), findsOneWidget);
+      expect(fakeCrypto.isUnlocked, isFalse);
+
+      // Advance time past auto-lock timeout (60 seconds)
+      await tester.pump(const Duration(seconds: 70));
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+
+      // Should still be at GAME_HOME, NOT PIN_SCREEN
+      expect(find.text('GAME_HOME'), findsOneWidget);
+      expect(find.text('PIN_SCREEN'), findsNothing);
+    });
+
+    // NOTE: The background-resume vector is not reachable in fake time because _backgroundedAt uses the real wall clock.
+    testWidgets('f · _lockVault foreground timer with the vault already locked performs no navigation', (WidgetTester tester) async {
+      final fakePlatform = FakePlatformService();
+      final fakeCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+      expect(fakeCrypto.isUnlocked, isFalse);
+
+      late BuildContext savedContext;
+      late WidgetRef savedRef;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+            vaultCryptoProvider.overrideWith((ref) => fakeCrypto),
+          ],
+          child: MaterialApp(
+            navigatorKey: router.navigatorKey,
+            initialRoute: '/',
+            routes: {
+              '/': (_) => Consumer(
+                builder: (context, ref, _) {
+                  savedContext = context;
+                  savedRef = ref;
+                  return const Scaffold(body: Text('GAME_HOME'));
+                },
+              ),
+              '/vault-pin': (_) => const Scaffold(body: Text('PIN_SCREEN')),
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      // Initialize AutoLock while vault is locked (arms foreground 60s timer)
+      AutoLock().init(savedContext, savedRef);
+
+      // Advance past 60s timer so _lockVault fires in fake time
+      await tester.pump(const Duration(seconds: 70));
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      });
+      await tester.pumpAndSettle();
+
+      // Defense-in-depth guard: since wasUnlocked was false, no navigation occurred
+      expect(find.text('GAME_HOME'), findsOneWidget);
+      expect(find.text('PIN_SCREEN'), findsNothing);
+    });
+  });
+}
+
+class MockPathProviderPlatform extends PathProviderPlatform {
+  final String path;
+  final bool throwOnTemp;
+  MockPathProviderPlatform(this.path, {this.throwOnTemp = false});
+
+  @override
+  Future<String?> getApplicationDocumentsPath() async => path;
+
+  @override
+  Future<String?> getTemporaryPath() async {
+    if (throwOnTemp) throw UnsupportedError('Test environment temp dir');
+    return path;
+  }
 }

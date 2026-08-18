@@ -13,6 +13,8 @@ import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/core/router/app_router.dart' show navigatorKey;
 import 'package:mimic/vault/crypto/vault_crypto.dart' show vaultCryptoProvider;
 import 'package:mimic/vault/widgets/blood_splatter_overlay.dart' show showBloodSplatter;
+import 'auto_lock.dart';
+import 'panic_mode.dart';
 
 /// Shake sensitivity levels for the shake-to-hide feature.
 /// Low = hardest to trigger (requires a harder shake).
@@ -182,6 +184,8 @@ class VaultConcealService {
         final crypto = ref.read(vaultCryptoProvider);
         if (crypto.isUnlocked) {
           crypto.clearKey();
+          AutoLock().tearDownForConceal();
+          PanicMode().dispose();
           navigatorKey.currentState?.pushNamedAndRemoveUntil('/', (route) => false);
         }
       }

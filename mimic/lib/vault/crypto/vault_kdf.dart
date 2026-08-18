@@ -154,6 +154,10 @@ Uint8List _computePointycastlePbkdf2(
 
 bool? _isNativePbkdf2Verified;
 
+/// Native PBKDF2 self-check state: null = not yet attempted, true = verified,
+/// false = verification failed and pointycastle is in use.
+bool? get isNativePbkdf2Verified => _isNativePbkdf2Verified;
+
 /// Resets the cached native PBKDF2 verification flag for tests.
 @visibleForTesting
 void resetNativePbkdf2VerificationForTests() {
