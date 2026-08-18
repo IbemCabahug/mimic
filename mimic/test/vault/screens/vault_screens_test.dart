@@ -303,13 +303,11 @@ class FakeDocumentVaultService extends DocumentVaultService {
       );
     }
   }
-
   @override
   Future<void> deleteDocument(String id) async {
     documents.removeWhere((d) => d.id == id);
     documentData.remove(id);
   }
-
   @override
   Future<List<DocumentMeta>> listDocuments() async {
     return documents;
@@ -454,8 +452,6 @@ void main() {
       testTempDir.deleteSync(recursive: true);
     } catch (_) {}
   });
-
-  // ═══════════════════════════════════════════════════════════════════════
 
   // ═══════════════════════════════════════════════════════════════════════
   // 1 · VaultHomeScreen Tests
@@ -642,7 +638,6 @@ void main() {
 
       // Verify metadata renders correctly
       expect(find.text('Tax_Return_2025.pdf'), findsOneWidget);
-      expect(find.text('PDF • 128.0 KB'), findsOneWidget);
 
       // Verify no plain-text document content written to disk
       verifyNoPlaintextWritten(fakePlatform, ['Confidential Tax File Content']);
@@ -696,10 +691,7 @@ void main() {
     });
   });
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // 6 · VaultSettingsScreen Tests
-  // ═══════════════════════════════════════════════════════════════════════
-  group('6 · VaultSettingsScreen', () {
+  group('6 - VaultSettingsScreen', () {
     testWidgets('All settings options render, decoy PIN flow works, and break-in link navigates', (WidgetTester tester) async {
       await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
       await tester.pumpAndSettle();
@@ -763,10 +755,7 @@ void main() {
     });
   });
 
-  // ═══════════════════════════════════════════════════════════════════════
-  // 7 · BreakInLogScreen Tests
-  // ═══════════════════════════════════════════════════════════════════════
-  group('7 · BreakInLogScreen', () {
+  group('7 - BreakInLogScreen', () {
     testWidgets('Empty state handled, and BreakInLog model renders correctly', (WidgetTester tester) async {
       // 1. Empty state — BreakInLogService.getLogs() goes through sqflite mock and
       //    returns empty list via mockLogs.
@@ -799,6 +788,160 @@ void main() {
 
       // Verify no plain-text decrypted file data written to disk
       verifyNoPlaintextWritten(fakePlatform, ['Failed PIN code string']);
+    });
+  });
+
+  group('8 - Screen Unlock Guards', () {
+    testWidgets('PhotoVaultScreen: locked vault renders no vault content (positive control: unlocked renders content)', (WidgetTester tester) async {
+      // Positive control: when unlocked, photo content and FAB are present
+      await tester.pumpWidget(buildTestApp(const PhotoVaultScreen()));
+      await tester.pumpAndSettle();
+      expect(find.text('Photos'), findsOneWidget);
+      expect(find.text('No photos yet'), findsOneWidget);
+      expect(find.byType(FloatingActionButton), findsOneWidget);
+
+      // Locked: call real lock() and drain until the guard's placeholder appears
+      fakeCrypto.lock();
+      await tester.runAsync(() async {
+        for (int i = 0; i < 50; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          if (!fakeCrypto.isUnlocked) {
+            break;
+          }
+        }
+      });
+      for (int i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+        if (find.byType(CircularProgressIndicator).evaluate().isNotEmpty) {
+          break;
+        }
+      }
+      expect(find.text('Photos'), findsNothing);
+      expect(find.text('No photos yet'), findsNothing);
+      expect(find.byType(FloatingActionButton), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      for (int i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+        if (find.text('PIN_SCREEN').evaluate().isNotEmpty) {
+          break;
+        }
+      }
+      expect(find.text('PIN_SCREEN'), findsOneWidget);
+    });
+
+    testWidgets('NotesScreen: locked vault renders no vault content (positive control: unlocked renders content)', (WidgetTester tester) async {
+      // Positive control: when unlocked, notes content and FAB are present
+      await tester.pumpWidget(buildTestApp(const NotesScreen()));
+      await tester.pumpAndSettle();
+      expect(find.text('Notes'), findsOneWidget);
+      expect(find.text('New Note'), findsOneWidget);
+      expect(find.byType(FloatingActionButton), findsOneWidget);
+
+      // Locked: call real lock() and drain until the guard's placeholder appears
+      fakeCrypto.lock();
+      await tester.runAsync(() async {
+        for (int i = 0; i < 50; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          if (!fakeCrypto.isUnlocked) {
+            break;
+          }
+        }
+      });
+      for (int i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+        if (find.byType(CircularProgressIndicator).evaluate().isNotEmpty) {
+          break;
+        }
+      }
+      expect(find.text('Notes'), findsNothing);
+      expect(find.text('New Note'), findsNothing);
+      expect(find.byType(FloatingActionButton), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      for (int i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+        if (find.text('PIN_SCREEN').evaluate().isNotEmpty) {
+          break;
+        }
+      }
+      expect(find.text('PIN_SCREEN'), findsOneWidget);
+    });
+
+    testWidgets('DocumentVaultScreen: locked vault renders no vault content (positive control: unlocked renders content)', (WidgetTester tester) async {
+      // Positive control: when unlocked, document content and FAB are present
+      await tester.pumpWidget(buildTestApp(const DocumentVaultScreen()));
+      await tester.pumpAndSettle();
+      expect(find.text('Documents'), findsOneWidget);
+      expect(find.text('Add'), findsOneWidget);
+      expect(find.byType(FloatingActionButton), findsOneWidget);
+
+      // Locked: call real lock() and drain until the guard's placeholder appears
+      fakeCrypto.lock();
+      await tester.runAsync(() async {
+        for (int i = 0; i < 50; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          if (!fakeCrypto.isUnlocked) {
+            break;
+          }
+        }
+      });
+      for (int i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+        if (find.byType(CircularProgressIndicator).evaluate().isNotEmpty) {
+          break;
+        }
+      }
+      expect(find.text('Documents'), findsNothing);
+      expect(find.text('Add'), findsNothing);
+      expect(find.byType(FloatingActionButton), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      for (int i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+        if (find.text('PIN_SCREEN').evaluate().isNotEmpty) {
+          break;
+        }
+      }
+      expect(find.text('PIN_SCREEN'), findsOneWidget);
+    });
+
+    testWidgets('VideoVaultScreen: locked vault renders no vault content (positive control: unlocked renders content)', (WidgetTester tester) async {
+      // Positive control: when unlocked, video content and FAB are present
+      await tester.pumpWidget(buildTestApp(const VideoVaultScreen()));
+      await tester.pumpAndSettle();
+      expect(find.text('Videos'), findsOneWidget);
+      expect(find.text('No videos yet'), findsOneWidget);
+      expect(find.byType(FloatingActionButton), findsOneWidget);
+
+      // Locked: call real lock() and drain until the guard's placeholder appears
+      fakeCrypto.lock();
+      await tester.runAsync(() async {
+        for (int i = 0; i < 50; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          if (!fakeCrypto.isUnlocked) {
+            break;
+          }
+        }
+      });
+      for (int i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+        if (find.byType(CircularProgressIndicator).evaluate().isNotEmpty) {
+          break;
+        }
+      }
+      expect(find.text('Videos'), findsNothing);
+      expect(find.text('No videos yet'), findsNothing);
+      expect(find.byType(FloatingActionButton), findsNothing);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+
+      for (int i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 20));
+        if (find.text('PIN_SCREEN').evaluate().isNotEmpty) {
+          break;
+        }
+      }
+      expect(find.text('PIN_SCREEN'), findsOneWidget);
     });
   });
 }

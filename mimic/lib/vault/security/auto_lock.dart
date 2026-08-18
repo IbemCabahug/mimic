@@ -20,10 +20,12 @@ class AutoLock with WidgetsBindingObserver {
   static GlobalKey<NavigatorState> get navigatorKey => router.navigatorKey;
 
   Timer? _timer;
+  Timer? _suspendTimer;
   BuildContext? _context;
   WidgetRef? _ref;
   ProviderContainer? _container;
   static const Duration _timeout = Duration(seconds: 60);
+  static const Duration suspendCeiling = Duration(minutes: 30);
   bool _observerRegistered = false;
   DateTime? _backgroundedAt;
   bool _suspended = false;
@@ -85,9 +87,13 @@ class AutoLock with WidgetsBindingObserver {
     _suspended = true;
     _timer?.cancel();
     _timer = null;
+    _suspendTimer?.cancel();
+    _suspendTimer = Timer(suspendCeiling, _lockVault);
   }
 
   void resume() {
+    _suspendTimer?.cancel();
+    _suspendTimer = null;
     _suspended = false;
     resetTimer();
   }
@@ -105,6 +111,8 @@ class AutoLock with WidgetsBindingObserver {
   void dispose() {
     _timer?.cancel();
     _timer = null;
+    _suspendTimer?.cancel();
+    _suspendTimer = null;
     _context = null;
     _ref = null;
     _container = null;

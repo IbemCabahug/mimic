@@ -230,10 +230,18 @@ void main() {
     // Unlock the vault
     await tester.runAsync(() async {
       await fakeCrypto.initialize('1234');
+      final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
+      navigator.pushNamed('/vault-home');
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (DateTime.now().isBefore(deadline)) {
+        await tester.pump(const Duration(milliseconds: 50));
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        if (find.byType(VaultHomeScreen).evaluate().isNotEmpty) {
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+          break;
+        }
+      }
     });
-    final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
-    navigator.pushNamed('/vault-home');
-    await pumpFrames(tester);
 
     // Verify vault is active (VaultHomeScreen rendered)
     expect(find.byType(VaultHomeScreen), findsOneWidget,
@@ -402,23 +410,52 @@ void main() {
     // 1. Open Vault
     await tester.runAsync(() async {
       await fakeCrypto.initialize('1234');
+      final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
+      navigator.pushNamed('/vault-home');
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (DateTime.now().isBefore(deadline)) {
+        await tester.pump(const Duration(milliseconds: 50));
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        if (find.byType(VaultHomeScreen).evaluate().isNotEmpty) {
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+          break;
+        }
+      }
     });
-    final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
-    navigator.pushNamed('/vault-home');
-    await pumpFrames(tester);
 
     expect(find.byType(VaultHomeScreen), findsOneWidget);
 
     // 2. Lock Vault (wipes key and pushes /vault-pin removing vault history)
-    navigator.pushNamedAndRemoveUntil('/vault-pin', (route) => route.settings.name == '/');
-    await pumpFrames(tester);
+    await tester.runAsync(() async {
+      final navigator = Navigator.of(tester.element(find.byType(VaultHomeScreen)));
+      navigator.pushNamedAndRemoveUntil('/vault-pin', (route) => route.settings.name == '/');
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (DateTime.now().isBefore(deadline)) {
+        await tester.pump(const Duration(milliseconds: 50));
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        if (find.byType(PinScreen).evaluate().isNotEmpty) {
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+          break;
+        }
+      }
+    });
 
     expect(find.byType(PinScreen), findsOneWidget);
 
     // 3. Simulate Android Back Button pop
-    final dynamic widgetsAppState = tester.state(find.byType(WidgetsApp));
-    await widgetsAppState.didPopRoute();
-    await pumpFrames(tester);
+    await tester.runAsync(() async {
+      final dynamic widgetsAppState = tester.state(find.byType(WidgetsApp));
+      await widgetsAppState.didPopRoute();
+      final deadline = DateTime.now().add(const Duration(seconds: 5));
+      while (DateTime.now().isBefore(deadline)) {
+        await tester.pump(const Duration(milliseconds: 50));
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        if (find.byType(HomeScreen).evaluate().isNotEmpty) {
+          await Future<void>.delayed(const Duration(milliseconds: 300));
+          break;
+        }
+      }
+    });
 
     // Verify back button lands on safe game HomeScreen, NOT the VaultHomeScreen
     expect(find.byType(VaultHomeScreen), findsNothing,

@@ -27,18 +27,25 @@ class _BackupOutOfDateBannerState extends ConsumerState<BackupOutOfDateBanner> {
   }
 
   Future<void> _checkStatus() async {
-    final status = await VaultBackupStatus.init();
-    final photos = await ref.read(fileVaultServiceProvider).getAllPhotos();
-    final notes = await ref.read(notesServiceProvider).getAllNotes();
-    final videos = await ref.read(videoVaultServiceProvider).getAllVideos();
-    final documents = await ref.read(documentVaultServiceProvider).listDocuments();
-    
-    final total = photos.length + notes.length + videos.length + documents.length;
-    if (mounted) {
+    try {
+      final status = await VaultBackupStatus.init();
+      if (!mounted) return;
+      final photos = await ref.read(fileVaultServiceProvider).getAllPhotos();
+      if (!mounted) return;
+      final notes = await ref.read(notesServiceProvider).getAllNotes();
+      if (!mounted) return;
+      final videos = await ref.read(videoVaultServiceProvider).getAllVideos();
+      if (!mounted) return;
+      final documents = await ref.read(documentVaultServiceProvider).listDocuments();
+      if (!mounted) return;
+      
+      final total = photos.length + notes.length + videos.length + documents.length;
       setState(() {
         _status = status;
         _isOutOfDate = status.isBackupOutOfDate(total);
       });
+    } catch (_) {
+      // Handled silently if vault is locked or services are unavailable
     }
   }
 

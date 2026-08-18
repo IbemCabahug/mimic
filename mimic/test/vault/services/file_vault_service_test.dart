@@ -224,5 +224,32 @@ void main() {
       }
       expect(deleteWithIdsCalled, isTrue);
     });
+
+    test('concurrent getAllPhotos calls open the database exactly once', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final fileVaultService = FileVaultService(platformService, crypto);
+
+      expect(fileVaultService.openCount, equals(0));
+
+      // Fire two getAllPhotos() calls without awaiting the first, await both together
+      final future1 = fileVaultService.getAllPhotos();
+      final future2 = fileVaultService.getAllPhotos();
+      final results = await Future.wait([future1, future2]);
+
+      expect(results[0], isEmpty);
+      expect(results[1], isEmpty);
+      expect(fileVaultService.openCount, equals(1));
+
+      // Positive control: genuinely separate instance opens its database independently
+      final platformService2 = AndroidPlatformService();
+      final crypto2 = VaultCrypto(platformService2, FakeKeystoreService());
+      await crypto2.initialize('1234');
+      final separateService = FileVaultService(platformService2, crypto2);
+      expect(separateService.openCount, equals(0));
+      await separateService.getAllPhotos();
+      expect(separateService.openCount, equals(1));
+    });
   });
 }

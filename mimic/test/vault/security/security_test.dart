@@ -582,6 +582,120 @@ void main() {
     );
 
     // ------------------------------------------------------------------
+    // Test 8.6 — AutoLock suspend ceiling expiring locks the vault
+    // ------------------------------------------------------------------
+    testWidgets(
+      '8.6 · AutoLock suspend ceiling expiring locks the vault',
+      (WidgetTester tester) async {
+        late VaultCrypto crypto;
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              platformServiceProvider.overrideWithValue(fakePlatform),
+            ],
+            child: MaterialApp(
+              home: Consumer(
+                builder: (context, ref, _) {
+                  crypto = ref.read(vaultCryptoProvider);
+                  AutoLock().init(context, ref);
+                  return const AutoLockWrapper(
+                    child: Text('VAULT_CONTENT'),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+
+        await crypto.initialize('1234');
+        expect(crypto.isUnlocked, isTrue);
+
+        AutoLock().suspend();
+
+        // Advance time past the suspend ceiling duration
+        await tester.pump(AutoLock.suspendCeiling);
+
+        // RunAsync drain idiom (copied from test/vault/security/vault_conceal_service_test.dart:307-315)
+        await tester.runAsync(() async {
+          for (int i = 0; i < 50; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 50));
+            if (!crypto.isUnlocked) {
+              await Future<void>.delayed(const Duration(milliseconds: 100));
+              break;
+            }
+          }
+        });
+
+        // When ceiling expires, the vault locks (key cleared)
+        expect(crypto.isUnlocked, isFalse);
+      },
+    );
+
+    // ------------------------------------------------------------------
+    // Test 8.7 · AutoLock resume before suspend ceiling cancels ceiling timer
+    // ------------------------------------------------------------------
+    testWidgets(
+      '8.7 · AutoLock resume before suspend ceiling cancels ceiling timer',
+      (WidgetTester tester) async {
+        late VaultCrypto crypto;
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              platformServiceProvider.overrideWithValue(fakePlatform),
+            ],
+            child: MaterialApp(
+              home: Consumer(
+                builder: (context, ref, _) {
+                  crypto = ref.read(vaultCryptoProvider);
+                  AutoLock().init(context, ref);
+                  return const AutoLockWrapper(
+                    child: Text('VAULT_CONTENT'),
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+
+        await crypto.initialize('1234');
+        expect(crypto.isUnlocked, isTrue);
+
+        AutoLock().suspend();
+
+        // Advance time by 10 minutes (less than the 30 minute ceiling)
+        await tester.pump(const Duration(minutes: 10));
+        expect(crypto.isUnlocked, isTrue);
+
+        // Resume active session
+        AutoLock().resume();
+
+        // Keep active with periodic interactions across next 25 minutes (total 35m > 30m ceiling)
+        for (int i = 0; i < 50; i++) {
+          await tester.pump(const Duration(seconds: 30));
+          AutoLock().resetTimer();
+        }
+
+        // Vault is STILL unlocked because resume cancelled the ceiling timer
+        expect(crypto.isUnlocked, isTrue);
+
+        // Positive control: letting the normal 60s inactivity timer expire locks the vault
+        await tester.pump(const Duration(seconds: 70));
+        await tester.runAsync(() async {
+          for (int i = 0; i < 50; i++) {
+            await Future<void>.delayed(const Duration(milliseconds: 50));
+            if (!crypto.isUnlocked) {
+              await Future<void>.delayed(const Duration(milliseconds: 100));
+              break;
+            }
+          }
+        });
+        expect(crypto.isUnlocked, isFalse);
+      },
+    );
+
+    // ------------------------------------------------------------------
     // Test 9 — when the inactivity timeout fires, vaultCryptoProvider is
     //          cleared (key wiped).
     // ------------------------------------------------------------------

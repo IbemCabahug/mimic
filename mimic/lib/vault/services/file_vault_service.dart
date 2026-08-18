@@ -50,38 +50,57 @@ class FileVaultService {
   static const String _dbName = 'vault_files.db';
   static const String _tableName = 'photos';
   Database? _db;
+  Future<void>? _openDbFuture;
+
+  int _openCount = 0;
+
+  @visibleForTesting
+  int get openCount => _openCount;
 
   FileVaultService(this._platformService, this._crypto);
 
   Future<void> _ensureDb() async {
     if (kIsWeb) return;
-    if (_db != null) return;
-    _db = await openDatabase(
-      p.join(await getDatabasesPath(), _dbName),
-      version: 1,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE $_tableName(
-            id TEXT PRIMARY KEY,
-            mimeType TEXT,
-            size INTEGER,
-            createdAt TEXT,
-            originalName TEXT
-          )
-        ''');
-      },
-      onOpen: (db) async {
-        try {
-          final List<Map<String, dynamic>> columns = await db.rawQuery("PRAGMA table_info($_tableName)");
-          final hasOriginalName = columns.any((column) => column['name'] == 'originalName');
-          if (!hasOriginalName) {
-            await db.execute("ALTER TABLE $_tableName ADD COLUMN originalName TEXT");
+    if (_db != null && _db!.isOpen) return;
+    if (_db != null && !_db!.isOpen) {
+      _openDbFuture = null;
+      _db = null;
+    }
+    _openDbFuture ??= () async {
+      _openCount++;
+      _db = await openDatabase(
+        p.join(await getDatabasesPath(), _dbName),
+        version: 1,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE $_tableName(
+              id TEXT PRIMARY KEY,
+              mimeType TEXT,
+              size INTEGER,
+              createdAt TEXT,
+              originalName TEXT
+            )
+          ''');
+        },
+        onOpen: (db) async {
+          try {
+            final List<Map<String, dynamic>> columns = await db.rawQuery("PRAGMA table_info($_tableName)");
+            final hasOriginalName = columns.any((column) => column['name'] == 'originalName');
+            if (!hasOriginalName) {
+              await db.execute("ALTER TABLE $_tableName ADD COLUMN originalName TEXT");
+            }
+          } catch (e) {
+            debugPrint('Error updating schema: $e');
           }
-        } catch (e) {
-          debugPrint('Error updating schema: $e');
-        }
-      },
-    );
+        },
+      );
+    }();
+    try {
+      await _openDbFuture;
+    } catch (_) {
+      _openDbFuture = null;
+      rethrow;
+    }
   }
 
   Future<void> saveFile(String filename, Uint8List bytes) async {

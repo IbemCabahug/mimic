@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'note_editor_screen.dart';
 import '../services/notes_service.dart';
+import '../crypto/vault_crypto.dart';
 import '../widgets/vault_scaffold.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -120,6 +121,17 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final crypto = ref.watch(vaultCryptoProvider);
+    if (!crypto.isUnlocked) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final route = ModalRoute.of(context);
+        if (route == null || !route.isCurrent) return;
+        Navigator.of(context).pushReplacementNamed('/vault-pin');
+      });
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
     return VaultScaffold(
       title: 'Notes',
       floatingActionButton: AnimatedFAB(

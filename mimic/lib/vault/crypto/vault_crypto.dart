@@ -281,22 +281,25 @@ class VaultCrypto extends ChangeNotifier {
   /// guaranteeing that the vault always finishes in a completely locked state with zero plaintext key
   /// material remaining in instance fields.
   void _lockInternal(Uint8List? keyToZero, Uint8List? kekToZero) {
-    if (keyToZero != null) {
-      keyToZero.fillRange(0, keyToZero.length, 0);
+    try {
+      if (keyToZero != null) {
+        keyToZero.fillRange(0, keyToZero.length, 0);
+      }
+      if (kekToZero != null) {
+        kekToZero.fillRange(0, kekToZero.length, 0);
+      }
+      if (_derivedKey != null) {
+        _derivedKey!.fillRange(0, _derivedKey!.length, 0);
+        _derivedKey = null;
+      }
+      if (_temporaryKek != null) {
+        _temporaryKek!.fillRange(0, _temporaryKek!.length, 0);
+        _temporaryKek = null;
+      }
+    } finally {
+      _isUnlocked = false;
+      notifyListeners();
     }
-    if (kekToZero != null) {
-      kekToZero.fillRange(0, kekToZero.length, 0);
-    }
-    if (_derivedKey != null) {
-      _derivedKey!.fillRange(0, _derivedKey!.length, 0);
-      _derivedKey = null;
-    }
-    if (_temporaryKek != null) {
-      _temporaryKek!.fillRange(0, _temporaryKek!.length, 0);
-      _temporaryKek = null;
-    }
-    _isUnlocked = false;
-    notifyListeners();
   }
 
   void clearKey() {
