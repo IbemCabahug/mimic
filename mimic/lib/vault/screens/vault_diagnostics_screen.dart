@@ -159,25 +159,34 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
 
   Widget _buildMetricRow(String label, String value) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      padding: const EdgeInsets.symmetric(vertical: 10.0),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.baseline,
+        textBaseline: TextBaseline.alphabetic,
         children: [
-          Text(
-            label,
-            style: const TextStyle(
-              fontFamily: 'Inter',
-              fontSize: 14,
-              color: VaultColors.textSecondary,
+          Expanded(
+            flex: 4,
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 14,
+                color: VaultColors.textSecondary,
+              ),
             ),
           ),
-          Text(
-            value,
-            style: const TextStyle(
-              fontFamily: 'Inter',
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
-              color: VaultColors.textPrimary,
+          const SizedBox(width: 12),
+          Expanded(
+            flex: 5,
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: const TextStyle(
+                fontFamily: 'Inter',
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+                color: VaultColors.textPrimary,
+              ),
             ),
           ),
         ],
@@ -197,37 +206,45 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
       return const Scaffold(body: SizedBox.shrink());
     }
 
+    final divider = Divider(
+      height: 1,
+      thickness: 1,
+      color: VaultColors.textTertiary.withValues(alpha: 0.2),
+    );
+
     return VaultScaffold(
       title: 'Diagnostics',
       body: Padding(
-        padding: const EdgeInsets.all(24.0),
+        padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
               decoration: BoxDecoration(
                 color: VaultColors.surface,
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFE0E0E0)),
+                border: Border.all(color: VaultColors.textTertiary.withValues(alpha: 0.3)),
               ),
               child: Column(
                 children: [
                   _buildMetricRow('Native PBKDF2 Status', _nativeStatus ?? 'not yet attempted'),
-                  const Divider(color: Color(0xFFE0E0E0)),
+                  divider,
                   _buildMetricRow(
                     'derivePbkdf2Async (100k iter)',
                     _pbkdf2AsyncFailed ? 'FAILED' : (_pbkdf2AsyncMs != null ? '$_pbkdf2AsyncMs ms' : '—'),
                   ),
+                  divider,
                   _buildMetricRow(
                     'PointyCastle fallback (100k iter)',
                     _pbkdf2PointycastleFailed ? 'FAILED' : (_pbkdf2PointycastleMs != null ? '$_pbkdf2PointycastleMs ms' : '—'),
                   ),
-                  const Divider(color: Color(0xFFE0E0E0)),
+                  divider,
                   _buildMetricRow(
                     'secureRead (vault_pin_hash)',
                     _secureReadFailed ? 'FAILED' : (_secureReadMs != null ? '$_secureReadMs ms' : '—'),
                   ),
+                  divider,
                   _buildMetricRow(
                     'Keystore unwrap',
                     _keystoreUnavailable

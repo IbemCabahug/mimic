@@ -228,11 +228,16 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
             builder: (context, constraints) {
               return SingleChildScrollView(
                 child: ConstrainedBox(
-                  constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                  constraints: BoxConstraints(
+                    minHeight: constraints.maxHeight,
+                    minWidth: constraints.maxWidth,
+                  ),
                   child: IntrinsicHeight(
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
                         const SizedBox(height: 16),
                         const Icon(
                           Icons.lock_outline,
@@ -346,7 +351,8 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
                     ),
                   ),
                 ),
-              );
+              ),
+            );
             },
           ),
         ),
