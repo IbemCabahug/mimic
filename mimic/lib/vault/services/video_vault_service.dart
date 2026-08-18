@@ -105,21 +105,35 @@ class VideoVaultService {
     final now = DateTime.now();
 
     final dest = await _platformService.resolveVaultFile(id);
-    await _crypto.encryptStreamSystem(src, dest);
+    bool writeSucceeded = false;
+    try {
+      await _crypto.encryptStreamSystem(src, dest);
 
-    final size = await src.length();
+      final size = await src.length();
 
-    final meta = VideoMeta(
-      id: id,
-      mimeType: mimeType,
-      size: size,
-      durationS: durationS ?? 0,
-      createdAt: now,
-      originalName: originalName,
-    );
+      final meta = VideoMeta(
+        id: id,
+        mimeType: mimeType,
+        size: size,
+        durationS: durationS ?? 0,
+        createdAt: now,
+        originalName: originalName,
+      );
 
-    await _saveMeta(meta);
-    return id;
+      await _saveMeta(meta);
+      writeSucceeded = true;
+      return id;
+    } finally {
+      if (!writeSucceeded) {
+        try {
+          if (await dest.exists()) {
+            await dest.delete();
+          }
+        } catch (e) {
+          debugPrint('Failed to clean up orphan video file $id: $e');
+        }
+      }
+    }
   }
 
   Future<Uint8List?> getVideo(String id) async {
@@ -240,18 +254,8 @@ class VideoVaultService {
     }
 
     await _ensureDb();
-    try {
-      final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
-      return maps.map((map) => VideoMeta.fromMap(map)).toList();
-    } catch (e) {
-      if (e is DatabaseException && e.toString().contains('database_closed')) {
-        _db = null;
-        await _ensureDb();
-        final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
-        return maps.map((map) => VideoMeta.fromMap(map)).toList();
-      }
-      rethrow;
-    }
+    final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
+    return maps.map((map) => VideoMeta.fromMap(map)).toList();
   }
 
   Future<void> _saveMeta(VideoMeta meta) async {
@@ -285,18 +289,24 @@ class VideoVaultService {
     await _db!.delete(_tableName, where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<List<String>> pickAndEncryptVideo(BuildContext context) async {
-    try {
-      final List<AssetEntity>? assets = await AssetPicker.pickAssets(
-        context,
-        pickerConfig: const AssetPickerConfig(
-          requestType: RequestType.video,
-        ),
-      );
-      if (assets == null || assets.isEmpty) return [];
+  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error})> pickAndEncryptVideo(BuildContext context) async {
+    final List<AssetEntity>? assets = await AssetPicker.pickAssets(
+      context,
+      pickerConfig: const AssetPickerConfig(
+        requestType: RequestType.video,
+      ),
+    );
+    if (assets == null || assets.isEmpty) {
+      return (successfulIds: <String>[], totalAttempted: 0, stoppedEarly: false, failedFileName: null, error: null);
+    }
 
-      final savedIds = <String>[];
-      for (final asset in assets) {
+    final savedIds = <String>[];
+    bool stoppedEarly = false;
+    String? failedFileName;
+    Object? failureError;
+
+    for (final asset in assets) {
+      try {
         final file = await asset.originFile;
         if (file == null) continue;
         final name = asset.title;
@@ -304,35 +314,40 @@ class VideoVaultService {
         final durationS = asset.duration;
         final id = await saveVideoFromFile(file, mime, durationS, originalName: name);
         savedIds.add(id);
+      } catch (e) {
+        stoppedEarly = true;
+        failedFileName = asset.title ?? 'video';
+        failureError = e;
+        debugPrint('pickAndEncryptVideo failed on $failedFileName: $e');
+        break;
       }
+    }
 
-      if (savedIds.length == assets.length) {
-        try {
-          final deletedIds = await PhotoManager.editor.deleteWithIds(assets.map((a) => a.id).toList());
-          if (deletedIds.length < assets.length && context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Original videos kept on device.')),
-            );
-          }
-        } catch (e) {
-          debugPrint('Gallery deletion failed: $e');
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Gallery deletion failed.')),
-            );
-          }
+    if (savedIds.length == assets.length) {
+      try {
+        final deletedIds = await PhotoManager.editor.deleteWithIds(assets.map((a) => a.id).toList());
+        if (deletedIds.length < assets.length && context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Original videos kept on device.')),
+          );
+        }
+      } catch (e) {
+        debugPrint('Gallery deletion failed: $e');
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Gallery deletion failed.')),
+          );
         }
       }
-      return savedIds;
-    } catch (e) {
-      debugPrint('pickAndEncryptVideo failed: $e');
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to import videos: $e')),
-        );
-      }
-      return [];
     }
+
+    return (
+      successfulIds: savedIds,
+      totalAttempted: assets.length,
+      stoppedEarly: stoppedEarly,
+      failedFileName: failedFileName,
+      error: failureError,
+    );
   }
 
   Future<void> restoreVideoToGallery(String id) async {

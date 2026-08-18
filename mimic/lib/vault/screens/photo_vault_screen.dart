@@ -153,8 +153,58 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     }
 
     if (!mounted) return;
-    final ids = await ref.read(fileVaultServiceProvider).pickAndEncryptImage(context);
-    if (ids.isNotEmpty) await _loadPhotos();
+    final result = await ref.read(fileVaultServiceProvider).pickAndEncryptImage(context);
+    if (result.successfulIds.isNotEmpty) {
+      await _loadPhotos();
+    }
+    if (result.stoppedEarly && mounted) {
+      final msg = _formatImportError(
+        result.successfulIds.length,
+        result.totalAttempted,
+        result.failedFileName,
+        result.error,
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg)),
+      );
+    }
+  }
+
+  String _formatImportError(
+    int succeeded,
+    int total,
+    String? failedFileName,
+    Object? error,
+  ) {
+    final String reason;
+    final errStr = error?.toString() ?? '';
+    final isLocked = errStr.contains('Vault is locked') || errStr.contains('locked');
+    final isDamaged = error is CorruptedMediaFileException || errStr.contains('damaged') || errStr.contains('corrupted');
+
+    final name = (failedFileName != null && failedFileName.isNotEmpty)
+        ? '"$failedFileName"'
+        : 'a photo';
+
+    if (isLocked) {
+      reason = 'the vault locked';
+    } else if (isDamaged) {
+      reason = '$name is damaged or unsupported';
+    } else {
+      reason = 'could not import $name';
+    }
+
+    if (succeeded > 0) {
+      final remaining = total - succeeded;
+      return 'Imported $succeeded of $total photos. Stopped because $reason ($remaining remaining not imported).';
+    } else {
+      if (isLocked) {
+        return 'Could not import photos: the vault is locked.';
+      } else if (isDamaged) {
+        return 'Failed to import photos: $name is damaged or unsupported.';
+      } else {
+        return 'Failed to import photos: could not read $name.';
+      }
+    }
   }
 
   Future<void> _captureFromCamera() async {

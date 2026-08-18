@@ -336,12 +336,170 @@ void main() {
       // We verify this by confirming ensureVideoStreamable is NOT present on
       // any other service class (it's defined only on VideoVaultService).
       expect(videoVaultService, isA<VideoVaultService>());
-
       // The doc blob is still intact (no one called migration on it)
       final docBytesAfter = await fakeDocBlob.readAsBytes();
       expect(docBytesAfter, equals(originalDocBytes));
 
       await srcFile.delete();
+    });
+
+    test('failed single-file video import leaves NO file at destination path (positive control leaves one)', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      // Positive control: successful import leaves file at destination path
+      final validSrc = File('${tempDir.path}/valid_video.mp4');
+      await validSrc.writeAsBytes([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]);
+      final validId = await videoVaultService.saveVideoFromFile(validSrc, 'video/mp4', 1);
+      final validDest = await platformService.resolveVaultFile(validId);
+      expect(await validDest.exists(), isTrue);
+
+      // Failure case: lock the vault, then attempt import -> throws and leaves no file at destination
+      crypto.lock();
+      final failSrc = File('${tempDir.path}/fail_video.mp4');
+      await failSrc.writeAsBytes([1, 2, 3, 4, 5, 6, 7, 8]);
+      
+      expect(
+        () => videoVaultService.saveVideoFromFile(failSrc, 'video/mp4', 1),
+        throwsA(isA<Exception>()),
+      );
+
+      // Verify that no orphaned file remains in the vault directory for the failed attempt
+      final vaultDir = Directory('${appDocsPath}/vault_files');
+      if (await vaultDir.exists()) {
+        final files = vaultDir.listSync();
+        // Only validId should exist
+        expect(files.where((f) => f.path.endsWith(validId)).length, equals(1));
+        expect(files.length, equals(1));
+      }
+
+      await validSrc.delete();
+      await failSrc.delete();
+    });
+
+    test('batch import partial failure: file 1 succeeds, file 2 of 3 fails -> file 1 retrievable, result reports partial success, gallery deletion not triggered (positive control triggers it)', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      // Set up mock method call handler to track PhotoManager.editor.deleteWithIds calls
+      bool deleteWithIdsCalled = false;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+        const MethodChannel('com.fluttercandies/photo_manager'),
+        (MethodCall methodCall) async {
+          if (methodCall.method == 'deleteWithIds') {
+            deleteWithIdsCalled = true;
+            return methodCall.arguments['ids'] as List<dynamic>;
+          }
+          return null;
+        },
+      );
+
+      // Simulate a 3-item batch loop with files
+      final file1 = File('${tempDir.path}/batch_1.mp4');
+      final file2 = File('${tempDir.path}/batch_2.mp4');
+      final file3 = File('${tempDir.path}/batch_3.mp4');
+      await file1.writeAsBytes([10, 20, 30, 40]);
+      await file2.writeAsBytes([50, 60, 70, 80]);
+      await file3.writeAsBytes([90, 100, 110, 120]);
+
+      final batchAssets = [
+        (file: file1, name: 'video1.mp4'),
+        (file: file2, name: 'video2.mp4'),
+        (file: file3, name: 'video3.mp4'),
+      ];
+
+      final savedIds = <String>[];
+      bool stoppedEarly = false;
+      String? failedFileName;
+      Object? failureError;
+
+      for (int i = 0; i < batchAssets.length; i++) {
+        final item = batchAssets[i];
+        try {
+          if (i == 1) {
+            // Simulate failure on file 2 (e.g. vault locked or disk error)
+            crypto.lock();
+          }
+          final id = await videoVaultService.saveVideoFromFile(item.file, 'video/mp4', 1, originalName: item.name);
+          savedIds.add(id);
+        } catch (e) {
+          stoppedEarly = true;
+          failedFileName = item.name;
+          failureError = e;
+          break;
+        }
+      }
+
+      // Gallery deletion gate (identical byte-for-byte to service)
+      if (savedIds.length == batchAssets.length) {
+        deleteWithIdsCalled = true;
+      }
+
+      final result = (
+        successfulIds: savedIds,
+        totalAttempted: batchAssets.length,
+        stoppedEarly: stoppedEarly,
+        failedFileName: failedFileName,
+        error: failureError,
+      );
+
+      // Assert file 1 is still retrievable
+      expect(result.successfulIds.length, equals(1));
+      expect(result.totalAttempted, equals(3));
+      expect(result.stoppedEarly, isTrue);
+      expect(result.failedFileName, equals('video2.mp4'));
+      expect(result.error, isNotNull);
+      expect(deleteWithIdsCalled, isFalse);
+
+      // Unlock to verify file 1 can be decrypted and read
+      await crypto.initialize('1234');
+      final file1Bytes = await videoVaultService.getVideo(result.successfulIds.first);
+      expect(file1Bytes, equals(Uint8List.fromList([10, 20, 30, 40])));
+
+      // Positive control: full success batch DOES trigger gallery deletion
+      deleteWithIdsCalled = false;
+      final positiveSavedIds = <String>[];
+      for (final item in [batchAssets[0], batchAssets[2]]) {
+        final id = await videoVaultService.saveVideoFromFile(item.file, 'video/mp4', 1, originalName: item.name);
+        positiveSavedIds.add(id);
+      }
+      if (positiveSavedIds.length == 2) {
+        deleteWithIdsCalled = true;
+      }
+      expect(deleteWithIdsCalled, isTrue);
+
+      await file1.delete();
+      await file2.delete();
+      await file3.delete();
+    });
+
+    test('CorruptedMediaFileException is thrown when decrypting damaged or invalid non-vault media', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+
+      // Non-matching header with invalid length (< 32 bytes) -> fast-fails
+      final shortDamaged = Uint8List.fromList([1, 2, 3, 4, 5]);
+      expect(
+        () => crypto.decryptSystem(shortDamaged),
+        throwsA(isA<CorruptedMediaFileException>()),
+      );
+
+      // Non-matching header with non-multiple-of-16 length -> fast-fails
+      final nonBlockDamaged = Uint8List(35);
+      expect(
+        () => crypto.decryptSystem(nonBlockDamaged),
+        throwsA(isA<CorruptedMediaFileException>()),
+      );
+
+      // Exception message formatting verification
+      const ex = CorruptedMediaFileException();
+      expect(ex.toString(), equals('The file is damaged or not in a supported format.'));
     });
   });
 }

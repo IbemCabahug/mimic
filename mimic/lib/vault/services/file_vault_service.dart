@@ -55,7 +55,8 @@ class FileVaultService {
 
   Future<void> _ensureDb() async {
     if (kIsWeb) return;
-    _db ??= await openDatabase(
+    if (_db != null) return;
+    _db = await openDatabase(
       p.join(await getDatabasesPath(), _dbName),
       version: 1,
       onCreate: (db, version) async {
@@ -69,16 +70,18 @@ class FileVaultService {
           )
         ''');
       },
+      onOpen: (db) async {
+        try {
+          final List<Map<String, dynamic>> columns = await db.rawQuery("PRAGMA table_info($_tableName)");
+          final hasOriginalName = columns.any((column) => column['name'] == 'originalName');
+          if (!hasOriginalName) {
+            await db.execute("ALTER TABLE $_tableName ADD COLUMN originalName TEXT");
+          }
+        } catch (e) {
+          debugPrint('Error updating schema: $e');
+        }
+      },
     );
-    try {
-      final List<Map<String, dynamic>> columns = await _db!.rawQuery("PRAGMA table_info($_tableName)");
-      final hasOriginalName = columns.any((column) => column['name'] == 'originalName');
-      if (!hasOriginalName) {
-        await _db!.execute("ALTER TABLE $_tableName ADD COLUMN originalName TEXT");
-      }
-    } catch (e) {
-      debugPrint('Error updating schema: $e');
-    }
   }
 
   Future<void> saveFile(String filename, Uint8List bytes) async {
@@ -111,18 +114,30 @@ class FileVaultService {
     final now = DateTime.now();
 
     final encrypted = await _crypto.encryptSystem(bytes);
-    await _platformService.saveEncryptedFile(id, encrypted);
+    bool writeSucceeded = false;
+    try {
+      await _platformService.saveEncryptedFile(id, encrypted);
 
-    final meta = PhotoMeta(
-      id: id,
-      mimeType: mimeType,
-      size: bytes.length,
-      createdAt: now,
-      originalName: originalName,
-    );
+      final meta = PhotoMeta(
+        id: id,
+        mimeType: mimeType,
+        size: bytes.length,
+        createdAt: now,
+        originalName: originalName,
+      );
 
-    await _saveMeta(meta);
-    return id;
+      await _saveMeta(meta);
+      writeSucceeded = true;
+      return id;
+    } finally {
+      if (!writeSucceeded) {
+        try {
+          await _platformService.deleteFile(id);
+        } catch (e) {
+          debugPrint('Failed to clean up orphan photo file $id: $e');
+        }
+      }
+    }
   }
 
   Future<Uint8List?> getPhoto(String id) async {
@@ -196,18 +211,24 @@ class FileVaultService {
     await _db!.delete(_tableName, where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<List<String>> pickAndEncryptImage(BuildContext context) async {
-    try {
-      final List<AssetEntity>? assets = await AssetPicker.pickAssets(
-        context,
-        pickerConfig: const AssetPickerConfig(
-          requestType: RequestType.image,
-        ),
-      );
-      if (assets == null || assets.isEmpty) return [];
+  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error})> pickAndEncryptImage(BuildContext context) async {
+    final List<AssetEntity>? assets = await AssetPicker.pickAssets(
+      context,
+      pickerConfig: const AssetPickerConfig(
+        requestType: RequestType.image,
+      ),
+    );
+    if (assets == null || assets.isEmpty) {
+      return (successfulIds: <String>[], totalAttempted: 0, stoppedEarly: false, failedFileName: null, error: null);
+    }
 
-      final savedIds = <String>[];
-      for (final asset in assets) {
+    final savedIds = <String>[];
+    bool stoppedEarly = false;
+    String? failedFileName;
+    Object? failureError;
+
+    for (final asset in assets) {
+      try {
         final file = await asset.originFile;
         if (file == null) continue;
         final bytes = await file.readAsBytes();
@@ -215,35 +236,40 @@ class FileVaultService {
         final mime = await asset.mimeTypeAsync ?? 'image/jpeg';
         final id = await savePhoto(bytes, mime, originalName: name);
         savedIds.add(id);
+      } catch (e) {
+        stoppedEarly = true;
+        failedFileName = asset.title ?? 'photo';
+        failureError = e;
+        debugPrint('pickAndEncryptImage failed on $failedFileName: $e');
+        break;
       }
+    }
 
-      if (savedIds.length == assets.length) {
-        try {
-          final deletedIds = await PhotoManager.editor.deleteWithIds(assets.map((a) => a.id).toList());
-          if (deletedIds.length < assets.length && context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Original photos kept on device.')),
-            );
-          }
-        } catch (e) {
-          debugPrint('Gallery deletion failed: $e');
-          if (context.mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Gallery deletion failed.')),
-            );
-          }
+    if (savedIds.length == assets.length) {
+      try {
+        final deletedIds = await PhotoManager.editor.deleteWithIds(assets.map((a) => a.id).toList());
+        if (deletedIds.length < assets.length && context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Original photos kept on device.')),
+          );
+        }
+      } catch (e) {
+        debugPrint('Gallery deletion failed: $e');
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Gallery deletion failed.')),
+          );
         }
       }
-      return savedIds;
-    } catch (e) {
-      debugPrint('pickAndEncryptImage failed: $e');
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to import photos: $e')),
-        );
-      }
-      return [];
     }
+
+    return (
+      successfulIds: savedIds,
+      totalAttempted: assets.length,
+      stoppedEarly: stoppedEarly,
+      failedFileName: failedFileName,
+      error: failureError,
+    );
   }
 
   Future<String?> captureAndEncryptImage() async {

@@ -38,6 +38,14 @@ class VaultSwapRecoveryException implements Exception {
   String toString() => 'VaultSwapRecoveryException: $message';
 }
 
+class CorruptedMediaFileException implements Exception {
+  final String message;
+  const CorruptedMediaFileException([this.message = 'The file is damaged or not in a supported format.']);
+
+  @override
+  String toString() => message;
+}
+
 class VaultCrypto extends ChangeNotifier {
   static const int _ivLength = 16;
   static const int _keyLength = 32;
@@ -815,6 +823,7 @@ class VaultCrypto extends ChangeNotifier {
     if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
     final iv = _generateSecureRandomBytes(_ivLength);
     final raf = await dest.open(mode: FileMode.write);
+    bool writeSucceeded = false;
     try {
       await raf.writeFrom(_mediaMagic);
       await raf.writeFrom(iv);
@@ -876,12 +885,20 @@ class VaultCrypto extends ChangeNotifier {
         final outBlock = Uint8List(16);
         cipher.processBlock(finalBlock, 0, outBlock, 0);
         await raf.writeFrom(outBlock);
+        writeSucceeded = true;
       } finally {
         await srcRaf.close();
       }
     } finally {
       await raf.flush();
       await raf.close();
+      if (!writeSucceeded) {
+        try {
+          if (await dest.exists()) {
+            await dest.delete();
+          }
+        } catch (_) {}
+      }
     }
   }
 
@@ -909,7 +926,7 @@ class VaultCrypto extends ChangeNotifier {
         final iv = Uint8List(_ivLength);
         final ivRead = await raf.readInto(iv);
         if (ivRead < _ivLength) {
-          throw Exception('Invalid ciphertext: missing IV');
+          throw const CorruptedMediaFileException();
         }
 
         final destRaf = await dest.open(mode: FileMode.write);
@@ -974,7 +991,7 @@ class VaultCrypto extends ChangeNotifier {
           }
 
           if (leftoverCipher.isNotEmpty) {
-            throw Exception('Invalid ciphertext: not a multiple of block size');
+            throw const CorruptedMediaFileException();
           }
 
           if (heldPlaintextBlock != null) {
@@ -982,7 +999,7 @@ class VaultCrypto extends ChangeNotifier {
             if (padLength > 0 && padLength <= 16) {
               await destRaf.writeFrom(heldPlaintextBlock.sublist(0, 16 - padLength));
             } else {
-              throw Exception('Invalid PKCS7 padding');
+              throw const CorruptedMediaFileException();
             }
           }
         } finally {
@@ -993,7 +1010,7 @@ class VaultCrypto extends ChangeNotifier {
         final systemKey = await _getSystemKey();
         final iv = Uint8List(16);
         final ivRead = await raf.readInto(iv);
-        if (ivRead < 16) throw Exception('Invalid ciphertext: missing IV');
+        if (ivRead < 16) throw const CorruptedMediaFileException();
 
         final destRaf = await dest.open(mode: FileMode.write);
         try {
@@ -1035,6 +1052,10 @@ class VaultCrypto extends ChangeNotifier {
     }
 
     if (magicType == 0) {
+      final length = await src.length();
+      if (length < 32 || length % 16 != 0) {
+        throw const CorruptedMediaFileException();
+      }
       final allBytes = await src.readAsBytes();
       final decrypted = await _decryptLegacySystem(allBytes);
       await dest.writeAsBytes(decrypted, flush: true);
@@ -1057,10 +1078,20 @@ class VaultCrypto extends ChangeNotifier {
 
     if (magicType == 1) {
       final actualCiphertext = ciphertext.sublist(_mediaMagic.length);
-      return decrypt(actualCiphertext);
+      try {
+        return decrypt(actualCiphertext);
+      } on ArgumentError {
+        throw const CorruptedMediaFileException();
+      } on RangeError {
+        throw const CorruptedMediaFileException();
+      } catch (e) {
+        if (e is SystemKeyMissingException || e is StateError) rethrow;
+        if (e.toString().contains('Vault is locked')) rethrow;
+        throw const CorruptedMediaFileException();
+      }
     } else if (magicType == 2) {
       final actualCiphertext = ciphertext.sublist(_mediaMagic.length);
-      if (actualCiphertext.length < 16) throw Exception('Invalid ciphertext: missing IV');
+      if (actualCiphertext.length < 16) throw const CorruptedMediaFileException();
       final iv = actualCiphertext.sublist(0, 16);
       final encrypted = actualCiphertext.sublist(16);
       
@@ -1088,6 +1119,9 @@ class VaultCrypto extends ChangeNotifier {
       }
       return outBuffer;
     } else {
+      if (ciphertext.length < 32 || ciphertext.length % 16 != 0) {
+        throw const CorruptedMediaFileException();
+      }
       return _decryptLegacySystem(ciphertext);
     }
   }
@@ -1095,11 +1129,21 @@ class VaultCrypto extends ChangeNotifier {
   Future<Uint8List> _decryptLegacySystem(Uint8List ciphertext) async {
     if (ciphertext.isEmpty) return Uint8List(0);
     final key = await _getSystemKey();
-    if (ciphertext.length < _ivLength) throw Exception('Invalid ciphertext');
+    if (ciphertext.length < _ivLength) throw const CorruptedMediaFileException();
     final iv = ciphertext.sublist(0, _ivLength);
     final encrypted = ciphertext.sublist(_ivLength);
-    final cipher = _createCipher(key, iv, false);
-    return cipher.process(encrypted);
+    try {
+      final cipher = _createCipher(key, iv, false);
+      return cipher.process(encrypted);
+    } on ArgumentError {
+      throw const CorruptedMediaFileException();
+    } on RangeError {
+      throw const CorruptedMediaFileException();
+    } catch (e) {
+      if (e is SystemKeyMissingException || e is StateError) rethrow;
+      if (e.toString().contains('Vault is locked')) rethrow;
+      throw const CorruptedMediaFileException();
+    }
   }
 
   /// Generates the versioned PIN verifier string ('v3:<iterations>:<base64(SHA256(key))>')

@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/video_vault_service.dart';
+import '../crypto/vault_crypto.dart';
 import '../widgets/vault_scaffold.dart';
 import '../../core/theme/app_theme.dart';
 import 'video_player_screen.dart';
@@ -106,8 +107,58 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     }
 
     if (!mounted) return;
-    final ids = await ref.read(videoVaultServiceProvider).pickAndEncryptVideo(context);
-    if (ids.isNotEmpty) await _loadVideos();
+    final result = await ref.read(videoVaultServiceProvider).pickAndEncryptVideo(context);
+    if (result.successfulIds.isNotEmpty) {
+      await _loadVideos();
+    }
+    if (result.stoppedEarly && mounted) {
+      final msg = _formatImportError(
+        result.successfulIds.length,
+        result.totalAttempted,
+        result.failedFileName,
+        result.error,
+      );
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg)),
+      );
+    }
+  }
+
+  String _formatImportError(
+    int succeeded,
+    int total,
+    String? failedFileName,
+    Object? error,
+  ) {
+    final String reason;
+    final errStr = error?.toString() ?? '';
+    final isLocked = errStr.contains('Vault is locked') || errStr.contains('locked');
+    final isDamaged = error is CorruptedMediaFileException || errStr.contains('damaged') || errStr.contains('corrupted');
+
+    final name = (failedFileName != null && failedFileName.isNotEmpty)
+        ? '"$failedFileName"'
+        : 'a video';
+
+    if (isLocked) {
+      reason = 'the vault locked';
+    } else if (isDamaged) {
+      reason = '$name is damaged or unsupported';
+    } else {
+      reason = 'could not import $name';
+    }
+
+    if (succeeded > 0) {
+      final remaining = total - succeeded;
+      return 'Imported $succeeded of $total videos. Stopped because $reason ($remaining remaining not imported).';
+    } else {
+      if (isLocked) {
+        return 'Could not import videos: the vault is locked.';
+      } else if (isDamaged) {
+        return 'Failed to import videos: $name is damaged or unsupported.';
+      } else {
+        return 'Failed to import videos: could not read $name.';
+      }
+    }
   }
 
   Future<void> _showOptions(VideoMeta video) async {

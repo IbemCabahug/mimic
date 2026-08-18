@@ -172,9 +172,15 @@ class FakeFileVaultService extends FileVaultService {
   }
 
   @override
-  Future<List<String>> pickAndEncryptImage(BuildContext context) async {
+  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error})> pickAndEncryptImage(BuildContext context) async {
     final id = await savePhoto(kTransparentImage, 'image/jpeg');
-    return [id];
+    return (
+      successfulIds: [id],
+      totalAttempted: 1,
+      stoppedEarly: false,
+      failedFileName: null,
+      error: null,
+    );
   }
 
   @override
@@ -187,7 +193,6 @@ class FakeFileVaultService extends FileVaultService {
     await deletePhoto(id);
   }
 }
-
 
 /// Fake implementation of VideoVaultService that stores videos in memory.
 class FakeVideoVaultService extends VideoVaultService {
@@ -229,9 +234,15 @@ class FakeVideoVaultService extends VideoVaultService {
   }
 
   @override
-  Future<List<String>> pickAndEncryptVideo(BuildContext context) async {
+  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error})> pickAndEncryptVideo(BuildContext context) async {
     final id = await saveVideo(kTransparentImage, 'video/mp4', 10);
-    return [id];
+    return (
+      successfulIds: [id],
+      totalAttempted: 1,
+      stoppedEarly: false,
+      failedFileName: null,
+      error: null,
+    );
   }
 
   @override
@@ -304,10 +315,6 @@ class FakeDocumentVaultService extends DocumentVaultService {
     return documents;
   }
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Helper / Utility Functions
-// ═══════════════════════════════════════════════════════════════════════════
 
 /// Verifies standard constraints: VaultScaffold, AutoLockWrapper, theme brightness, and background color.
 void verifySharedConstraints(WidgetTester tester) {
