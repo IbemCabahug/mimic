@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mimic/vault/services/video_vault_service.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/core/services/platform_service.dart';
+import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
@@ -500,6 +501,55 @@ void main() {
       // Exception message formatting verification
       const ex = CorruptedMediaFileException();
       expect(ex.toString(), equals('The file is damaged or not in a supported format.'));
+    });
+
+    test('concurrent getAllVideos calls open the database exactly once', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      expect(videoVaultService.openCount, equals(0));
+
+      // Fire two getAllVideos() calls without awaiting the first, await both together
+      final future1 = videoVaultService.getAllVideos();
+      final future2 = videoVaultService.getAllVideos();
+      final results = await Future.wait([future1, future2]);
+
+      expect(results[0], isEmpty);
+      expect(results[1], isEmpty);
+      expect(videoVaultService.openCount, equals(1));
+
+      // Positive control: genuinely separate instance opens its database independently
+      final platformService2 = AndroidPlatformService();
+      final crypto2 = VaultCrypto(platformService2, FakeKeystoreService());
+      await crypto2.initialize('1234');
+      final separateService = VideoVaultService(platformService2, crypto2);
+      expect(separateService.openCount, equals(0));
+      await separateService.getAllVideos();
+      expect(separateService.openCount, equals(1));
+    });
+
+    test('a closed database handle is reopened on the next query', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      // First query opens the database
+      final initialVideos = await videoVaultService.getAllVideos();
+      expect(initialVideos, isEmpty);
+      expect(videoVaultService.openCount, equals(1));
+
+      // Close the underlying SQLite database handle externally
+      final dbPath = p.join(await getDatabasesPath(), 'vault_videos.db');
+      final db = await openDatabase(dbPath);
+      await db.close();
+
+      // Next query detects closed handle, reopens and succeeds
+      final videos = await videoVaultService.getAllVideos();
+      expect(videos, isEmpty);
+      expect(videoVaultService.openCount, equals(2));
     });
   });
 }

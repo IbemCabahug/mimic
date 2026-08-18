@@ -44,26 +44,46 @@ class NotesService {
   final VaultCrypto _crypto;
   static const String _webKey = 'vault_notes';
   Database? _db;
+  Future<void>? _openDbFuture;
+
+  int _openCount = 0;
+
+  @visibleForTesting
+  int get openCount => _openCount;
 
   NotesService(this._platformService, this._crypto);
 
   Future<void> _ensureDb() async {
     if (kIsWeb) return;
-    _db ??= await openDatabase(
-      p.join(await getDatabasesPath(), 'vault_notes.db'),
-      version: 1,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE notes(
-            id TEXT PRIMARY KEY,
-            title TEXT,
-            encryptedBody TEXT,
-            created_at TEXT,
-            updated_at TEXT
-          )
-        ''');
-      },
-    );
+    if (_db != null && _db!.isOpen) return;
+    if (_db != null && !_db!.isOpen) {
+      _openDbFuture = null;
+      _db = null;
+    }
+    _openDbFuture ??= () async {
+      _openCount++;
+      _db = await openDatabase(
+        p.join(await getDatabasesPath(), 'vault_notes.db'),
+        version: 1,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE notes(
+              id TEXT PRIMARY KEY,
+              title TEXT,
+              encryptedBody TEXT,
+              created_at TEXT,
+              updated_at TEXT
+            )
+          ''');
+        },
+      );
+    }();
+    try {
+      await _openDbFuture;
+    } catch (_) {
+      _openDbFuture = null;
+      rethrow;
+    }
   }
 
   Future<void> addNote(Note note) async {

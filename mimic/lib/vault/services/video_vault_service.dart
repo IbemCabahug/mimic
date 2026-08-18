@@ -57,27 +57,47 @@ class VideoVaultService {
   static const String _dbName = 'vault_videos.db';
   static const String _tableName = 'videos';
   Database? _db;
+  Future<void>? _openDbFuture;
+
+  int _openCount = 0;
+
+  @visibleForTesting
+  int get openCount => _openCount;
 
   VideoVaultService(this._platformService, this._crypto);
 
   Future<void> _ensureDb() async {
     if (kIsWeb) return;
-    _db ??= await openDatabase(
-      p.join(await getDatabasesPath(), _dbName),
-      version: 1,
-      onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE $_tableName(
-            id TEXT PRIMARY KEY,
-            mimeType TEXT,
-            size INTEGER,
-            durationS INTEGER,
-            createdAt TEXT,
-            originalName TEXT
-          )
-        ''');
-      },
-    );
+    if (_db != null && _db!.isOpen) return;
+    if (_db != null && !_db!.isOpen) {
+      _openDbFuture = null;
+      _db = null;
+    }
+    _openDbFuture ??= () async {
+      _openCount++;
+      _db = await openDatabase(
+        p.join(await getDatabasesPath(), _dbName),
+        version: 1,
+        onCreate: (db, version) async {
+          await db.execute('''
+            CREATE TABLE $_tableName(
+              id TEXT PRIMARY KEY,
+              mimeType TEXT,
+              size INTEGER,
+              durationS INTEGER,
+              createdAt TEXT,
+              originalName TEXT
+            )
+          ''');
+        },
+      );
+    }();
+    try {
+      await _openDbFuture;
+    } catch (_) {
+      _openDbFuture = null;
+      rethrow;
+    }
   }
 
   Future<String> saveVideo(Uint8List bytes, String mimeType, int durationS, {String? originalName}) async {
