@@ -90,6 +90,29 @@ Future<void> pumpBootSequence(WidgetTester tester) async {
   await tester.pump(); // finalize route disposal and unmount LoadingScreen
 }
 
+/// Navigate to a vault route inside real async time and drain the sqflite
+/// queries started by VaultHomeScreen._loadCounts and
+/// BackupOutOfDateBanner._checkStatus before the tree is torn down.
+Future<void> enterVaultRoute(
+  WidgetTester tester,
+  NavigatorState navigator,
+  String route,
+  Finder settled,
+) async {
+  await tester.runAsync(() async {
+    navigator.pushNamed(route);
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (DateTime.now().isBefore(deadline)) {
+      await tester.pump(const Duration(milliseconds: 50));
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      if (settled.evaluate().isNotEmpty) {
+        await Future<void>.delayed(const Duration(milliseconds: 300));
+        break;
+      }
+    }
+  });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Test Entry Point
 // ═══════════════════════════════════════════════════════════════════════════
@@ -188,8 +211,7 @@ void main() {
 
     // Push the VaultHomeScreen route
     final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
-    navigator.pushNamed('/vault-home');
-    await pumpFrames(tester);
+    await enterVaultRoute(tester, navigator, '/vault-home', find.byType(VaultHomeScreen));
 
     expect(find.byType(VaultHomeScreen), findsOneWidget);
 
@@ -230,18 +252,9 @@ void main() {
     // Unlock the vault
     await tester.runAsync(() async {
       await fakeCrypto.initialize('1234');
-      final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
-      navigator.pushNamed('/vault-home');
-      final deadline = DateTime.now().add(const Duration(seconds: 5));
-      while (DateTime.now().isBefore(deadline)) {
-        await tester.pump(const Duration(milliseconds: 50));
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-        if (find.byType(VaultHomeScreen).evaluate().isNotEmpty) {
-          await Future<void>.delayed(const Duration(milliseconds: 300));
-          break;
-        }
-      }
     });
+    final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
+    await enterVaultRoute(tester, navigator, '/vault-home', find.byType(VaultHomeScreen));
 
     // Verify vault is active (VaultHomeScreen rendered)
     expect(find.byType(VaultHomeScreen), findsOneWidget,
@@ -300,8 +313,7 @@ void main() {
       await fakeCrypto.initialize('1234');
     });
     final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
-    navigator.pushNamed('/vault-home');
-    await pumpFrames(tester);
+    await enterVaultRoute(tester, navigator, '/vault-home', find.byType(VaultHomeScreen));
 
     expect(fakeCrypto.isUnlocked, isTrue);
     expect(find.byType(VaultHomeScreen), findsOneWidget);
@@ -410,18 +422,9 @@ void main() {
     // 1. Open Vault
     await tester.runAsync(() async {
       await fakeCrypto.initialize('1234');
-      final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
-      navigator.pushNamed('/vault-home');
-      final deadline = DateTime.now().add(const Duration(seconds: 5));
-      while (DateTime.now().isBefore(deadline)) {
-        await tester.pump(const Duration(milliseconds: 50));
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-        if (find.byType(VaultHomeScreen).evaluate().isNotEmpty) {
-          await Future<void>.delayed(const Duration(milliseconds: 300));
-          break;
-        }
-      }
     });
+    final navigator = Navigator.of(tester.element(find.byType(HomeScreen)));
+    await enterVaultRoute(tester, navigator, '/vault-home', find.byType(VaultHomeScreen));
 
     expect(find.byType(VaultHomeScreen), findsOneWidget);
 
