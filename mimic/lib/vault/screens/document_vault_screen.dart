@@ -200,6 +200,7 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
   }
 
   Future<void> _importDocument() async {
+    AutoLock().suspend();
     try {
       await ref.read(documentVaultServiceProvider).importDocument();
       await _loadDocuments();
@@ -209,6 +210,8 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
           SnackBar(content: Text('Import failed: $e')),
         );
       }
+    } finally {
+      AutoLock().resume();
     }
   }
 

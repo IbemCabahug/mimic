@@ -134,6 +134,8 @@ class FakeNotesService extends NotesService {
 class FakeFileVaultService extends FileVaultService {
   final List<PhotoMeta> photos = [];
   final Map<String, Uint8List> photoData = {};
+  void Function()? onPickAndEncryptImage;
+  bool shouldThrowOnPick = false;
 
   FakeFileVaultService(super.platformService, super.crypto);
 
@@ -173,6 +175,10 @@ class FakeFileVaultService extends FileVaultService {
 
   @override
   Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error})> pickAndEncryptImage(BuildContext context) async {
+    onPickAndEncryptImage?.call();
+    if (shouldThrowOnPick) {
+      throw Exception('Import failure simulation');
+    }
     final id = await savePhoto(kTransparentImage, 'image/jpeg');
     return (
       successfulIds: [id],
@@ -452,10 +458,6 @@ void main() {
       testTempDir.deleteSync(recursive: true);
     } catch (_) {}
   });
-
-  // ═══════════════════════════════════════════════════════════════════════
-  // 1 · VaultHomeScreen Tests
-  // ═══════════════════════════════════════════════════════════════════════
   group('1 · VaultHomeScreen', () {
     testWidgets('Renders 5 section cards, and lock button clears key and redirects', (WidgetTester tester) async {
       // Configure larger viewport size to ensure all cards are visible in GridView
@@ -556,6 +558,58 @@ void main() {
         expect(content, isNot(equals(kTransparentImage)));
       }
     });
+
+    testWidgets('import suspends auto-lock for its duration', (WidgetTester tester) async {
+      AutoLock().resume();
+      bool? wasSuspendedDuringImport;
+      fakePhotos.onPickAndEncryptImage = () {
+        wasSuspendedDuringImport = AutoLock().isSuspended;
+      };
+
+      await tester.pumpWidget(buildTestApp(const PhotoVaultScreen()));
+      await tester.pumpAndSettle();
+
+      final fabFinder = find.byType(FloatingActionButton);
+      await tester.tap(fabFinder);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Choose from Gallery'));
+      await tester.pumpAndSettle();
+
+      expect(AutoLock().isSuspended, isFalse);
+
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      expect(wasSuspendedDuringImport, isTrue,
+          reason: 'AutoLock must be suspended while pickAndEncryptImage is executing');
+      expect(AutoLock().isSuspended, isFalse,
+          reason: 'AutoLock must be resumed after pickAndEncryptImage completes');
+    });
+
+    testWidgets('auto-lock is resumed after an import throws', (WidgetTester tester) async {
+      AutoLock().resume();
+      fakePhotos.shouldThrowOnPick = true;
+
+      await tester.pumpWidget(buildTestApp(const PhotoVaultScreen()));
+      await tester.pumpAndSettle();
+
+      final fabFinder = find.byType(FloatingActionButton);
+      await tester.tap(fabFinder);
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Choose from Gallery'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Continue'));
+      await tester.pumpAndSettle();
+
+      // Verify that auto-lock is resumed regardless of exception
+      expect(AutoLock().isSuspended, isFalse,
+          reason: 'AutoLock must be resumed in finally block even when import throws');
+      expect(find.text('Failed to import photos: could not read a photo.'), findsOneWidget,
+          reason: 'Formatted error message snackbar should be displayed on exception');
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════
@@ -600,7 +654,7 @@ void main() {
     });
   });
 
-// ═══════════════════════════════════════════════════════════════════════
+  // ═══════════════════════════════════════════════════════════════════════
   // 5 · DocumentVaultScreen Tests
   // ═══════════════════════════════════════════════════════════════════════
   group('5 · DocumentVaultScreen', () {

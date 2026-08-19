@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/video_vault_service.dart';
+import '../security/auto_lock.dart';
 import '../crypto/vault_crypto.dart';
 import '../widgets/vault_scaffold.dart';
 import '../../core/theme/app_theme.dart';
@@ -107,20 +108,32 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     }
 
     if (!mounted) return;
-    final result = await ref.read(videoVaultServiceProvider).pickAndEncryptVideo(context);
-    if (result.successfulIds.isNotEmpty) {
-      await _loadVideos();
-    }
-    if (result.stoppedEarly && mounted) {
-      final msg = _formatImportError(
-        result.successfulIds.length,
-        result.totalAttempted,
-        result.failedFileName,
-        result.error,
-      );
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(msg)),
-      );
+    AutoLock().suspend();
+    try {
+      final result = await ref.read(videoVaultServiceProvider).pickAndEncryptVideo(context);
+      if (result.successfulIds.isNotEmpty) {
+        await _loadVideos();
+      }
+      if (result.stoppedEarly && mounted) {
+        final msg = _formatImportError(
+          result.successfulIds.length,
+          result.totalAttempted,
+          result.failedFileName,
+          result.error,
+        );
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        final msg = _formatImportError(0, 0, null, e);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(msg)),
+        );
+      }
+    } finally {
+      AutoLock().resume();
     }
   }
 

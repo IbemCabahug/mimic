@@ -434,6 +434,202 @@ void main() {
       expect(find.text('GAME_HOME'), findsOneWidget);
       expect(find.text('PIN_SCREEN'), findsNothing);
     });
+
+    testWidgets('backgrounding past the idle timeout still locks when not suspended', (WidgetTester tester) async {
+      final fakePlatform = FakePlatformService();
+      final fakeCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+      await tester.runAsync(() async {
+        await fakeCrypto.initialize('1234');
+      });
+      expect(fakeCrypto.isUnlocked, isTrue);
+
+      late BuildContext savedContext;
+      late WidgetRef savedRef;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+            vaultCryptoProvider.overrideWith((ref) => fakeCrypto),
+          ],
+          child: MaterialApp(
+            navigatorKey: router.navigatorKey,
+            initialRoute: '/vault-home',
+            routes: {
+              '/': (_) => const Scaffold(body: Text('GAME_HOME')),
+              '/vault-home': (_) => Consumer(
+                builder: (context, ref, _) {
+                  savedContext = context;
+                  savedRef = ref;
+                  return const Scaffold(body: Text('VAULT_HOME'));
+                },
+              ),
+              '/vault-pin': (_) => const Scaffold(body: Text('PIN_SCREEN')),
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      AutoLock().init(savedContext, savedRef);
+      expect(AutoLock().isSuspended, isFalse);
+
+      // Simulate backgrounding
+      AutoLock().didChangeAppLifecycleState(AppLifecycleState.paused);
+      // Fast-forward background time past 60-second idle timeout
+      AutoLock().setBackgroundedAtForTesting(DateTime.now().subtract(const Duration(seconds: 70)));
+      // Resume
+      AutoLock().didChangeAppLifecycleState(AppLifecycleState.resumed);
+
+      // Drain _lockVault
+      await tester.runAsync(() async {
+        for (int i = 0; i < 50; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          if (!fakeCrypto.isUnlocked) {
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+            break;
+          }
+        }
+      });
+      for (int i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      await tester.pumpAndSettle();
+
+      expect(fakeCrypto.isUnlocked, isFalse,
+          reason: 'Vault must lock when un-suspended background time exceeds _timeout');
+      expect(find.text('PIN_SCREEN'), findsOneWidget);
+    });
+
+    testWidgets('a suspended import survives a long trip to the file picker', (WidgetTester tester) async {
+      final fakePlatform = FakePlatformService();
+      final fakeCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+      await tester.runAsync(() async {
+        await fakeCrypto.initialize('1234');
+      });
+      expect(fakeCrypto.isUnlocked, isTrue);
+
+      late BuildContext savedContext;
+      late WidgetRef savedRef;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+            vaultCryptoProvider.overrideWith((ref) => fakeCrypto),
+          ],
+          child: MaterialApp(
+            navigatorKey: router.navigatorKey,
+            initialRoute: '/vault-home',
+            routes: {
+              '/': (_) => const Scaffold(body: Text('GAME_HOME')),
+              '/vault-home': (_) => Consumer(
+                builder: (context, ref, _) {
+                  savedContext = context;
+                  savedRef = ref;
+                  return const Scaffold(body: Text('VAULT_HOME'));
+                },
+              ),
+              '/vault-pin': (_) => const Scaffold(body: Text('PIN_SCREEN')),
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      AutoLock().init(savedContext, savedRef);
+      // Suspend auto-lock (e.g. during file picker import)
+      AutoLock().suspend();
+      expect(AutoLock().isSuspended, isTrue);
+
+      // Simulate backgrounding while picking files (e.g. 5 minutes)
+      AutoLock().didChangeAppLifecycleState(AppLifecycleState.paused);
+      AutoLock().setBackgroundedAtForTesting(DateTime.now().subtract(const Duration(minutes: 5)));
+      // Resume from background
+      AutoLock().didChangeAppLifecycleState(AppLifecycleState.resumed);
+
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pumpAndSettle();
+
+      expect(fakeCrypto.isUnlocked, isTrue,
+          reason: 'Suspended import must NOT lock when background time is less than suspendCeiling');
+      expect(AutoLock().isSuspended, isTrue,
+          reason: 'isSuspended must remain true across background resume');
+      expect(find.text('VAULT_HOME'), findsOneWidget);
+      expect(find.text('PIN_SCREEN'), findsNothing);
+
+      // Clean up the active 30-minute suspend timer before test finishes
+      AutoLock().dispose();
+    });
+
+    testWidgets('a suspended session locks once the ceiling is exceeded', (WidgetTester tester) async {
+      final fakePlatform = FakePlatformService();
+      final fakeCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+      await tester.runAsync(() async {
+        await fakeCrypto.initialize('1234');
+      });
+      expect(fakeCrypto.isUnlocked, isTrue);
+
+      late BuildContext savedContext;
+      late WidgetRef savedRef;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+            vaultCryptoProvider.overrideWith((ref) => fakeCrypto),
+          ],
+          child: MaterialApp(
+            navigatorKey: router.navigatorKey,
+            initialRoute: '/vault-home',
+            routes: {
+              '/': (_) => const Scaffold(body: Text('GAME_HOME')),
+              '/vault-home': (_) => Consumer(
+                builder: (context, ref, _) {
+                  savedContext = context;
+                  savedRef = ref;
+                  return const Scaffold(body: Text('VAULT_HOME'));
+                },
+              ),
+              '/vault-pin': (_) => const Scaffold(body: Text('PIN_SCREEN')),
+            },
+          ),
+        ),
+      );
+      await tester.pump();
+
+      AutoLock().init(savedContext, savedRef);
+      AutoLock().suspend();
+      expect(AutoLock().isSuspended, isTrue);
+
+      // Simulate backgrounding past 30-minute suspend ceiling (e.g. 31 minutes)
+      AutoLock().didChangeAppLifecycleState(AppLifecycleState.paused);
+      AutoLock().setBackgroundedAtForTesting(DateTime.now().subtract(const Duration(minutes: 31)));
+      // Resume from background
+      AutoLock().didChangeAppLifecycleState(AppLifecycleState.resumed);
+
+      // Drain _lockVault
+      await tester.runAsync(() async {
+        for (int i = 0; i < 50; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          if (!fakeCrypto.isUnlocked) {
+            await Future<void>.delayed(const Duration(milliseconds: 100));
+            break;
+          }
+        }
+      });
+      for (int i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+      await tester.pumpAndSettle();
+
+      expect(fakeCrypto.isUnlocked, isFalse,
+          reason: 'Suspended session must lock when background duration exceeds suspendCeiling');
+      expect(find.text('PIN_SCREEN'), findsOneWidget);
+    });
   });
 }
 

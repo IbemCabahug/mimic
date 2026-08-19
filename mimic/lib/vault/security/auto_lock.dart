@@ -30,6 +30,14 @@ class AutoLock with WidgetsBindingObserver {
   DateTime? _backgroundedAt;
   bool _suspended = false;
 
+  @visibleForTesting
+  bool get isSuspended => _suspended;
+
+  @visibleForTesting
+  void setBackgroundedAtForTesting(DateTime? dt) {
+    _backgroundedAt = dt;
+  }
+
   /// Initializes the inactivity timer. Called when vault is unlocked.
   void init(BuildContext context, WidgetRef ref) {
     _context = context;
@@ -64,10 +72,16 @@ class AutoLock with WidgetsBindingObserver {
       case AppLifecycleState.resumed:
         final since = _backgroundedAt;
         _backgroundedAt = null;
-        if (since != null && DateTime.now().difference(since) >= _timeout) {
-          _lockVault();                      // backgrounded >= timeout -> lock
+        if (_suspended) {
+          if (since != null && DateTime.now().difference(since) >= suspendCeiling) {
+            _lockVault();
+          }
         } else {
-          resetTimer();                      // returned in time -> resume the idle timer
+          if (since != null && DateTime.now().difference(since) >= _timeout) {
+            _lockVault();
+          } else {
+            resetTimer();
+          }
         }
         break;
       case AppLifecycleState.inactive:
