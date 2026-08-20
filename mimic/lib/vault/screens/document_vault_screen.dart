@@ -200,7 +200,7 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
   }
 
   Future<void> _importDocument() async {
-    AutoLock().suspend();
+    AutoLock().beginProtectedOperation();
     try {
       await ref.read(documentVaultServiceProvider).importDocument();
       await _loadDocuments();
@@ -211,7 +211,7 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
         );
       }
     } finally {
-      AutoLock().resume();
+      AutoLock().endProtectedOperation();
     }
   }
 

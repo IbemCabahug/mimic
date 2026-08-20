@@ -1,14 +1,27 @@
 import 'package:mimic/vault/crypto/keystore_service.dart';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:pointycastle/export.dart';
 import 'package:mimic/vault/services/video_vault_service.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
+import 'package:mimic/vault/crypto/media_format.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+class ThrowingEncryptVaultCrypto extends VaultCrypto {
+  ThrowingEncryptVaultCrypto(PlatformService platformService, KeystoreService keystoreService)
+      : super(platformService, keystoreService);
+
+  @override
+  Future<void> encryptStreamSystemCtr(File src, File dest) async {
+    throw Exception('Simulated encryption failure during video migration');
+  }
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -191,7 +204,7 @@ void main() {
 
       // 3. Verify it starts with CBC magic "MVKEYv1\0"
       final blobFile = await platformService.resolveVaultFile(id);
-      final cbcMagic = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x76, 0x31, 0x00];
+      final cbcMagic = kMediaMagicV1;
       final originalBytes = await blobFile.readAsBytes();
       for (int i = 0; i < 8; i++) {
         expect(originalBytes[i], cbcMagic[i], reason: 'Blob should start as CBC');
@@ -200,11 +213,11 @@ void main() {
       // 4. Migrate
       await videoVaultService.ensureVideoStreamable(id);
 
-      // 5. Verify it now starts with CTR magic "MVKEYc1\0"
-      final ctrMagic = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x63, 0x31, 0x00];
+      // 5. Verify it now starts with CTR c2 magic "MVKEYc2\0"
+      final ctrMagic = kMediaMagicCtrV2;
       final migratedBytes = await blobFile.readAsBytes();
       for (int i = 0; i < 8; i++) {
-        expect(migratedBytes[i], ctrMagic[i], reason: 'Blob should now be CTR');
+        expect(migratedBytes[i], ctrMagic[i], reason: 'Blob should now be CTR c2');
       }
 
       // 6. Full decrypt and verify plaintext is identical
@@ -290,9 +303,9 @@ void main() {
       // Call ensureVideoStreamable on a VALID blob — it should succeed
       await videoVaultService.ensureVideoStreamable(id);
 
-      // Verify the blob was replaced (CTR magic)
+      // Verify the blob was replaced (CTR c2 magic)
       final newBytes = await blobFile.readAsBytes();
-      final ctrMagic = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x63, 0x31, 0x00];
+      final ctrMagic = kMediaMagicCtrV2;
       for (int i = 0; i < 8; i++) {
         expect(newBytes[i], ctrMagic[i]);
       }
@@ -301,6 +314,501 @@ void main() {
       expect(newBytes.length != originalBytes.length || newBytes[5] != originalBytes[5], isTrue);
 
       await srcFile.delete();
+    });
+
+    test('T3 — rescue: create a c1 blob, run ensureVideoStreamable, assert file starts with c2 magic and decrypts', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      final random = Random.secure();
+      final plaintext = Uint8List(45000);
+      for (int i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+      // 4 arbitrary size bytes + 'ftyp' (ISO base media header)
+      plaintext[0] = 0x00;
+      plaintext[1] = 0x00;
+      plaintext[2] = 0x00;
+      plaintext[3] = 0x20;
+      plaintext[4] = 0x66; // 'f'
+      plaintext[5] = 0x74; // 't'
+      plaintext[6] = 0x79; // 'y'
+      plaintext[7] = 0x70; // 'p'
+
+      // 1. Manually construct a c1 blob (using system_key)
+      final rawKey = secureStorageData['system_key'];
+      final Uint8List sysKey;
+      if (rawKey != null) {
+        sysKey = base64Decode(rawKey);
+      } else {
+        sysKey = Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
+        secureStorageData['system_key'] = base64Encode(sysKey);
+        secureStorageData['system_key_provisioned'] = 'true';
+      }
+
+      final iv = Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
+      final aes = AESEngine()..init(true, KeyParameter(sysKey));
+      final counter = Uint8List.fromList(iv);
+      final ksBlock = Uint8List(16);
+
+      final ciphertext = Uint8List(plaintext.length);
+      int offset = 0;
+      while (offset + 16 <= plaintext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        for (int i = 0; i < 16; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+        for (int i = 15; i >= 0; i--) {
+          counter[i] = (counter[i] + 1) & 0xFF;
+          if (counter[i] != 0) break;
+        }
+        offset += 16;
+      }
+      if (offset < plaintext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        final rem = plaintext.length - offset;
+        for (int i = 0; i < rem; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+      }
+
+      final c1Blob = Uint8List(8 + 16 + ciphertext.length);
+      c1Blob.setRange(0, 8, kMediaMagicCtrV1);
+      c1Blob.setRange(8, 24, iv);
+      c1Blob.setRange(24, c1Blob.length, ciphertext);
+
+      const testVideoId = 'rescue-video-t3';
+      final blobFile = await platformService.resolveVaultFile(testVideoId);
+      await blobFile.parent.create(recursive: true);
+      await blobFile.writeAsBytes(c1Blob);
+
+      // Verify file starts with c1 magic
+      final preMigrationBytes = await blobFile.readAsBytes();
+      expect(preMigrationBytes.sublist(0, 8), equals(kMediaMagicCtrV1));
+
+      // 2. Run rescue (ensureVideoStreamable)
+      await videoVaultService.ensureVideoStreamable(testVideoId);
+
+      // 3. Assert on-disk file now starts with c2 magic
+      final postMigrationBytes = await blobFile.readAsBytes();
+      expect(postMigrationBytes.sublist(0, 8), equals(kMediaMagicCtrV2));
+
+      // 4. Assert it decrypts to original plaintext
+      final decryptedTmp = File('${tempDir.path}/t3_decrypted.bin');
+      await crypto.decryptStreamSystem(blobFile, decryptedTmp);
+      final decryptedBytes = await decryptedTmp.readAsBytes();
+      expect(decryptedBytes, equals(plaintext));
+    });
+
+    test('T4 — the rescue actually rescues: after c1->c2 migration, clearing system_key (simulating reinstall) still decrypts correctly', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      final random = Random.secure();
+      final plaintext = Uint8List(35000);
+      for (int i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+      // 4 arbitrary size bytes + 'ftyp' (ISO base media header)
+      plaintext[0] = 0x00;
+      plaintext[1] = 0x00;
+      plaintext[2] = 0x00;
+      plaintext[3] = 0x20;
+      plaintext[4] = 0x66; // 'f'
+      plaintext[5] = 0x74; // 't'
+      plaintext[6] = 0x79; // 'y'
+      plaintext[7] = 0x70; // 'p'
+
+      // 1. Manually construct c1 blob under current system key
+      final rawKey = secureStorageData['system_key'];
+      final Uint8List sysKey;
+      if (rawKey != null) {
+        sysKey = base64Decode(rawKey);
+      } else {
+        sysKey = Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
+        secureStorageData['system_key'] = base64Encode(sysKey);
+        secureStorageData['system_key_provisioned'] = 'true';
+      }
+
+      final iv = Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
+      final aes = AESEngine()..init(true, KeyParameter(sysKey));
+      final counter = Uint8List.fromList(iv);
+      final ksBlock = Uint8List(16);
+
+      final ciphertext = Uint8List(plaintext.length);
+      int offset = 0;
+      while (offset + 16 <= plaintext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        for (int i = 0; i < 16; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+        for (int i = 15; i >= 0; i--) {
+          counter[i] = (counter[i] + 1) & 0xFF;
+          if (counter[i] != 0) break;
+        }
+        offset += 16;
+      }
+      if (offset < plaintext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        final rem = plaintext.length - offset;
+        for (int i = 0; i < rem; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+      }
+
+      final c1Blob = Uint8List(8 + 16 + ciphertext.length);
+      c1Blob.setRange(0, 8, kMediaMagicCtrV1);
+      c1Blob.setRange(8, 24, iv);
+      c1Blob.setRange(24, c1Blob.length, ciphertext);
+
+      const testVideoId = 'rescue-video-t4';
+      final blobFile = await platformService.resolveVaultFile(testVideoId);
+      await blobFile.parent.create(recursive: true);
+      await blobFile.writeAsBytes(c1Blob);
+
+      // 2. Rescue: migrate c1 -> c2
+      await videoVaultService.ensureVideoStreamable(testVideoId);
+      final postMigrationBytes = await blobFile.readAsBytes();
+      expect(postMigrationBytes.sublist(0, 8), equals(kMediaMagicCtrV2));
+
+      // 3. Simulate app reinstall / restore:
+      // Wipe system_key and system_key_provisioned completely
+      secureStorageData.remove('system_key');
+      secureStorageData.remove('system_key_provisioned');
+
+      // Create a fresh VaultCrypto instance (simulating fresh app launch after reinstall with same user PIN)
+      final reinstalledCrypto = VaultCrypto(platformService, FakeKeystoreService());
+      await reinstalledCrypto.initialize('1234');
+
+      // 4. Assert the rescued video STILL decrypts perfectly without the old system key
+      final decryptedTmp = File('${tempDir.path}/t4_reinstall_decrypted.bin');
+      await reinstalledCrypto.decryptStreamSystem(blobFile, decryptedTmp);
+      final decryptedBytes = await decryptedTmp.readAsBytes();
+      expect(decryptedBytes, equals(plaintext),
+          reason: 'Rescued c2 video MUST decrypt correctly after system_key is wiped on reinstall');
+
+      // Also verify range read works after reinstall
+      final rangeSlice = await reinstalledCrypto.decryptRangeSystem(blobFile, 25, 100);
+      expect(rangeSlice, equals(plaintext.sublist(25, 125)));
+    });
+
+    test('T5 — failure leaves the original intact: simulated mid-migration error preserves original c1 blob', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+
+      final random = Random.secure();
+      final plaintext = Uint8List(25000);
+      for (int i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+      // 4 arbitrary size bytes + 'ftyp' (ISO base media header)
+      plaintext[0] = 0x00;
+      plaintext[1] = 0x00;
+      plaintext[2] = 0x00;
+      plaintext[3] = 0x20;
+      plaintext[4] = 0x66; // 'f'
+      plaintext[5] = 0x74; // 't'
+      plaintext[6] = 0x79; // 'y'
+      plaintext[7] = 0x70; // 'p'
+
+      // Manually construct c1 blob
+      final rawKey = secureStorageData['system_key'];
+      final Uint8List sysKey;
+      if (rawKey != null) {
+        sysKey = base64Decode(rawKey);
+      } else {
+        sysKey = Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
+        secureStorageData['system_key'] = base64Encode(sysKey);
+        secureStorageData['system_key_provisioned'] = 'true';
+      }
+
+      final iv = Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
+      final aes = AESEngine()..init(true, KeyParameter(sysKey));
+      final counter = Uint8List.fromList(iv);
+      final ksBlock = Uint8List(16);
+
+      final ciphertext = Uint8List(plaintext.length);
+      int offset = 0;
+      while (offset + 16 <= plaintext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        for (int i = 0; i < 16; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+        for (int i = 15; i >= 0; i--) {
+          counter[i] = (counter[i] + 1) & 0xFF;
+          if (counter[i] != 0) break;
+        }
+        offset += 16;
+      }
+      if (offset < plaintext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        final rem = plaintext.length - offset;
+        for (int i = 0; i < rem; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+      }
+
+      final c1Blob = Uint8List(8 + 16 + ciphertext.length);
+      c1Blob.setRange(0, 8, kMediaMagicCtrV1);
+      c1Blob.setRange(8, 24, iv);
+      c1Blob.setRange(24, c1Blob.length, ciphertext);
+
+      const testVideoId = 'rescue-video-t5-fail';
+      final blobFile = await platformService.resolveVaultFile(testVideoId);
+      await blobFile.parent.create(recursive: true);
+      await blobFile.writeAsBytes(c1Blob);
+
+      // Create videoVaultService with ThrowingEncryptVaultCrypto
+      final throwingCrypto = ThrowingEncryptVaultCrypto(platformService, FakeKeystoreService());
+      await throwingCrypto.initialize('1234');
+      final failingVideoVaultService = VideoVaultService(platformService, throwingCrypto);
+
+      // Attempt migration — should fail internally and swallow cleanly
+      await failingVideoVaultService.ensureVideoStreamable(testVideoId);
+
+      // Verify the on-disk blob is STILL the original c1 blob
+      final afterFailBytes = await blobFile.readAsBytes();
+      expect(afterFailBytes, equals(c1Blob));
+      expect(afterFailBytes.sublist(0, 8), equals(kMediaMagicCtrV1));
+
+      // Verify the original blob still decrypts with the working crypto instance
+      final decFile = File('${tempDir.path}/t5_recovered.bin');
+      await crypto.decryptStreamSystem(blobFile, decFile);
+      expect(await decFile.readAsBytes(), equals(plaintext));
+    });
+
+    test('T7 — Wrong key must not destroy the file: c1 blob with wrong system_key is untouched after ensureVideoStreamable', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      final random = Random.secure();
+      final plaintext = Uint8List(40000);
+      for (int i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+      // Valid ftyp container header
+      plaintext[0] = 0x00;
+      plaintext[1] = 0x00;
+      plaintext[2] = 0x00;
+      plaintext[3] = 0x18;
+      plaintext[4] = 0x66; // 'f'
+      plaintext[5] = 0x74; // 't'
+      plaintext[6] = 0x79; // 'y'
+      plaintext[7] = 0x70; // 'p'
+
+      // 1. Encrypt c1 blob under key A
+      final systemKeyA = Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
+      final iv = Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
+      final aesA = AESEngine()..init(true, KeyParameter(systemKeyA));
+      final counter = Uint8List.fromList(iv);
+      final ksBlock = Uint8List(16);
+
+      final ciphertext = Uint8List(plaintext.length);
+      int offset = 0;
+      while (offset + 16 <= plaintext.length) {
+        aesA.processBlock(counter, 0, ksBlock, 0);
+        for (int i = 0; i < 16; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+        for (int i = 15; i >= 0; i--) {
+          counter[i] = (counter[i] + 1) & 0xFF;
+          if (counter[i] != 0) break;
+        }
+        offset += 16;
+      }
+      if (offset < plaintext.length) {
+        aesA.processBlock(counter, 0, ksBlock, 0);
+        final rem = plaintext.length - offset;
+        for (int i = 0; i < rem; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+      }
+
+      final c1Blob = Uint8List(8 + 16 + ciphertext.length);
+      c1Blob.setRange(0, 8, kMediaMagicCtrV1);
+      c1Blob.setRange(8, 24, iv);
+      c1Blob.setRange(24, c1Blob.length, ciphertext);
+
+      const testVideoId = 't7-wrong-key-video';
+      final blobFile = await platformService.resolveVaultFile(testVideoId);
+      await blobFile.parent.create(recursive: true);
+      await blobFile.writeAsBytes(c1Blob);
+
+      // 2. Put a DIFFERENT system key B into secure storage (simulating regenerated system key)
+      final systemKeyB = Uint8List.fromList(List.generate(32, (_) => (random.nextInt(255) + 1)));
+      secureStorageData['system_key'] = base64Encode(systemKeyB);
+      secureStorageData['system_key_provisioned'] = 'true';
+
+      // 3. Run ensureVideoStreamable
+      await videoVaultService.ensureVideoStreamable(testVideoId);
+
+      // 4. Assert the file on disk is byte-for-byte identical to original c1Blob, still has kMediaMagicCtrV1
+      final currentOnDiskBytes = await blobFile.readAsBytes();
+      expect(currentOnDiskBytes, equals(c1Blob));
+      expect(currentOnDiskBytes.sublist(0, 8), equals(kMediaMagicCtrV1),
+          reason: 'File must NOT be converted or renamed when wrong system_key yields invalid container');
+    });
+
+    test('T8 — Correct key still converts: c1 blob with correct system_key and valid ftyp converts to c2', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      final random = Random.secure();
+      final plaintext = Uint8List(32000);
+      for (int i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+      // Valid ftyp header
+      plaintext[0] = 0x00;
+      plaintext[1] = 0x00;
+      plaintext[2] = 0x00;
+      plaintext[3] = 0x20;
+      plaintext[4] = 0x66; // 'f'
+      plaintext[5] = 0x74; // 't'
+      plaintext[6] = 0x79; // 'y'
+      plaintext[7] = 0x70; // 'p'
+
+      // Setup system key in secure storage
+      final currentSysKey = Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
+      secureStorageData['system_key'] = base64Encode(currentSysKey);
+      secureStorageData['system_key_provisioned'] = 'true';
+
+      final iv = Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
+      final aes = AESEngine()..init(true, KeyParameter(currentSysKey));
+      final counter = Uint8List.fromList(iv);
+      final ksBlock = Uint8List(16);
+
+      final ciphertext = Uint8List(plaintext.length);
+      int offset = 0;
+      while (offset + 16 <= plaintext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        for (int i = 0; i < 16; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+        for (int i = 15; i >= 0; i--) {
+          counter[i] = (counter[i] + 1) & 0xFF;
+          if (counter[i] != 0) break;
+        }
+        offset += 16;
+      }
+      if (offset < plaintext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        final rem = plaintext.length - offset;
+        for (int i = 0; i < rem; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+      }
+
+      final c1Blob = Uint8List(8 + 16 + ciphertext.length);
+      c1Blob.setRange(0, 8, kMediaMagicCtrV1);
+      c1Blob.setRange(8, 24, iv);
+      c1Blob.setRange(24, c1Blob.length, ciphertext);
+
+      const testVideoId = 't8-correct-key-video';
+      final blobFile = await platformService.resolveVaultFile(testVideoId);
+      await blobFile.parent.create(recursive: true);
+      await blobFile.writeAsBytes(c1Blob);
+
+      // Run migration
+      await videoVaultService.ensureVideoStreamable(testVideoId);
+
+      // Assert on disk starts with c2 magic and decrypts to plaintext
+      final migratedBytes = await blobFile.readAsBytes();
+      expect(migratedBytes.sublist(0, 8), equals(kMediaMagicCtrV2));
+
+      final decTmp = File('${tempDir.path}/t8_decrypted.bin');
+      await crypto.decryptStreamSystem(blobFile, decTmp);
+      expect(await decTmp.readAsBytes(), equals(plaintext));
+    });
+
+    test('T9 — v1 is not gated: v1 CBC blob with random non-video plaintext converts to c2 successfully', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      // 64 KB of purely random bytes (NO video header at all)
+      final random = Random(12345);
+      final plaintext = Uint8List(64 * 1024);
+      for (int i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+      // Explicitly ensure it does NOT match any video container signature
+      plaintext[0] = 0xFF;
+      plaintext[1] = 0xFF;
+      plaintext[4] = 0x00;
+
+      final srcFile = File('${tempDir.path}/t9_random_src.bin');
+      await srcFile.writeAsBytes(plaintext);
+
+      // Save as v1 CBC video
+      final id = await videoVaultService.saveVideoFromFile(srcFile, 'video/mp4', 10);
+      final blobFile = await platformService.resolveVaultFile(id);
+
+      // Verify it is v1
+      final preBytes = await blobFile.readAsBytes();
+      expect(preBytes.sublist(0, 8), equals(kMediaMagicV1));
+
+      // Run ensureVideoStreamable
+      await videoVaultService.ensureVideoStreamable(id);
+
+      // Assert it converts to c2 despite non-container plaintext
+      final postBytes = await blobFile.readAsBytes();
+      expect(postBytes.sublist(0, 8), equals(kMediaMagicCtrV2));
+
+      // Assert decrypts to original plaintext
+      final decTmp = File('${tempDir.path}/t9_decrypted.bin');
+      await crypto.decryptStreamSystem(blobFile, decTmp);
+      expect(await decTmp.readAsBytes(), equals(plaintext),
+          reason: 'v1 sources use master DEK and must convert even if plaintext is not a recognized container');
+
+      await srcFile.delete();
+    });
+
+    test('T10 — Unit tests for looksLikeVideoContainer: recognizes valid containers and rejects invalid/short headers', () {
+      // 1. ftyp (MP4 / ISO base media)
+      final ftypHeader = Uint8List.fromList([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, 0x6D, 0x70, 0x34, 0x32]);
+      expect(looksLikeVideoContainer(ftypHeader), isTrue);
+
+      // 2. Matroska / WebM
+      final mkvHeader = Uint8List.fromList([0x1A, 0x45, 0xDF, 0xA3, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+      expect(looksLikeVideoContainer(mkvHeader), isTrue);
+
+      // 3. RIFF / AVI
+      final aviHeader = Uint8List.fromList([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x41, 0x56, 0x49, 0x20]);
+      expect(looksLikeVideoContainer(aviHeader), isTrue);
+
+      // 4. QuickTime moov / mdat / free / wide / skip
+      final moovHeader = Uint8List.fromList([0x00, 0x00, 0x00, 0x08, 0x6D, 0x6F, 0x6F, 0x76, 0x00, 0x00, 0x00, 0x00]);
+      final mdatHeader = Uint8List.fromList([0x00, 0x00, 0x00, 0x08, 0x6D, 0x64, 0x61, 0x74, 0x00, 0x00, 0x00, 0x00]);
+      final freeHeader = Uint8List.fromList([0x00, 0x00, 0x00, 0x08, 0x66, 0x72, 0x65, 0x65, 0x00, 0x00, 0x00, 0x00]);
+      final wideHeader = Uint8List.fromList([0x00, 0x00, 0x00, 0x08, 0x77, 0x69, 0x64, 0x65, 0x00, 0x00, 0x00, 0x00]);
+      final skipHeader = Uint8List.fromList([0x00, 0x00, 0x00, 0x08, 0x73, 0x6B, 0x69, 0x70, 0x00, 0x00, 0x00, 0x00]);
+      expect(looksLikeVideoContainer(moovHeader), isTrue);
+      expect(looksLikeVideoContainer(mdatHeader), isTrue);
+      expect(looksLikeVideoContainer(freeHeader), isTrue);
+      expect(looksLikeVideoContainer(wideHeader), isTrue);
+      expect(looksLikeVideoContainer(skipHeader), isTrue);
+
+      // 5. Rejection: all zeroes (12 bytes)
+      expect(looksLikeVideoContainer(Uint8List(12)), isFalse);
+
+      // 6. Rejection: short buffer (< 12 bytes)
+      expect(looksLikeVideoContainer(Uint8List(11)), isFalse);
+      expect(looksLikeVideoContainer([]), isFalse);
+
+      // 7. Rejection: non-matching 12-byte pattern
+      final random12 = Uint8List.fromList([0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C]);
+      expect(looksLikeVideoContainer(random12), isFalse);
     });
 
     test('ensureVideoStreamable: photo/document blobs are unaffected', () async {

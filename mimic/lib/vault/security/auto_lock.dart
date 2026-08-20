@@ -24,14 +24,48 @@ class AutoLock with WidgetsBindingObserver {
   BuildContext? _context;
   WidgetRef? _ref;
   ProviderContainer? _container;
-  static const Duration _timeout = Duration(seconds: 60);
+  // M20: three different clocks, for three different situations.
+  //   foreground idle   5 minutes  — long enough to read a screen, short enough that an
+  //                                  abandoned unlocked phone does not stay open.
+  //   background grace  1 minute   — the app is unattended and out of sight; lock fast. This
+  //                                  applies even when a screen has paused the idle clock.
+  //   suspendCeiling    30 minutes — final backstop for read-only screens (decision D13).
+  static const Duration _timeout = Duration(minutes: 5);
+  static const Duration _backgroundGrace = Duration(minutes: 1);
   static const Duration suspendCeiling = Duration(minutes: 30);
   bool _observerRegistered = false;
   DateTime? _backgroundedAt;
-  bool _suspended = false;
+  // M22: Android delivers the picker result and the "back in foreground" event
+  // independently, and the order is not guaranteed. Cancelling the picker releases the
+  // protected-operation claim instantly, so by the time the foreground event arrives
+  // the counter is already zero and the 1-minute background rule locks the vault -
+  // confirmed on device 2026-08-20. Recording whether a claim was held AT THE MOMENT
+  // WE LEFT the foreground removes the race, because that answer cannot change while
+  // the app is away. The 30-minute ceiling still applies to the trip.
+  bool _protectedOpAtPause = false;
+  // M18: six screens share this one pause. A boolean let whichever screen resumed first
+  // un-pause the vault for the others. The counter means the idle timer only restarts when
+  // the LAST caller has resumed. The 30-minute ceiling (decision D13) is armed by the first
+  // caller and is not extended by later ones.
+  int _suspendCount = 0;
+
+  // M21: a protected operation is an encrypt or decrypt that is actively writing a file.
+  // Locking mid-write clears the keys and deletes the transient plaintext while a blob is
+  // half-written, which corrupts it. This is the ONLY exemption from the 1-minute background
+  // rule, and it exists to prevent data loss, not for convenience.
+  int _protectedOpCount = 0;
 
   @visibleForTesting
-  bool get isSuspended => _suspended;
+  bool get isSuspended => _suspendCount > 0;
+
+  @visibleForTesting
+  int get suspendCount => _suspendCount;
+
+  @visibleForTesting
+  bool get isProtectedOperationInFlight => _protectedOpCount > 0;
+
+  @visibleForTesting
+  int get protectedOperationCount => _protectedOpCount;
 
   @visibleForTesting
   void setBackgroundedAtForTesting(DateTime? dt) {
@@ -57,6 +91,13 @@ class AutoLock with WidgetsBindingObserver {
       _observerRegistered = true;
     }
 
+    // M19: a suspend that never got its matching resume would leave the counter above zero,
+    // and resetTimer() would then never arm the idle timer again for the rest of the session.
+    // Unlocking is a clean slate: nobody can legitimately be holding a pause at this moment.
+    _suspendCount = 0;
+    _protectedOpCount = 0;
+    _protectedOpAtPause = false;
+
     resetTimer();
   }
 
@@ -66,22 +107,27 @@ class AutoLock with WidgetsBindingObserver {
       case AppLifecycleState.paused:
       case AppLifecycleState.hidden:
       case AppLifecycleState.detached:
-        _backgroundedAt ??= DateTime.now();   // record when we left the foreground
+        if (_backgroundedAt == null) {
+          _backgroundedAt = DateTime.now();
+          _protectedOpAtPause = _protectedOpCount > 0;
+        }
         _timer?.cancel();                   // foreground idle timer is meaningless in background
         break;
       case AppLifecycleState.resumed:
         final since = _backgroundedAt;
         _backgroundedAt = null;
-        if (_suspended) {
+        final bool protectedTrip = _protectedOpCount > 0 || _protectedOpAtPause;
+        _protectedOpAtPause = false;
+        if (protectedTrip) {
           if (since != null && DateTime.now().difference(since) >= suspendCeiling) {
             _lockVault();
           }
+        } else if (since != null && DateTime.now().difference(since) >= _backgroundGrace) {
+          _lockVault();
+        } else if (_suspendCount > 0) {
+          // Leave it paused, do not restart idle timer
         } else {
-          if (since != null && DateTime.now().difference(since) >= _timeout) {
-            _lockVault();
-          } else {
-            resetTimer();
-          }
+          resetTimer();
         }
         break;
       case AppLifecycleState.inactive:
@@ -92,24 +138,42 @@ class AutoLock with WidgetsBindingObserver {
   /// Resets the inactivity timer. Called on user interactions.
   void resetTimer() {
     _timer?.cancel();
-    if (_suspended) return;
+    if (_suspendCount > 0) return;
     if (_context == null || _ref == null) return;
     _timer = Timer(_timeout, _lockVault);
   }
 
   void suspend() {
-    _suspended = true;
-    _timer?.cancel();
-    _timer = null;
-    _suspendTimer?.cancel();
-    _suspendTimer = Timer(suspendCeiling, _lockVault);
+    _suspendCount++;
+    if (_suspendCount == 1) {
+      _timer?.cancel();
+      _timer = null;
+      _suspendTimer?.cancel();
+      _suspendTimer = Timer(suspendCeiling, _lockVault);
+    }
   }
 
   void resume() {
-    _suspendTimer?.cancel();
-    _suspendTimer = null;
-    _suspended = false;
-    resetTimer();
+    if (_suspendCount > 0) {
+      _suspendCount--;
+      if (_suspendCount == 0) {
+        _suspendTimer?.cancel();
+        _suspendTimer = null;
+        resetTimer();
+      }
+    }
+  }
+
+  void beginProtectedOperation() {
+    _protectedOpCount++;
+    suspend();
+  }
+
+  void endProtectedOperation() {
+    if (_protectedOpCount > 0) {
+      _protectedOpCount--;
+      resume();
+    }
   }
 
   /// Full teardown for the conceal path: stops the media server, wipes transient
@@ -135,7 +199,9 @@ class AutoLock with WidgetsBindingObserver {
       _observerRegistered = false;
     }
     _backgroundedAt = null;
-    _suspended = false;
+    _suspendCount = 0;
+    _protectedOpCount = 0;
+    _protectedOpAtPause = false;
   }
 
   static const _maxSecureWipeBytes = 64 * 1024 * 1024;
@@ -198,7 +264,12 @@ class AutoLock with WidgetsBindingObserver {
 
   void _lockVault() async {
     final container = _container;
-    if (container == null) return;
+    if (container == null) {
+      _suspendCount = 0;
+      _protectedOpCount = 0;
+      _protectedOpAtPause = false;
+      return;
+    }
 
     final bool wasUnlocked;
     try {

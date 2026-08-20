@@ -567,16 +567,16 @@ void main() {
 
         AutoLock().suspend();
         
-        // Wait 70 seconds. If timer was active, vault would lock.
-        await tester.pump(const Duration(seconds: 70));
+        // Wait 6 minutes. If timer was active, vault would lock.
+        await tester.pump(const Duration(minutes: 6));
         
         // Should STILL be unlocked because it was suspended.
         expect(crypto.isUnlocked, isTrue);
 
         AutoLock().resume();
 
-        // Wait another 70 seconds, now the timer should fire.
-        await tester.pump(const Duration(seconds: 70));
+        // Wait another 6 minutes, now the timer should fire.
+        await tester.pump(const Duration(minutes: 6));
         expect(crypto.isUnlocked, isFalse);
       },
     );
@@ -680,8 +680,8 @@ void main() {
         // Vault is STILL unlocked because resume cancelled the ceiling timer
         expect(crypto.isUnlocked, isTrue);
 
-        // Positive control: letting the normal 60s inactivity timer expire locks the vault
-        await tester.pump(const Duration(seconds: 70));
+        // Positive control: letting the normal 5-minute inactivity timer expire locks the vault
+        await tester.pump(const Duration(minutes: 6));
         await tester.runAsync(() async {
           for (int i = 0; i < 50; i++) {
             await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -1137,6 +1137,10 @@ void main() {
   });
 
   group('VaultConcealService & PinScreen Integration', () {
+    tearDown(() {
+      AutoLock().dispose();
+    });
+
     testWidgets(
       'Concealed vault reveals and unlocks with correct PIN and clears concealed flag',
       (WidgetTester tester) async {
@@ -1201,6 +1205,7 @@ void main() {
             reason: 'Correct PIN must successfully unlock crypto');
         expect(find.byType(RecoveryPhraseScreen), findsOneWidget,
             reason: 'Vault with no recovery phrase setup must navigate to forced RecoveryPhraseScreen on unlock');
+        AutoLock().dispose();
       },
     );
 

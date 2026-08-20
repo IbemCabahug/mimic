@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pointycastle/export.dart';
 import 'package:mimic/vault/crypto/vault_kdf.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
+import 'package:mimic/vault/crypto/media_format.dart';
 import 'package:mimic/vault/crypto/recovery_phrase.dart';
 import 'package:mimic/vault/security/duress_service.dart';
 import 'package:mimic/core/services/platform_service.dart';
@@ -726,6 +727,143 @@ void main() {
       // iteration count, mismatch its stored verifier, and lock the user out permanently.
       expect(kLegacyV2Iterations, equals(100000),
           reason: 'kLegacyV2Iterations is a historical constant and must remain 100000 forever');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Group: AES-CTR stream encryption & multi-format compatibility (T1, T2, T6)
+  // -------------------------------------------------------------------------
+  group('AES-CTR stream format & compatibility', () {
+    late Directory tempDir;
+    late FakePlatformService platformService;
+    late VaultCrypto crypto;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('ctr_crypto_test');
+      platformService = FakePlatformService();
+      crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('test-pin-1234');
+    });
+
+    tearDown(() async {
+      if (tempDir.existsSync()) {
+        tempDir.deleteSync(recursive: true);
+      }
+    });
+
+    test('T1 — c2 round trip: encryptStreamSystemCtr writes c2 magic and decryptStreamSystem restores original bytes', () async {
+      final srcFile = File('${tempDir.path}/t1_src.bin');
+      final encFile = File('${tempDir.path}/t1_enc.bin');
+      final decFile = File('${tempDir.path}/t1_dec.bin');
+
+      final random = Random.secure();
+      final plaintext = Uint8List(64 * 1024 + 37); // > 1 chunk, off-boundary
+      for (int i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+      await srcFile.writeAsBytes(plaintext);
+
+      // Encrypt with c2
+      await crypto.encryptStreamSystemCtr(srcFile, encFile);
+
+      // Assert first 8 bytes match kMediaMagicCtrV2
+      final encBytes = await encFile.readAsBytes();
+      expect(encBytes.length >= 8 + 16 + plaintext.length, isTrue);
+      expect(encBytes.sublist(0, 8), equals(kMediaMagicCtrV2),
+          reason: 'c2 stream encryption must start with MVKEYc2\\0 magic');
+
+      // Decrypt with decryptStreamSystem
+      await crypto.decryptStreamSystem(encFile, decFile);
+      final decrypted = await decFile.readAsBytes();
+      expect(decrypted, equals(plaintext),
+          reason: 'Decrypted bytes must match original plaintext');
+    });
+
+    test('T2 — c1 still readable: manually constructed c1 blob (system key) decrypts correctly via decryptStreamSystem', () async {
+      final c1File = File('${tempDir.path}/t2_c1.bin');
+      final decFile = File('${tempDir.path}/t2_dec.bin');
+
+      final random = Random.secure();
+      final plaintext = Uint8List(32 * 1024 + 19);
+      for (int i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+
+      // Manually construct a c1 blob using system_key (the legacy c1 format)
+      // Read or generate system_key from platformService
+      final rawStoredKey = await platformService.secureRead('system_key');
+      final Uint8List systemKey;
+      if (rawStoredKey != null) {
+        systemKey = base64Decode(rawStoredKey);
+      } else {
+        systemKey = Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
+        await platformService.secureWrite('system_key', base64Encode(systemKey));
+        await platformService.secureWrite('system_key_provisioned', 'true');
+      }
+
+      final iv = Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
+      final aes = AESEngine()..init(true, KeyParameter(systemKey));
+      final counter = Uint8List.fromList(iv);
+      final ksBlock = Uint8List(16);
+
+      final ciphertext = Uint8List(plaintext.length);
+      int offset = 0;
+      while (offset + 16 <= plaintext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        for (int i = 0; i < 16; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+        for (int i = 15; i >= 0; i--) {
+          counter[i] = (counter[i] + 1) & 0xFF;
+          if (counter[i] != 0) break;
+        }
+        offset += 16;
+      }
+      if (offset < plaintext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        final rem = plaintext.length - offset;
+        for (int i = 0; i < rem; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+      }
+
+      // Write c1 header (kMediaMagicCtrV1 + IV + ciphertext)
+      final c1Blob = Uint8List(8 + 16 + ciphertext.length);
+      c1Blob.setRange(0, 8, kMediaMagicCtrV1);
+      c1Blob.setRange(8, 24, iv);
+      c1Blob.setRange(24, c1Blob.length, ciphertext);
+      await c1File.writeAsBytes(c1Blob);
+
+      // Decrypt using decryptStreamSystem
+      await crypto.decryptStreamSystem(c1File, decFile);
+      final decrypted = await decFile.readAsBytes();
+      expect(decrypted, equals(plaintext),
+          reason: 'Legacy c1 blob keyed by system_key must still be readable');
+    });
+
+    test('T6 — range read on c2: decryptRangeSystem returns exact bytes for an unaligned off-boundary range', () async {
+      final srcFile = File('${tempDir.path}/t6_src.bin');
+      final encFile = File('${tempDir.path}/t6_enc.bin');
+
+      final random = Random.secure();
+      final plaintext = Uint8List(128 * 1024 + 91);
+      for (int i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+      await srcFile.writeAsBytes(plaintext);
+
+      // Encrypt as c2
+      await crypto.encryptStreamSystemCtr(srcFile, encFile);
+
+      // Range read starting at offset 37 (not a 16-byte boundary) with length 83
+      const rangeOffset = 37;
+      const rangeLength = 83;
+      final expectedSlice = plaintext.sublist(rangeOffset, rangeOffset + rangeLength);
+
+      final actualSlice = await crypto.decryptRangeSystem(encFile, rangeOffset, rangeLength);
+      expect(actualSlice.length, equals(rangeLength));
+      expect(actualSlice, equals(expectedSlice),
+          reason: 'decryptRangeSystem on c2 must correctly decrypt off-boundary byte ranges');
     });
   });
 }

@@ -154,7 +154,7 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     }
 
     if (!mounted) return;
-    AutoLock().suspend();
+    AutoLock().beginProtectedOperation();
     try {
       final result = await ref.read(fileVaultServiceProvider).pickAndEncryptImage(context);
       if (result.successfulIds.isNotEmpty) {
@@ -179,7 +179,7 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
         );
       }
     } finally {
-      AutoLock().resume();
+      AutoLock().endProtectedOperation();
     }
   }
 

@@ -1,11 +1,12 @@
-import 'package:mimic/vault/crypto/keystore_service.dart';
+import 'dart:convert';
 import 'dart:io';
-// test/vault/screens/pin_screen_test.dart
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'package:mimic/vault/screens/pin_screen.dart';
+import 'package:mimic/vault/screens/recovery_phrase_screen.dart';
 import 'package:mimic/vault/security/lockout_service.dart';
 import 'package:mimic/vault/security/duress_service.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
@@ -51,6 +52,37 @@ class ThrowingFakeKeystoreService implements KeystoreService {
   Future<String> wrap(String base64Data) async => throw Exception('Simulated wrap failure');
   @override
   Future<String> unwrap(String base64Data) async => throw Exception('Simulated unwrap failure');
+  @override
+  Future<void> deleteKey() async {}
+}
+
+class ConfigurableMigrationKeystoreService implements KeystoreService {
+  bool failWrap = false;
+
+  @override
+  Future<void> ensureKey() async {}
+
+  @override
+  Future<String> wrap(String base64Data) async {
+    if (failWrap) {
+      throw KeystoreWrapException('Simulated migration wrap failure');
+    }
+    final original = base64Decode(base64Data);
+    final iv = Uint8List(12);
+    final combined = Uint8List(iv.length + original.length);
+    combined.setRange(0, iv.length, iv);
+    combined.setRange(iv.length, combined.length, original);
+    return base64Encode(combined);
+  }
+
+  @override
+  Future<String> unwrap(String base64Data) async {
+    final combined = base64Decode(base64Data);
+    if (combined.length < 12) return 'KEY_INVALID';
+    final original = combined.sublist(12);
+    return base64Encode(original);
+  }
+
   @override
   Future<void> deleteKey() async {}
 }
@@ -273,5 +305,192 @@ void main() {
 
     // Verify it reset state to Create PIN again
     expect(find.text('Create PIN'), findsWidgets);
+  });
+
+  group('Migration failure and recovery phrase preservation (F1/T1-T4)', () {
+    testWidgets('T1: Migration failure navigates to vault-home and NOT RecoveryPhraseScreen', (WidgetTester tester) async {
+      final fakePlatform = FakePlatformService();
+      final keystore = ConfigurableMigrationKeystoreService()..failWrap = false;
+      final crypto = VaultCrypto(fakePlatform, keystore);
+
+      await crypto.initialize('1234');
+      final dummyPhrase = [
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'about'
+      ];
+      await crypto.storeRecoveryBlob(dummyPhrase);
+      fakePlatform.store.remove('master_key_wrapped');
+      crypto.lock();
+
+      // Now set wrap to fail during migration attempt
+      keystore.failWrap = true;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+            vaultCryptoProvider.overrideWith((ref) => crypto),
+          ],
+          child: MaterialApp(
+            initialRoute: '/vault-pin',
+            routes: {
+              '/vault-pin': (_) => const PinScreen(),
+              '/vault-home': (_) => const Scaffold(body: Text('VAULT_HOME_SCREEN')),
+              '/vault-enter-recovery': (_) => const Scaffold(body: Text('ENTER_RECOVERY_SCREEN')),
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), '1234');
+      await tester.tap(find.text('Unlock'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('VAULT_HOME_SCREEN'), findsOneWidget);
+      expect(find.byType(RecoveryPhraseScreen), findsNothing);
+      AutoLock().dispose();
+    });
+
+    testWidgets('T2: Migration failure displays plain-language upgrade failure message', (WidgetTester tester) async {
+      final fakePlatform = FakePlatformService();
+      final keystore = ConfigurableMigrationKeystoreService()..failWrap = false;
+      final crypto = VaultCrypto(fakePlatform, keystore);
+
+      await crypto.initialize('1234');
+      final dummyPhrase = [
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'about'
+      ];
+      await crypto.storeRecoveryBlob(dummyPhrase);
+      fakePlatform.store.remove('master_key_wrapped');
+      crypto.lock();
+
+      keystore.failWrap = true;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+            vaultCryptoProvider.overrideWith((ref) => crypto),
+          ],
+          child: MaterialApp(
+            initialRoute: '/vault-pin',
+            routes: {
+              '/vault-pin': (_) => const PinScreen(),
+              '/vault-home': (_) => const Scaffold(body: Text('VAULT_HOME_SCREEN')),
+              '/vault-enter-recovery': (_) => const Scaffold(body: Text('ENTER_RECOVERY_SCREEN')),
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), '1234');
+      await tester.tap(find.text('Unlock'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.text(
+          "Couldn't upgrade your vault's hardware protection right now. Your vault and your files are safe, and we'll try again next time you unlock.",
+        ),
+        findsOneWidget,
+      );
+      AutoLock().dispose();
+    });
+
+    testWidgets('T3: Migration failure leaves stored recovery_blob and recovery_salt byte-identical', (WidgetTester tester) async {
+      final fakePlatform = FakePlatformService();
+      final keystore = ConfigurableMigrationKeystoreService()..failWrap = false;
+      final crypto = VaultCrypto(fakePlatform, keystore);
+
+      await crypto.initialize('1234');
+      final dummyPhrase = [
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'about'
+      ];
+      await crypto.storeRecoveryBlob(dummyPhrase);
+      final initialBlob = fakePlatform.store['recovery_blob'];
+      final initialSalt = fakePlatform.store['recovery_salt'];
+      expect(initialBlob, isNotNull);
+      expect(initialSalt, isNotNull);
+
+      fakePlatform.store.remove('master_key_wrapped');
+      crypto.lock();
+
+      keystore.failWrap = true;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+            vaultCryptoProvider.overrideWith((ref) => crypto),
+          ],
+          child: MaterialApp(
+            initialRoute: '/vault-pin',
+            routes: {
+              '/vault-pin': (_) => const PinScreen(),
+              '/vault-home': (_) => const Scaffold(body: Text('VAULT_HOME_SCREEN')),
+              '/vault-enter-recovery': (_) => const Scaffold(body: Text('ENTER_RECOVERY_SCREEN')),
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), '1234');
+      await tester.tap(find.text('Unlock'));
+      await tester.pumpAndSettle();
+
+      expect(fakePlatform.store['recovery_blob'], equals(initialBlob));
+      expect(fakePlatform.store['recovery_salt'], equals(initialSalt));
+      AutoLock().dispose();
+    });
+
+    testWidgets('T4: Successful migration navigates to vault-home and migrates master key', (WidgetTester tester) async {
+      final fakePlatform = FakePlatformService();
+      final keystore = ConfigurableMigrationKeystoreService()..failWrap = false;
+      final crypto = VaultCrypto(fakePlatform, keystore);
+
+      await crypto.initialize('1234');
+      final dummyPhrase = [
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'abandon',
+        'abandon', 'abandon', 'abandon', 'about'
+      ];
+      await crypto.storeRecoveryBlob(dummyPhrase);
+      fakePlatform.store.remove('master_key_wrapped');
+      crypto.lock();
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+            vaultCryptoProvider.overrideWith((ref) => crypto),
+          ],
+          child: MaterialApp(
+            initialRoute: '/vault-pin',
+            routes: {
+              '/vault-pin': (_) => const PinScreen(),
+              '/vault-home': (_) => const Scaffold(body: Text('VAULT_HOME_SCREEN')),
+              '/vault-enter-recovery': (_) => const Scaffold(body: Text('ENTER_RECOVERY_SCREEN')),
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.byType(TextField), '1234');
+      await tester.tap(find.text('Unlock'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('VAULT_HOME_SCREEN'), findsOneWidget);
+      expect(find.byType(RecoveryPhraseScreen), findsNothing);
+      expect(fakePlatform.store['master_key_wrapped']?.startsWith('hw1:'), isTrue);
+      AutoLock().dispose();
+    });
   });
 }

@@ -108,7 +108,7 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     }
 
     if (!mounted) return;
-    AutoLock().suspend();
+    AutoLock().beginProtectedOperation();
     try {
       final result = await ref.read(videoVaultServiceProvider).pickAndEncryptVideo(context);
       if (result.successfulIds.isNotEmpty) {
@@ -133,7 +133,7 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
         );
       }
     } finally {
-      AutoLock().resume();
+      AutoLock().endProtectedOperation();
     }
   }
 

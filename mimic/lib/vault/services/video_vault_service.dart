@@ -13,6 +13,7 @@ import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../core/services/platform_service.dart';
 import '../crypto/vault_crypto.dart';
+import '../crypto/media_format.dart';
 import '../security/auto_lock.dart';
 
 class VideoMeta {
@@ -176,15 +177,14 @@ class VideoVaultService {
     return decrypted;
   }
 
-  /// CTR magic header bytes: "MVKEYc1\0"
-  static const List<int> _ctrMagic = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x63, 0x31, 0x00];
-
-  /// Lazily migrates a video blob from CBC (MVKEYv1) or legacy to CTR (MVKEYc1)
-  /// for future seekable streaming. Best-effort: errors are swallowed and the
-  /// original blob is left untouched.
+  /// Lazily migrates a video blob from CBC (MVKEYv1), legacy, or c1 (system key) to CTR under master key (MVKEYc2)
+  /// for future seekable streaming. Conversions from c1 and legacy sources are gated by a plaintext container
+  /// sanity check; if the device-local key was regenerated, conversion is skipped leaving the original untouched.
   Future<void> ensureVideoStreamable(String id) async {
     final blobFile = await _platformService.resolveVaultFile(id);
     if (!blobFile.existsSync()) return;
+
+    String sourceKind = 'legacy';
 
     // Read the first 8 bytes to check the magic header
     final raf = await blobFile.open(mode: FileMode.read);
@@ -192,20 +192,26 @@ class VideoVaultService {
       final magic = Uint8List(8);
       final bytesRead = await raf.readInto(magic);
       if (bytesRead == 8) {
-        bool isCtr = true;
+        bool isCtrV2 = true;
+        bool isCtrV1 = true;
+        bool isV1 = true;
         for (int i = 0; i < 8; i++) {
-          if (magic[i] != _ctrMagic[i]) {
-            isCtr = false;
-            break;
-          }
+          if (magic[i] != kMediaMagicCtrV2[i]) isCtrV2 = false;
+          if (magic[i] != kMediaMagicCtrV1[i]) isCtrV1 = false;
+          if (magic[i] != kMediaMagicV1[i]) isV1 = false;
         }
-        if (isCtr) return; // Already CTR — nothing to do
+        if (isCtrV2) return; // Already c2 (CTR under master key) — nothing to do
+        if (isCtrV1) {
+          sourceKind = 'c1';
+        } else if (isV1) {
+          sourceKind = 'v1';
+        }
       }
     } finally {
       await raf.close();
     }
 
-    // Migrate: CBC/legacy -> plaintext -> CTR, atomic swap
+    // Migrate: CBC/legacy/c1 -> plaintext -> c2 (CTR under master key), atomic swap
     final tempDir = await getTemporaryDirectory();
     final ts = DateTime.now().millisecondsSinceEpoch;
     final plainTemp = File(p.join(tempDir.path, '${id}_migrate_plain_$ts'));
@@ -215,7 +221,22 @@ class VideoVaultService {
       // Step 1: decrypt existing blob to plaintext temp file
       await _crypto.decryptStreamSystem(blobFile, plainTemp);
 
-      // Step 2: re-encrypt plaintext as CTR to a second temp file
+      // Step 1b: Gate c1 and legacy conversions on plaintext video container sanity check
+      if (sourceKind == 'c1' || sourceKind == 'legacy') {
+        final headRaf = await plainTemp.open(mode: FileMode.read);
+        final head = Uint8List(12);
+        final headRead = await headRaf.readInto(head);
+        await headRaf.close();
+
+        if (headRead < 12 || !looksLikeVideoContainer(head)) {
+          debugPrint('ensureVideoStreamable($id) skipped: plaintext did not look like a video');
+          await AutoLock.secureDeleteFile(plainTemp);
+          try { if (await ctrTemp.exists()) await ctrTemp.delete(); } catch (_) {}
+          return;
+        }
+      }
+
+      // Step 2: re-encrypt plaintext as c2 (CTR under master key) to a second temp file
       await _crypto.encryptStreamSystemCtr(plainTemp, ctrTemp);
 
       // Step 3: atomic rename of ctrTemp OVER the original blob

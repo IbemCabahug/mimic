@@ -4,6 +4,7 @@ import 'dart:math';
 import '../crypto/vault_crypto.dart';
 import '../crypto/recovery_phrase.dart';
 import '../widgets/vault_scaffold.dart';
+import '../security/auto_lock.dart';
 import '../security/lockout_service.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -32,7 +33,18 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
   bool _isFinishing = false;
 
   @override
+  void initState() {
+    super.initState();
+    // M17: the user must hand-copy 12 words that are never shown again, which takes far
+    // longer than the 60-second idle timeout. Suspending the idle timer prevents the vault
+    // locking mid-write. Resumed in dispose. The 30-minute ceiling in auto_lock.dart
+    // (decision D13) remains the backstop.
+    AutoLock().suspend();
+  }
+
+  @override
   void dispose() {
+    AutoLock().resume();
     for (var controller in _confirmControllers) {
       controller.dispose();
     }

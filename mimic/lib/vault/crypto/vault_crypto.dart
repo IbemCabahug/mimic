@@ -13,6 +13,11 @@ import 'vault_kdf.dart';
 import '../../core/services/platform_service.dart';
 import 'recovery_phrase.dart';
 import 'keystore_service.dart';
+import 'media_format.dart';
+import 'vault_exceptions.dart';
+import 'crypto_isolate.dart';
+
+export 'vault_exceptions.dart';
 
 class InvalidPinException implements Exception {
   final String message;
@@ -38,19 +43,12 @@ class VaultSwapRecoveryException implements Exception {
   String toString() => 'VaultSwapRecoveryException: $message';
 }
 
-class CorruptedMediaFileException implements Exception {
-  final String message;
-  const CorruptedMediaFileException([this.message = 'The file is damaged or not in a supported format.']);
-
-  @override
-  String toString() => message;
-}
-
 class VaultCrypto extends ChangeNotifier {
   static const int _ivLength = 16;
   static const int _keyLength = 32;
-  static const List<int> _mediaMagic = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x76, 0x31, 0x00];
-  static const List<int> _mediaMagicCtr = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x63, 0x31, 0x00];
+  static const List<int> _mediaMagic = kMediaMagicV1;
+  static const List<int> _mediaMagicCtr = kMediaMagicCtrV1;
+  static const List<int> _mediaMagicCtrV2 = kMediaMagicCtrV2;
 
   static VaultCrypto? _instance;
   static VaultCrypto get instance {
@@ -184,6 +182,7 @@ class VaultCrypto extends ChangeNotifier {
       final kek = _deriveKek(candidateKey);
 
       final innerWrapped = _wrapKey(candidateKey, kek);
+      await _keystoreService.ensureKey();
       final hwWrapped = await _keystoreService.wrap(innerWrapped);
 
       await _platformService.secureDelete(_storageKeyMasterWrapped);
@@ -371,6 +370,7 @@ class VaultCrypto extends ChangeNotifier {
     final newKek = _deriveKek(newCandidateKey);
     final innerWrapped = _wrapKey(dek, newKek);
 
+    await _keystoreService.ensureKey();
     final hwWrapped = await _keystoreService.wrap(innerWrapped);
     final wrappedValue = 'hw1:$hwWrapped';
 
@@ -481,6 +481,7 @@ class VaultCrypto extends ChangeNotifier {
     final kek = rawKek;
 
     final innerWrapped = _wrapKey(dek, kek);
+    await _keystoreService.ensureKey();
     final hwWrapped = await _keystoreService.wrap(innerWrapped);
     final wrappedValue = 'hw1:$hwWrapped';
 
@@ -621,6 +622,9 @@ class VaultCrypto extends ChangeNotifier {
     return utf8.decode(decrypted);
   }
 
+  /// Returns the device-local system key stored in secure storage under 'system_key'.
+  /// Used ONLY for legacy blobs and reading legacy c1 CTR media. It is NOT backed up in
+  /// exports and cannot be restored from the recovery phrase; data encrypted with it is lost on reinstall.
   Future<Uint8List> _getSystemKey() async {
     final storedKey = await _platformService.secureRead('system_key');
     if (storedKey != null) {
@@ -825,88 +829,16 @@ class VaultCrypto extends ChangeNotifier {
   Future<void> encryptStreamSystem(File src, File dest) async {
     if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
     final iv = _generateSecureRandomBytes(_ivLength);
-    final raf = await dest.open(mode: FileMode.write);
-    bool writeSucceeded = false;
-    try {
-      await raf.writeFrom(_mediaMagic);
-      await raf.writeFrom(iv);
-
-      final cipher = CBCBlockCipher(AESEngine());
-      cipher.init(true, ParametersWithIV(KeyParameter(_derivedKey!), iv));
-
-      final srcRaf = await src.open(mode: FileMode.read);
-      try {
-        final buffer = Uint8List(64 * 1024);
-        final outBuffer = Uint8List(64 * 1024 + 16);
-        
-        var leftover = <int>[];
-        var bytesRead = 0;
-
-        while ((bytesRead = await srcRaf.readInto(buffer)) > 0) {
-          int offset = 0;
-          int outOffset = 0;
-          
-          if (leftover.isNotEmpty) {
-            final needed = 16 - leftover.length;
-            if (bytesRead < needed) {
-              leftover.addAll(buffer.sublist(0, bytesRead));
-              continue;
-            } else {
-              final temp = Uint8List(16);
-              temp.setRange(0, leftover.length, leftover);
-              temp.setRange(leftover.length, 16, buffer.sublist(0, needed));
-              cipher.processBlock(temp, 0, outBuffer, outOffset);
-              outOffset += 16;
-              offset = needed;
-              leftover.clear();
-            }
-          }
-
-          while (offset + 16 <= bytesRead) {
-            cipher.processBlock(buffer, offset, outBuffer, outOffset);
-            outOffset += 16;
-            offset += 16;
-          }
-
-          if (outOffset > 0) {
-            await raf.writeFrom(outBuffer, 0, outOffset);
-          }
-
-          if (offset < bytesRead) {
-            leftover.addAll(buffer.sublist(offset, bytesRead));
-          }
-        }
-
-        final padLength = 16 - leftover.length;
-        final finalBlock = Uint8List(16);
-        if (leftover.isNotEmpty) {
-          finalBlock.setRange(0, leftover.length, leftover);
-        }
-        for (int i = leftover.length; i < 16; i++) {
-          finalBlock[i] = padLength;
-        }
-        final outBlock = Uint8List(16);
-        cipher.processBlock(finalBlock, 0, outBlock, 0);
-        await raf.writeFrom(outBlock);
-        writeSucceeded = true;
-      } finally {
-        await srcRaf.close();
-      }
-    } finally {
-      await raf.flush();
-      await raf.close();
-      if (!writeSucceeded) {
-        try {
-          if (await dest.exists()) {
-            await dest.delete();
-          }
-        } catch (_) {}
-      }
-    }
+    await cryptoIsolateEncryptFile(
+      key: Uint8List.fromList(_derivedKey!),
+      iv: iv,
+      srcPath: src.path,
+      destPath: dest.path,
+    );
   }
 
   Future<void> decryptStreamSystem(File src, File dest) async {
-    int magicType = 0; // 0 = legacy, 1 = v1 (CBC), 2 = c1 (CTR)
+    int magicType = 0; // 0 = legacy, 1 = v1 (CBC), 2 = c1 (CTR, system key), 3 = c2 (CTR, master key)
     final raf = await src.open(mode: FileMode.read);
     try {
       final magicBuffer = Uint8List(_mediaMagic.length);
@@ -915,12 +847,15 @@ class VaultCrypto extends ChangeNotifier {
       if (magicRead == _mediaMagic.length) {
         bool isV1 = true;
         bool isC1 = true;
+        bool isC2 = true;
         for (int i = 0; i < _mediaMagic.length; i++) {
           if (magicBuffer[i] != _mediaMagic[i]) isV1 = false;
           if (magicBuffer[i] != _mediaMagicCtr[i]) isC1 = false;
+          if (magicBuffer[i] != _mediaMagicCtrV2[i]) isC2 = false;
         }
         if (isV1) magicType = 1;
         else if (isC1) magicType = 2;
+        else if (isC2) magicType = 3;
       }
 
       if (magicType == 1) {
@@ -1049,6 +984,46 @@ class VaultCrypto extends ChangeNotifier {
           await destRaf.flush();
           await destRaf.close();
         }
+      } else if (magicType == 3) {
+        if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+        final iv = Uint8List(16);
+        final ivRead = await raf.readInto(iv);
+        if (ivRead < 16) throw const CorruptedMediaFileException();
+
+        final destRaf = await dest.open(mode: FileMode.write);
+        try {
+          final aes = AESEngine()..init(true, KeyParameter(_derivedKey!));
+          final counter = Uint8List.fromList(iv);
+          final ksBlock = Uint8List(16);
+
+          final buffer = Uint8List(64 * 1024);
+          final outBuffer = Uint8List(64 * 1024);
+          var bytesRead = 0;
+
+          while ((bytesRead = await raf.readInto(buffer)) > 0) {
+            int offset = 0;
+            while (offset + 16 <= bytesRead) {
+              aes.processBlock(counter, 0, ksBlock, 0);
+              for (int i = 0; i < 16; i++) {
+                outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+              }
+              _ctrIncrement(counter);
+              offset += 16;
+            }
+            if (offset < bytesRead) {
+              aes.processBlock(counter, 0, ksBlock, 0);
+              final remaining = bytesRead - offset;
+              for (int i = 0; i < remaining; i++) {
+                outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+              }
+              _ctrIncrement(counter);
+            }
+            await destRaf.writeFrom(outBuffer, 0, bytesRead);
+          }
+        } finally {
+          await destRaf.flush();
+          await destRaf.close();
+        }
       }
     } finally {
       await raf.close();
@@ -1071,12 +1046,15 @@ class VaultCrypto extends ChangeNotifier {
     if (ciphertext.length >= _mediaMagic.length) {
       bool isV1 = true;
       bool isC1 = true;
+      bool isC2 = true;
       for (int i = 0; i < _mediaMagic.length; i++) {
         if (ciphertext[i] != _mediaMagic[i]) isV1 = false;
         if (ciphertext[i] != _mediaMagicCtr[i]) isC1 = false;
+        if (ciphertext[i] != _mediaMagicCtrV2[i]) isC2 = false;
       }
       if (isV1) magicType = 1;
       else if (isC1) magicType = 2;
+      else if (isC2) magicType = 3;
     }
 
     if (magicType == 1) {
@@ -1100,6 +1078,35 @@ class VaultCrypto extends ChangeNotifier {
       
       final systemKey = await _getSystemKey();
       final aes = AESEngine()..init(true, KeyParameter(systemKey));
+      final counter = Uint8List.fromList(iv);
+      final ksBlock = Uint8List(16);
+      
+      final outBuffer = Uint8List(encrypted.length);
+      int offset = 0;
+      while (offset + 16 <= encrypted.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        for (int i = 0; i < 16; i++) {
+          outBuffer[offset + i] = encrypted[offset + i] ^ ksBlock[i];
+        }
+        _ctrIncrement(counter);
+        offset += 16;
+      }
+      if (offset < encrypted.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        final remaining = encrypted.length - offset;
+        for (int i = 0; i < remaining; i++) {
+          outBuffer[offset + i] = encrypted[offset + i] ^ ksBlock[i];
+        }
+      }
+      return outBuffer;
+    } else if (magicType == 3) {
+      if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+      final actualCiphertext = ciphertext.sublist(_mediaMagic.length);
+      if (actualCiphertext.length < 16) throw const CorruptedMediaFileException();
+      final iv = actualCiphertext.sublist(0, 16);
+      final encrypted = actualCiphertext.sublist(16);
+      
+      final aes = AESEngine()..init(true, KeyParameter(_derivedKey!));
       final counter = Uint8List.fromList(iv);
       final ksBlock = Uint8List(16);
       
@@ -1336,15 +1343,17 @@ class VaultCrypto extends ChangeNotifier {
     return counter;
   }
 
+  /// Encrypts [src] to [dest] using AES-CTR with magic "MVKEYc2\0" keyed by the master DEK (_derivedKey).
+  /// Files written in this format are fully recoverable from the 12-word recovery phrase upon reinstall.
   Future<void> encryptStreamSystemCtr(File src, File dest) async {
-    final systemKey = await _getSystemKey();
+    if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
     final iv = _generateSecureRandomBytes(16);
     final raf = await dest.open(mode: FileMode.write);
     try {
-      await raf.writeFrom(_mediaMagicCtr);
+      await raf.writeFrom(_mediaMagicCtrV2);
       await raf.writeFrom(iv);
 
-      final aes = AESEngine()..init(true, KeyParameter(systemKey));
+      final aes = AESEngine()..init(true, KeyParameter(_derivedKey!));
       final counter = Uint8List.fromList(iv);
       final ksBlock = Uint8List(16);
 
@@ -1392,15 +1401,18 @@ class VaultCrypto extends ChangeNotifier {
       if (magicRead == 8) {
         bool isV1 = true;
         bool isC1 = true;
+        bool isC2 = true;
         for (int i = 0; i < 8; i++) {
           if (magicBuffer[i] != _mediaMagic[i]) isV1 = false;
           if (magicBuffer[i] != _mediaMagicCtr[i]) isC1 = false;
+          if (magicBuffer[i] != _mediaMagicCtrV2[i]) isC2 = false;
         }
         if (isV1) magicType = 1;
         else if (isC1) magicType = 2;
+        else if (isC2) magicType = 3;
       }
 
-      if (magicType == 2) {
+      if (magicType == 2 || magicType == 3) {
         final fileLength = await src.length();
         final maxReadable = fileLength - 24;
         if (offset >= maxReadable || offset < 0) return Uint8List(0);
@@ -1411,7 +1423,13 @@ class VaultCrypto extends ChangeNotifier {
         }
         if (actualLength <= 0) return Uint8List(0);
 
-        final systemKey = await _getSystemKey();
+        final Uint8List key;
+        if (magicType == 3) {
+          if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+          key = _derivedKey!;
+        } else {
+          key = await _getSystemKey();
+        }
         final iv = Uint8List(16);
         final ivRead = await raf.readInto(iv);
         if (ivRead < 16) throw Exception('Invalid ciphertext: missing IV');
@@ -1427,7 +1445,7 @@ class VaultCrypto extends ChangeNotifier {
           carry = sum >> 8;
         }
 
-        final aes = AESEngine()..init(true, KeyParameter(systemKey));
+        final aes = AESEngine()..init(true, KeyParameter(key));
         final rangeCounter = _ctrCounterAt(iv, blockIndex);
         final ksBlock = Uint8List(16);
 

@@ -78,6 +78,10 @@ void main() {
       PathProviderPlatform.instance = MockPathProviderPlatform(Directory.systemTemp.path);
     });
 
+    tearDown(() {
+      AutoLock().dispose();
+    });
+
     test('3 · init() loads default medium threshold if unset', () async {
       final service = VaultConcealService(null, const PlatformServicePlaceholder());
       await service.init();
@@ -184,6 +188,7 @@ void main() {
           reason: 'Correct PIN must successfully unlock the vault');
       expect(find.byType(RecoveryPhraseScreen), findsOneWidget,
           reason: 'Vault with no recovery phrase setup must navigate to forced RecoveryPhraseScreen on unlock');
+      AutoLock().dispose();
     });
 
     testWidgets('d · a wrong PIN while concealed leaves the flag set and does NOT unlock', (WidgetTester tester) async {
@@ -302,8 +307,8 @@ void main() {
       // Initialize AutoLock with vault unlocked
       AutoLock().init(savedContext, savedRef);
 
-      // Advance time past auto-lock timeout (60 seconds) without concealing
-      await tester.pump(const Duration(seconds: 70));
+      // Advance time past auto-lock timeout (5 minutes) without concealing
+      await tester.pump(const Duration(minutes: 6));
       await tester.runAsync(() async {
         for (int i = 0; i < 50; i++) {
           await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -420,11 +425,11 @@ void main() {
       );
       await tester.pump();
 
-      // Initialize AutoLock while vault is locked (arms foreground 60s timer)
+      // Initialize AutoLock while vault is locked (arms foreground 5-minute timer)
       AutoLock().init(savedContext, savedRef);
 
-      // Advance past 60s timer so _lockVault fires in fake time
-      await tester.pump(const Duration(seconds: 70));
+      // Advance past 5-minute timer so _lockVault fires in fake time
+      await tester.pump(const Duration(minutes: 6));
       await tester.runAsync(() async {
         await Future<void>.delayed(const Duration(milliseconds: 100));
       });
@@ -502,7 +507,7 @@ void main() {
       expect(find.text('PIN_SCREEN'), findsOneWidget);
     });
 
-    testWidgets('a suspended import survives a long trip to the file picker', (WidgetTester tester) async {
+    testWidgets('a protected import survives a long trip to the file picker', (WidgetTester tester) async {
       final fakePlatform = FakePlatformService();
       final fakeCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
 
@@ -540,8 +545,8 @@ void main() {
       await tester.pump();
 
       AutoLock().init(savedContext, savedRef);
-      // Suspend auto-lock (e.g. during file picker import)
-      AutoLock().suspend();
+      // Protect auto-lock (e.g. during file picker import)
+      AutoLock().beginProtectedOperation();
       expect(AutoLock().isSuspended, isTrue);
 
       // Simulate backgrounding while picking files (e.g. 5 minutes)
@@ -554,7 +559,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(fakeCrypto.isUnlocked, isTrue,
-          reason: 'Suspended import must NOT lock when background time is less than suspendCeiling');
+          reason: 'Protected import is exempt from the 1-minute background grace rule and must NOT lock when background time is less than suspendCeiling');
       expect(AutoLock().isSuspended, isTrue,
           reason: 'isSuspended must remain true across background resume');
       expect(find.text('VAULT_HOME'), findsOneWidget);
@@ -627,7 +632,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(fakeCrypto.isUnlocked, isFalse,
-          reason: 'Suspended session must lock when background duration exceeds suspendCeiling');
+          reason: 'Suspended session is not exempt from the 1-minute background grace rule and must lock when background duration exceeds _backgroundGrace');
       expect(find.text('PIN_SCREEN'), findsOneWidget);
     });
   });

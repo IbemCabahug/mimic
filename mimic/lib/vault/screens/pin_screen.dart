@@ -274,19 +274,20 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           );
         } else {
           if (_crypto.needsHardwareMigration) {
-             try {
-               await _crypto.migrateToHardwareBinding();
-             } catch (e) {
-               navigator.pushReplacement(
-                 MaterialPageRoute(
-                   builder: (_) => const RecoveryPhraseScreen(
-                     forcedSetup: true,
-                     migrateAfter: false,
-                   ),
-                 ),
-               );
-               return;
-             }
+            try {
+              await _crypto.migrateToHardwareBinding();
+            } catch (e) {
+              debugPrint('Hardware migration failed during unlock: $e');
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      "Couldn't upgrade your vault's hardware protection right now. Your vault and your files are safe, and we'll try again next time you unlock.",
+                    ),
+                  ),
+                );
+              }
+            }
           }
           navigator.pushReplacementNamed('/vault-home');
         }

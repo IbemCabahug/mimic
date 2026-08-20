@@ -8,6 +8,11 @@ import '../../core/theme/app_theme.dart';
 import '../crypto/keystore_service.dart';
 import '../crypto/vault_crypto.dart';
 import '../crypto/vault_kdf.dart';
+import '../security/auto_lock.dart';
+import '../services/document_vault_service.dart';
+import '../services/file_vault_service.dart';
+import '../services/media_format_report.dart';
+import '../services/video_vault_service.dart';
 import '../widgets/vault_scaffold.dart';
 
 class VaultDiagnosticsScreen extends ConsumerStatefulWidget {
@@ -31,10 +36,24 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
   bool _keystoreUnavailable = false;
   String? _error;
 
+  MediaFormatReport? _formatReport;
+  bool _isCheckingFormats = false;
+  String? _formatError;
+
   @override
   void initState() {
     super.initState();
     _updateNativeStatus();
+    // M16: this screen is read, not tapped. Suspending the idle timer stops the
+    // vault locking mid-read. Resumed in dispose. The 30-minute ceiling in
+    // auto_lock.dart (decision D13) remains the backstop.
+    AutoLock().suspend();
+  }
+
+  @override
+  void dispose() {
+    AutoLock().resume();
+    super.dispose();
   }
 
   void _updateNativeStatus() {
@@ -157,6 +176,54 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
     }
   }
 
+  Future<void> _checkMediaFormats() async {
+    if (_isCheckingFormats) return;
+    setState(() {
+      _isCheckingFormats = true;
+      _formatError = null;
+    });
+
+    try {
+      final videoService = ref.read(videoVaultServiceProvider);
+      final fileService = ref.read(fileVaultServiceProvider);
+      final docService = ref.read(documentVaultServiceProvider);
+      final platform = ref.read(platformServiceProvider);
+
+      final videos = await videoService.getAllVideos();
+      final photos = await fileService.getAllPhotos();
+      final docs = await docService.listDocuments();
+
+      final videoIds = videos.map((v) => v.id).toList();
+      final photoIds = photos.map((p) => p.id).toList();
+      final docIds = docs.map((d) => d.id).toList();
+
+      final report = await buildMediaFormatReport(
+        videoIds: videoIds,
+        photoIds: photoIds,
+        documentIds: docIds,
+        resolveBlob: platform.resolveVaultFile,
+      );
+
+      if (mounted) {
+        setState(() {
+          _formatReport = report;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _formatError = e.toString();
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCheckingFormats = false;
+        });
+      }
+    }
+  }
+
   Widget _buildMetricRow(String label, String value) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 10.0),
@@ -214,7 +281,7 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
 
     return VaultScaffold(
       title: 'Diagnostics',
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -266,9 +333,8 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
                 textAlign: TextAlign.center,
               ),
             ],
-            const Spacer(),
             const Padding(
-              padding: EdgeInsets.only(bottom: 12.0),
+              padding: EdgeInsets.only(top: 16.0, bottom: 12.0),
               child: Text(
                 'Running diagnostics performs two full key derivations and may take a while.',
                 style: TextStyle(
@@ -300,6 +366,130 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
                     )
                   : const Text(
                       'Run',
+                      style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+            ),
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              decoration: BoxDecoration(
+                color: VaultColors.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: VaultColors.textTertiary.withValues(alpha: 0.3)),
+              ),
+              child: Column(
+                children: [
+                  _buildMetricRow(
+                    'Videos — safe to recover (c2)',
+                    _formatReport != null ? '${_formatReport!.videos.ctrV2} of ${_formatReport!.videos.total}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Videos — tied to this phone (c1)',
+                    _formatReport != null ? '${_formatReport!.videos.ctrV1}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Videos — not yet converted (v1)',
+                    _formatReport != null ? '${_formatReport!.videos.cbcV1}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Videos — very old format',
+                    _formatReport != null ? '${_formatReport!.videos.legacyNoHeader}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Videos — file missing or unreadable',
+                    _formatReport != null ? '${_formatReport!.videos.missingFile}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Photos — current format (v1)',
+                    _formatReport != null ? '${_formatReport!.photos.cbcV1} of ${_formatReport!.photos.total}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Photos — very old format',
+                    _formatReport != null ? '${_formatReport!.photos.legacyNoHeader}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Photos — file missing or unreadable',
+                    _formatReport != null ? '${_formatReport!.photos.missingFile}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Documents — current format (v1)',
+                    _formatReport != null ? '${_formatReport!.documents.cbcV1} of ${_formatReport!.documents.total}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Documents — very old format',
+                    _formatReport != null ? '${_formatReport!.documents.legacyNoHeader}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Documents — file missing or unreadable',
+                    _formatReport != null ? '${_formatReport!.documents.missingFile}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Notes',
+                    'stored in the database, no format header',
+                  ),
+                ],
+              ),
+            ),
+            if (_formatError != null) ...[
+              const SizedBox(height: 16),
+              Text(
+                _formatError!,
+                style: const TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 13,
+                  color: VaultColors.error,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+            const Padding(
+              padding: EdgeInsets.only(top: 16.0, bottom: 12.0),
+              child: Text(
+                'Format only. A file counted as safe has the right format, but this check does not open it or prove it still decrypts.',
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 12,
+                  color: VaultColors.textSecondary,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            ElevatedButton(
+              onPressed: _isCheckingFormats ? null : _checkMediaFormats,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: VaultColors.accent,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 48),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: _isCheckingFormats
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text(
+                      'Check media formats',
                       style: TextStyle(
                         fontFamily: 'Inter',
                         fontSize: 16,

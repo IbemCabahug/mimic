@@ -1,8 +1,9 @@
-// lib/vault/services/local_streaming_server.dart
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+
+import '../crypto/media_format.dart';
 
 /// A loopback HTTP server that serves decrypted media bytes from CTR-encrypted
 /// vault blobs. Designed for use with VideoPlayerController.networkUrl for
@@ -21,8 +22,6 @@ class LocalStreamingServer {
   String? _token;
   int? _port;
 
-  /// CTR magic header: "MVKEYc1\0"
-  static const List<int> _ctrMagic = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x63, 0x31, 0x00];
   static const int _ctrHeaderSize = 24; // 8 magic + 16 IV
   static const int _subChunkSize = 1024 * 1024; // 1 MB
 
@@ -136,13 +135,13 @@ class LocalStreamingServer {
         try {
           final magic = Uint8List(8);
           await raf.readInto(magic);
-          isCtr = true;
+          bool isC1 = true;
+          bool isC2 = true;
           for (int i = 0; i < 8; i++) {
-            if (magic[i] != _ctrMagic[i]) {
-              isCtr = false;
-              break;
-            }
+            if (magic[i] != kMediaMagicCtrV1[i]) isC1 = false;
+            if (magic[i] != kMediaMagicCtrV2[i]) isC2 = false;
           }
+          isCtr = isC1 || isC2;
         } finally {
           await raf.close();
         }
