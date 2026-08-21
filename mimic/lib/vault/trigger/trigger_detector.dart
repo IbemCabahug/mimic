@@ -6,6 +6,7 @@ import 'package:mimic/core/providers/provider_registration.dart'
     show networkServiceProvider;
 import 'package:mimic/multiplayer/network/network_service.dart'
     show isMultiplayerSessionActive;
+import 'gesture_window.dart';
 
 class TriggerCallbackRegistry {
   static final TriggerCallbackRegistry _instance = TriggerCallbackRegistry._internal();
@@ -24,16 +25,24 @@ class TriggerCallbackRegistry {
 }
 
 class TriggerDetector extends ConsumerStatefulWidget {
-  final List<int> tapSequence;
+  final List<int>? tapSequence;
+  final Future<bool> Function(List<int> taps)? verifier;
+  final int? verifyLength;
   final Duration timeout;
   final VoidCallback onTrigger;
 
   const TriggerDetector({
     super.key,
-    required this.tapSequence,
+    this.tapSequence,
+    this.verifier,
+    this.verifyLength,
     required this.onTrigger,
     this.timeout = const Duration(seconds: 3),
-  });
+  }) : assert(
+          (tapSequence != null && verifier == null && verifyLength == null) ||
+              (tapSequence == null && verifier != null && verifyLength != null),
+          'TriggerDetector requires either tapSequence OR (verifier AND verifyLength)',
+        );
 
   @override
   ConsumerState<TriggerDetector> createState() => _TriggerDetectorState();
@@ -43,6 +52,8 @@ class _TriggerDetectorState extends ConsumerState<TriggerDetector> {
   final List<int> _tapHistory = [];
   Timer? _resetTimer;
   late TriggerCallbackRegistry _registry;
+  bool _verifying = false;
+  bool _recheckPending = false;
 
   @override
   void initState() {
@@ -58,6 +69,32 @@ class _TriggerDetectorState extends ConsumerState<TriggerDetector> {
     super.dispose();
   }
 
+  void _startVerification() {
+    final length = widget.verifyLength;
+    final verifier = widget.verifier;
+    if (length == null || verifier == null) return;
+
+    final window = trailingWindow(_tapHistory, length);
+    if (window == null) return;
+
+    _verifying = true;
+    // Verification is asynchronous because it may perform a key derivation;
+    // on Android that work crosses a platform channel and does not block the UI isolate.
+    verifier(window).then((matched) {
+      _verifying = false;
+      if (matched && mounted) {
+        _triggerActivated();
+      } else if (_recheckPending) {
+        // Recursion is bounded because _recheckPending is cleared before the call.
+        _recheckPending = false;
+        _startVerification();
+      }
+    }).catchError((_) {
+      _verifying = false;
+      _recheckPending = false;
+    });
+  }
+
   void _recordTap(int index) {
     _tapHistory.add(index);
 
@@ -66,22 +103,35 @@ class _TriggerDetectorState extends ConsumerState<TriggerDetector> {
       if (mounted) {
         setState(() {
           _tapHistory.clear();
+          _recheckPending = false;
         });
       }
     });
 
-    if (_tapHistory.length == widget.tapSequence.length) {
-      bool matches = true;
-      for (int i = 0; i < widget.tapSequence.length; i++) {
-        if (_tapHistory[i] != widget.tapSequence[i]) {
-          matches = false;
-          break;
+    final fixedSequence = widget.tapSequence;
+    if (fixedSequence != null) {
+      if (_tapHistory.length == fixedSequence.length) {
+        bool matches = true;
+        for (int i = 0; i < fixedSequence.length; i++) {
+          if (_tapHistory[i] != fixedSequence[i]) {
+            matches = false;
+            break;
+          }
+        }
+
+        if (matches) {
+          _triggerActivated();
         }
       }
+      return;
+    }
 
-      if (matches) {
-        _triggerActivated();
+    if (widget.verifier != null && widget.verifyLength != null) {
+      if (_verifying) {
+        _recheckPending = true;
+        return;
       }
+      _startVerification();
     }
   }
 

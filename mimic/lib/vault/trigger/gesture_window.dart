@@ -3,8 +3,7 @@
 /// Extracts the trailing slice of recent taps matching the target gesture length.
 ///
 /// A trigger detector calls this helper on each recorded tap to extract the
-/// single candidate sequence worth verifying, avoiding up to five expensive
-/// PBKDF2 derivations across varying window lengths.
+/// single candidate sequence worth verifying for a fixed-length gesture.
 ///
 /// Returns a new [List<int>] containing the last [length] entries of [tapHistory]
 /// if [tapHistory] has at least [length] elements and [length] > 0.

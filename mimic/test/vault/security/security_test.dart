@@ -362,6 +362,226 @@ void main() {
             reason: 'Trigger MUST fire when no multiplayer session is active');
       },
     );
+
+    // ------------------------------------------------------------------
+    // Test N1 — async verifier returning true fires onTrigger
+    // ------------------------------------------------------------------
+    testWidgets(
+      'N1 · async verifier returning true fires onTrigger',
+      (WidgetTester tester) async {
+        bool triggered = false;
+
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(
+              home: Scaffold(
+                body: Overlay(
+                  initialEntries: [
+                    OverlayEntry(
+                      builder: (_) => TriggerDetector(
+                        verifier: (taps) async => taps.join(',') == '1,0,2',
+                        verifyLength: 3,
+                        onTrigger: () => triggered = true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+
+        final registry = TriggerCallbackRegistry();
+        registry.recordTap(1);
+        registry.recordTap(0);
+        registry.recordTap(2);
+
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pumpAndSettle();
+
+        expect(triggered, isTrue,
+            reason: 'Verifier returning true must fire onTrigger');
+      },
+    );
+
+    // ------------------------------------------------------------------
+    // Test N2 — async verifier returning false never fires onTrigger
+    // ------------------------------------------------------------------
+    testWidgets(
+      'N2 · async verifier returning false never fires onTrigger',
+      (WidgetTester tester) async {
+        bool triggered = false;
+
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(
+              home: Scaffold(
+                body: Overlay(
+                  initialEntries: [
+                    OverlayEntry(
+                      builder: (_) => TriggerDetector(
+                        verifier: (taps) async => false,
+                        verifyLength: 3,
+                        onTrigger: () => triggered = true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+
+        final registry = TriggerCallbackRegistry();
+        registry.recordTap(1);
+        registry.recordTap(0);
+        registry.recordTap(2);
+
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pumpAndSettle();
+
+        expect(triggered, isFalse,
+            reason: 'Verifier returning false must NOT fire onTrigger');
+      },
+    );
+
+    // ------------------------------------------------------------------
+    // Test N3 — trailing match fires after wrong leading tap
+    // ------------------------------------------------------------------
+    testWidgets(
+      'N3 · trailing match fires after wrong leading tap using trailingWindow',
+      (WidgetTester tester) async {
+        bool triggered = false;
+
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(
+              home: Scaffold(
+                body: Overlay(
+                  initialEntries: [
+                    OverlayEntry(
+                      builder: (_) => TriggerDetector(
+                        verifier: (taps) async => taps.join(',') == '1,0,2',
+                        verifyLength: 3,
+                        onTrigger: () => triggered = true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+
+        final registry = TriggerCallbackRegistry();
+        // Tap wrong index first (0), then valid sequence 1, 0, 2
+        registry.recordTap(0);
+        registry.recordTap(1);
+        registry.recordTap(0);
+        registry.recordTap(2);
+
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pumpAndSettle();
+
+        expect(triggered, isTrue,
+            reason: 'Trailing window matching sequence must fire onTrigger');
+      },
+    );
+
+    // ------------------------------------------------------------------
+    // Test N4 — verifier that throws does not fire onTrigger and does not crash
+    // ------------------------------------------------------------------
+    testWidgets(
+      'N4 · verifier that throws does not fire onTrigger and does not crash',
+      (WidgetTester tester) async {
+        bool triggered = false;
+
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(
+              home: Scaffold(
+                body: Overlay(
+                  initialEntries: [
+                    OverlayEntry(
+                      builder: (_) => TriggerDetector(
+                        verifier: (taps) async => throw Exception('KDF error'),
+                        verifyLength: 3,
+                        onTrigger: () => triggered = true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+
+        final registry = TriggerCallbackRegistry();
+        registry.recordTap(1);
+        registry.recordTap(0);
+        registry.recordTap(2);
+
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pumpAndSettle();
+
+        expect(triggered, isFalse,
+            reason: 'Throwing verifier must NOT fire onTrigger and must not crash');
+      },
+    );
+
+    // ------------------------------------------------------------------
+    // Test N5 — queued recheck is not dropped when taps arrive back-to-back
+    // ------------------------------------------------------------------
+    testWidgets(
+      'N5 · queued recheck fires onTrigger when taps arrive back to back',
+      (WidgetTester tester) async {
+        // This test proves a queued recheck is not dropped when taps arrive faster than verification completes.
+        bool triggered = false;
+
+        await tester.pumpWidget(
+          ProviderScope(
+            child: MaterialApp(
+              home: Scaffold(
+                body: Overlay(
+                  initialEntries: [
+                    OverlayEntry(
+                      builder: (_) => TriggerDetector(
+                        verifier: (taps) async => taps.join(',') == '1,0,2',
+                        verifyLength: 3,
+                        onTrigger: () => triggered = true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+
+        final registry = TriggerCallbackRegistry();
+        // Four taps arrive back to back with no pump between them: 0, then 1, 0, 2
+        registry.recordTap(0);
+        registry.recordTap(1);
+        registry.recordTap(0);
+        registry.recordTap(2);
+
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pumpAndSettle();
+
+        expect(triggered, isTrue,
+            reason: 'Queued recheck must not be dropped and onTrigger must fire');
+      },
+    );
   });
 
   // ═══════════════════════════════════════════════════════════════════════
