@@ -19,6 +19,8 @@ import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
 import '../security/vault_conceal_service.dart';
 import '../widgets/vault_scaffold.dart';
+import 'gesture_setup_screen.dart';
+import '../trigger/gesture_store.dart';
 
 class VaultSettingsScreen extends ConsumerStatefulWidget {
   const VaultSettingsScreen({super.key});
@@ -29,6 +31,7 @@ class VaultSettingsScreen extends ConsumerStatefulWidget {
 
 class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   bool _hasRecoveryBlob = false;
+  bool _hasGesture = false;
   bool _isLoadingBiometric = false;
   bool _shakeEnabled = false;
   ShakeSensitivity _shakeSensitivity = ShakeSensitivity.medium;
@@ -37,6 +40,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   void initState() {
     super.initState();
     _checkRecoveryBlob();
+    _checkGesture();
     _loadShakePref();
   }
 
@@ -59,6 +63,24 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
       setState(() {
         _hasRecoveryBlob = blob != null && blob.isNotEmpty;
       });
+    }
+  }
+
+  Future<void> _checkGesture() async {
+    try {
+      final store = GestureStore();
+      final has = await store.hasGesture();
+      if (mounted) {
+        setState(() {
+          _hasGesture = has;
+        });
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _hasGesture = false;
+        });
+      }
     }
   }
 
@@ -392,6 +414,29 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
               Navigator.of(context).pushNamed('/vault-recovery-phrase');
             },
             trailing: _hasRecoveryBlob
+                ? const Icon(Icons.check_circle, color: VaultColors.success, size: 20)
+                : null,
+          ),
+          _buildSettingsTile(
+            icon: Icons.touch_app,
+            title: 'Unlock Gesture',
+            subtitle: _hasGesture
+                ? 'Change the three taps that open your vault'
+                : 'Choose the three taps that open your vault',
+            onTap: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (ctx) => GestureSetupScreen(
+                    onComplete: () {
+                      if (!ctx.mounted) return;
+                      Navigator.of(ctx).pop();
+                      _checkGesture();
+                    },
+                  ),
+                ),
+              );
+            },
+            trailing: _hasGesture
                 ? const Icon(Icons.check_circle, color: VaultColors.success, size: 20)
                 : null,
           ),

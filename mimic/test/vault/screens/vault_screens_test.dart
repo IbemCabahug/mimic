@@ -40,6 +40,7 @@ import 'package:mimic/vault/screens/photo_vault_screen.dart';
 import 'package:mimic/vault/screens/notes_screen.dart';
 import 'package:mimic/vault/screens/document_vault_screen.dart';
 import 'package:mimic/vault/screens/vault_settings_screen.dart';
+import 'package:mimic/vault/screens/gesture_setup_screen.dart';
 import 'package:mimic/vault/screens/breakin_log_screen.dart';
 import 'package:mimic/vault/services/video_vault_service.dart';
 import 'package:mimic/vault/screens/video_vault_screen.dart';
@@ -806,6 +807,21 @@ void main() {
       
       // Verify no plain-text file data is written to disk during settings configuration
       verifyNoPlaintextWritten(fakePlatform, ['My secret note']);
+    });
+
+    testWidgets('G1: the settings screen renders a row titled Unlock Gesture, and tapping it shows GestureSetupScreen', (WidgetTester tester) async {
+      await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
+      await tester.pumpAndSettle();
+
+      // Verify 'Unlock Gesture' row renders
+      expect(find.text('Unlock Gesture'), findsOneWidget);
+      expect(find.text('Choose the three taps that open your vault'), findsOneWidget);
+
+      // Tap 'Unlock Gesture' and verify GestureSetupScreen is displayed
+      await tester.tap(find.text('Unlock Gesture'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(GestureSetupScreen), findsOneWidget);
     });
   });
 
