@@ -119,8 +119,10 @@ class GestureStore {
   Future<bool> verifyGesture(List<int> gesture) async {
     final storedVerifier = await _storage.read(key: _verifierKey);
     final storedSalt = await _storage.read(key: _saltKey);
+    final storedLength = await _storage.read(key: _lengthKey);
 
-    if (storedVerifier == null || storedSalt == null) {
+    // The length is checked so verifyGesture and hasGesture agree on incomplete state.
+    if (storedVerifier == null || storedSalt == null || storedLength == null) {
       return false;
     }
 
