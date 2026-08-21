@@ -123,6 +123,22 @@ String formatVerifier(Uint8List key, [int iterations = kPbkdf2Iterations]) {
   return 'v3:$iterations:${base64Encode(digest)}';
 }
 
+/// Compares two strings in constant time to mitigate timing attacks.
+///
+/// This is the shared public copy. Three private copies still exist in
+/// `vault_crypto.dart`, `duress_service.dart`, and `local_streaming_server.dart`
+/// and are deliberately left alone for now, recorded as defect L20.
+bool constantTimeEquals(String a, String b) {
+  final ab = utf8.encode(a);
+  final bb = utf8.encode(b);
+  if (ab.length != bb.length) return false;
+  var result = 0;
+  for (var i = 0; i < ab.length; i++) {
+    result |= ab[i] ^ bb[i];
+  }
+  return result == 0;
+}
+
 /// Derives a PIN-based key-encryption key (KEK) from a PIN and base64-encoded salt.
 ///
 /// Uses PBKDF2-HMAC-SHA256 with the specified [iterations] (default [kPbkdf2Iterations])
