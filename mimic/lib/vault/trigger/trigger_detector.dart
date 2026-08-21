@@ -1,6 +1,11 @@
 // lib/vault/trigger/trigger_detector.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:mimic/core/providers/provider_registration.dart'
+    show networkServiceProvider;
+import 'package:mimic/multiplayer/network/network_service.dart'
+    show isMultiplayerSessionActive;
 
 class TriggerCallbackRegistry {
   static final TriggerCallbackRegistry _instance = TriggerCallbackRegistry._internal();
@@ -18,7 +23,7 @@ class TriggerCallbackRegistry {
   }
 }
 
-class TriggerDetector extends StatefulWidget {
+class TriggerDetector extends ConsumerStatefulWidget {
   final List<int> tapSequence;
   final Duration timeout;
   final VoidCallback onTrigger;
@@ -31,10 +36,10 @@ class TriggerDetector extends StatefulWidget {
   });
 
   @override
-  State<TriggerDetector> createState() => _TriggerDetectorState();
+  ConsumerState<TriggerDetector> createState() => _TriggerDetectorState();
 }
 
-class _TriggerDetectorState extends State<TriggerDetector> {
+class _TriggerDetectorState extends ConsumerState<TriggerDetector> {
   final List<int> _tapHistory = [];
   Timer? _resetTimer;
   late TriggerCallbackRegistry _registry;
@@ -81,6 +86,12 @@ class _TriggerDetectorState extends State<TriggerDetector> {
   }
 
   void _triggerActivated() {
+    final netService = ref.read(networkServiceProvider);
+    if (isMultiplayerSessionActive(netService)) {
+      _tapHistory.clear();
+      return;
+    }
+
     _resetTimer?.cancel();
     _tapHistory.clear();
 

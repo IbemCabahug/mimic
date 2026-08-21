@@ -23,6 +23,9 @@ import 'package:mimic/vault/security/breakin_log.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/security/shake_wipe_service.dart';
 import 'package:mimic/vault/crypto/keystore_service.dart';
+import 'package:mimic/multiplayer/network/network_service.dart';
+import 'package:mimic/core/providers/provider_registration.dart'
+    show networkServiceProvider, platformServiceProvider;
 
 import 'package:mimic/vault/screens/pin_screen.dart';
 import 'package:mimic/vault/screens/recovery_phrase_screen.dart';
@@ -71,6 +74,30 @@ class FakePlatformService implements PlatformService {
   Future<File> resolveVaultFile(String path) async => throw UnimplementedError();
 }
 
+/// Controllable NetworkService for test overrides.
+class ControllableNetworkService extends NetworkService {
+  NetworkRole _testRole = NetworkRole.none;
+
+  @override
+  NetworkRole get role => _testRole;
+
+  @override
+  bool get isConnected => _testRole != NetworkRole.none;
+
+  void setRole(NetworkRole newRole) {
+    _testRole = newRole;
+    if (hasListeners) {
+      notifyListeners();
+    }
+  }
+
+  @override
+  void dispose() {
+    // No-op for test double to prevent Riverpod autoDispose from marking
+    // the instance permanently disposed during test rebuilds.
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 1-4 · TriggerDetector
 // ═══════════════════════════════════════════════════════════════════════════
@@ -91,17 +118,19 @@ void main() {
         bool triggered = false;
 
         await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: Overlay(
-                initialEntries: [
-                  OverlayEntry(
-                    builder: (_) => TriggerDetector(
-                      tapSequence: const [0, 1, 0],
-                      onTrigger: () => triggered = true,
+          ProviderScope(
+            child: MaterialApp(
+              home: Scaffold(
+                body: Overlay(
+                  initialEntries: [
+                    OverlayEntry(
+                      builder: (_) => TriggerDetector(
+                        tapSequence: const [0, 1, 0],
+                        onTrigger: () => triggered = true,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -137,17 +166,19 @@ void main() {
         bool triggered = false;
 
         await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: Overlay(
-                initialEntries: [
-                  OverlayEntry(
-                    builder: (_) => TriggerDetector(
-                      tapSequence: const [0, 1, 0],
-                      onTrigger: () => triggered = true,
+          ProviderScope(
+            child: MaterialApp(
+              home: Scaffold(
+                body: Overlay(
+                  initialEntries: [
+                    OverlayEntry(
+                      builder: (_) => TriggerDetector(
+                        tapSequence: const [0, 1, 0],
+                        onTrigger: () => triggered = true,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -176,19 +207,21 @@ void main() {
         bool triggered = false;
 
         await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: Overlay(
-                initialEntries: [
-                  OverlayEntry(
-                    builder: (_) => TriggerDetector(
-                      tapSequence: const [0, 1, 0],
-                      // Short timeout so the test doesn't take forever.
-                      timeout: const Duration(milliseconds: 500),
-                      onTrigger: () => triggered = true,
+          ProviderScope(
+            child: MaterialApp(
+              home: Scaffold(
+                body: Overlay(
+                  initialEntries: [
+                    OverlayEntry(
+                      builder: (_) => TriggerDetector(
+                        tapSequence: const [0, 1, 0],
+                        // Short timeout so the test doesn't take forever.
+                        timeout: const Duration(milliseconds: 500),
+                        onTrigger: () => triggered = true,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -220,17 +253,19 @@ void main() {
       '4 · renders zero visible pixels — SizedBox.expand only',
       (WidgetTester tester) async {
         await tester.pumpWidget(
-          MaterialApp(
-            home: Scaffold(
-              body: Overlay(
-                initialEntries: [
-                  OverlayEntry(
-                    builder: (_) => TriggerDetector(
-                      tapSequence: const [0],
-                      onTrigger: () {},
+          ProviderScope(
+            child: MaterialApp(
+              home: Scaffold(
+                body: Overlay(
+                  initialEntries: [
+                    OverlayEntry(
+                      builder: (_) => TriggerDetector(
+                        tapSequence: const [0],
+                        onTrigger: () {},
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
@@ -258,6 +293,73 @@ void main() {
           reason:
               'TriggerDetector must not contain a Container (no visible paint)',
         );
+      },
+    );
+
+    // ------------------------------------------------------------------
+    // Test 5 — multiplayer guard prevents trigger and flash overlay
+    // ------------------------------------------------------------------
+    testWidgets(
+      '5 · active multiplayer session prevents trigger callback and flash overlay',
+      (WidgetTester tester) async {
+        bool triggered = false;
+        final controlNet = ControllableNetworkService();
+        controlNet.setRole(NetworkRole.guest);
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [
+              networkServiceProvider.overrideWith((ref) => controlNet),
+            ],
+            child: MaterialApp(
+              home: Scaffold(
+                body: Overlay(
+                  initialEntries: [
+                    OverlayEntry(
+                      builder: (_) => TriggerDetector(
+                        tapSequence: const [0, 1, 0],
+                        onTrigger: () => triggered = true,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        );
+
+        final registry = TriggerCallbackRegistry();
+        registry.recordTap(0);
+        registry.recordTap(1);
+        registry.recordTap(0);
+
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pumpAndSettle();
+
+        expect(triggered, isFalse,
+            reason: 'Trigger must NOT fire during an active multiplayer session');
+        expect(
+            find.byWidgetPredicate(
+                (w) => w.runtimeType.toString() == '_FlashOverlay'),
+            findsNothing,
+            reason:
+                'Flash overlay must NOT be inserted when multiplayer is active');
+
+        // Now disconnect multiplayer and verify trigger DOES fire
+        controlNet.setRole(NetworkRole.none);
+        registry.recordTap(0);
+        registry.recordTap(1);
+        registry.recordTap(0);
+
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pump(const Duration(milliseconds: 500));
+        await tester.pumpAndSettle();
+
+        expect(triggered, isTrue,
+            reason: 'Trigger MUST fire when no multiplayer session is active');
       },
     );
   });

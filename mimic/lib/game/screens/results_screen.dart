@@ -34,7 +34,6 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
   
   bool _mimicWasCaught = false;
   String _accusedPlayerId = '';
-  int _triggerTapCount = 0;
 
   // Multiplayer variables
   StreamSubscription<Map<String, dynamic>>? _messageSub;
@@ -72,8 +71,6 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
       });
     }
     
-    TriggerCallbackRegistry().setOnTap(_recordScoreTap);
-
     _runTimeline();
   }
 
@@ -83,22 +80,7 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
     _messageSub?.cancel();
     _pulseController.dispose();
     _particlesController.dispose();
-    TriggerCallbackRegistry().setOnTap(null);
     super.dispose();
-  }
-
-  void _recordScoreTap(int index) {
-    if (index == 0) {
-      _triggerTapCount++;
-      if (_triggerTapCount >= 3) {
-        _triggerVault();
-      }
-    }
-  }
-
-  void _triggerVault() {
-    _triggerTapCount = 0;
-    Navigator.of(context).pushNamed(MimicGame.vaultPinRoute);
   }
 
   void _initializeScores() {

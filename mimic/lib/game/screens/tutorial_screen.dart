@@ -1,12 +1,7 @@
 // lib/game/screens/tutorial_screen.dart
 //
-// Solo tutorial mode — a 5-step fake how-to-play walkthrough.
-// Step 3 secretly embeds the TriggerDetector vault trigger.
-// If triggered → glitch transition → PIN screen.
-// If completed normally → "You're ready to play!" screen.
-//
-// This provides the best solo disguise — "Just showing someone how to play"
-// is a perfect cover for opening the app alone.
+// How-to-play tutorial walkthrough — a 5-step guide explaining the rules.
+// When completed normally → "You're ready to play!" screen.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,9 +9,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/core/animations/horror_animations.dart';
 import 'package:mimic/core/services/stealth_mode_service.dart';
-import 'package:mimic/vault/trigger/trigger_detector.dart';
-import 'package:mimic/multiplayer/network/network_service.dart';
-import 'package:mimic/game/game.dart';
 
 class TutorialScreen extends ConsumerStatefulWidget {
   const TutorialScreen({super.key});
@@ -64,7 +56,6 @@ class _TutorialScreenState extends ConsumerState<TutorialScreen>
           'The Mimic must fake it convincingly. Watch for hesitation, '
           'vague answers, or suspiciously specific descriptions.',
       tip: 'Tap the cards to adjust suspicion levels during discussion.',
-      // ↑ Step 3 — the TriggerDetector is secretly embedded here
     ),
     _TutorialStep(
       title: 'THE ACCUSATION',
@@ -133,19 +124,6 @@ class _TutorialScreenState extends ConsumerState<TutorialScreen>
           Navigator.of(context).pop(); // close dialog
           Navigator.of(context).pop(); // go back to home
         },
-      ),
-    );
-  }
-
-  /// The secret vault trigger — only available on step 3.
-  void _onVaultTriggered() {
-    final net = ref.read(networkServiceProvider);
-    if (isMultiplayerSessionActive(net)) return;
-    // Navigate to the PIN screen with glitch transition
-    Navigator.of(context).push(
-      GlitchTransition.pageRoute(
-        const _VaultBridge(),
-        duration: const Duration(milliseconds: 300),
       ),
     );
   }
@@ -292,20 +270,7 @@ class _TutorialScreenState extends ConsumerState<TutorialScreen>
           const SizedBox(height: 32),
 
           // Description text
-          // Step 3 layers the TriggerDetector over the content
-          _currentStep == 2
-              ? Stack(
-                  children: [
-                    _buildDescriptionCard(step),
-                    Positioned.fill(
-                      child: TriggerDetector(
-                        tapSequence: const [2, 0, 2],
-                        onTrigger: _onVaultTriggered,
-                      ),
-                    ),
-                  ],
-                )
-              : _buildDescriptionCard(step),
+          _buildDescriptionCard(step),
 
           const SizedBox(height: 20),
 
@@ -570,30 +535,6 @@ class _CompletionDialog extends StatelessWidget {
           ],
         ),
       ),
-    );
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Vault Bridge (navigates to PIN screen)
-// ═══════════════════════════════════════════════════════════════════════════
-
-/// Bridge widget that forwards to the vault PIN screen after the
-/// glitch transition completes. This keeps the vault import isolated.
-class _VaultBridge extends StatelessWidget {
-  const _VaultBridge();
-
-  @override
-  Widget build(BuildContext context) {
-    // Schedule navigation after this frame to avoid build-during-build
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      Navigator.of(context).pushReplacementNamed(MimicGame.vaultPinRoute);
-    });
-
-    // Show a brief black screen during the transition
-    return const Scaffold(
-      backgroundColor: Colors.black,
-      body: SizedBox.shrink(),
     );
   }
 }
