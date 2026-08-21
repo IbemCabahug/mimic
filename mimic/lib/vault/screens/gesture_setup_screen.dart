@@ -17,10 +17,12 @@ class GestureSetupScreen extends StatefulWidget {
     super.key,
     this.store,
     this.onComplete,
+    this.allowCancel = false,
   });
 
   final GestureStore? store;
   final VoidCallback? onComplete;
+  final bool allowCancel;
 
   @override
   State<GestureSetupScreen> createState() => _GestureSetupScreenState();
@@ -43,6 +45,7 @@ class _GestureSetupScreenState extends State<GestureSetupScreen> {
 
   void _onCardTapped(int index) {
     if (_saved || _currentTaps.length >= 3 || _isSaving) return;
+
     setState(() {
       _currentTaps.add(index);
       _errorMessage = null;
@@ -53,7 +56,9 @@ class _GestureSetupScreenState extends State<GestureSetupScreen> {
     if (_saved || _isSaving) return;
     setState(() {
       _currentTaps.clear();
+      _firstSequence = null;
       _errorMessage = null;
+      _phase = _SetupPhase.create;
     });
   }
 
@@ -130,6 +135,14 @@ class _GestureSetupScreenState extends State<GestureSetupScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
+        leading: widget.allowCancel
+            ? IconButton(
+                key: const ValueKey('gesture_cancel'),
+                icon: const Icon(Icons.close, color: HorrorColors.ashGray),
+                tooltip: 'Cancel',
+                onPressed: _isSaving ? null : () => Navigator.of(context).pop(),
+              )
+            : null,
         title: Text(
           'STEALTH GESTURE',
           style: GoogleFonts.creepster(
@@ -142,7 +155,7 @@ class _GestureSetupScreenState extends State<GestureSetupScreen> {
       ),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+          padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 16.0),
           child: Column(
             children: [
               // Heading
@@ -232,15 +245,22 @@ class _GestureSetupScreenState extends State<GestureSetupScreen> {
                 ),
                 const SizedBox(height: 24),
 
-                // 3 Fake Candidate Cards
+                // 3 Candidate Cards arranged in a 2-column grid.
+                // These layout parameters (crossAxisCount, spacing, aspect ratio)
+                // are deliberately mirrored from voting_screen.dart so practice transfers
+                // accurately to the real voting layout. Note: the 20px horizontal inset is
+                // supplied by the body Padding rather than by the grid.
                 Expanded(
-                  child: ListView(
+                  child: GridView.count(
+                    crossAxisCount: 2,
+                    crossAxisSpacing: 14,
+                    mainAxisSpacing: 14,
+                    childAspectRatio: 0.85,
+                    padding: EdgeInsets.zero,
                     children: [
-                      _buildCandidateCard(0, 'PLAYER ONE', const ValueKey('gesture_card_0')),
-                      const SizedBox(height: 14),
-                      _buildCandidateCard(1, 'PLAYER TWO', const ValueKey('gesture_card_1')),
-                      const SizedBox(height: 14),
-                      _buildCandidateCard(2, 'PLAYER THREE', const ValueKey('gesture_card_2')),
+                      _buildCandidateCard(0, 'PLAYER ONE', '1', const ValueKey('gesture_card_0')),
+                      _buildCandidateCard(1, 'PLAYER TWO', '2', const ValueKey('gesture_card_1')),
+                      _buildCandidateCard(2, 'PLAYER THREE', '3', const ValueKey('gesture_card_2')),
                     ],
                   ),
                 ),
@@ -310,37 +330,45 @@ class _GestureSetupScreenState extends State<GestureSetupScreen> {
     );
   }
 
-  Widget _buildCandidateCard(int index, String title, Key key) {
+  Widget _buildCandidateCard(int index, String title, String digit, Key key) {
     return GestureDetector(
       key: key,
       onTap: () => _onCardTapped(index),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+        padding: const EdgeInsets.all(12.0),
         decoration: BoxDecoration(
           color: HorrorColors.cardSurface,
           borderRadius: BorderRadius.circular(10),
           border: Border.all(
             color: HorrorColors.darkRedTint,
-            width: 1.5,
+            width: 1.0,
           ),
         ),
-        child: Row(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(
-              Icons.person_outline,
-              color: HorrorColors.crimson,
-              size: 28,
-            ),
-            const SizedBox(width: 16),
-            Expanded(
+            CircleAvatar(
+              radius: 22,
+              backgroundColor: HorrorColors.bloodRed,
               child: Text(
-                title,
+                digit,
                 style: GoogleFonts.creepster(
                   color: HorrorColors.fogWhite,
                   fontSize: 20,
-                  letterSpacing: 1.5,
                 ),
               ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              title,
+              style: GoogleFonts.creepster(
+                color: HorrorColors.fogWhite,
+                fontSize: 18,
+                letterSpacing: 1.0,
+              ),
+              textAlign: TextAlign.center,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),

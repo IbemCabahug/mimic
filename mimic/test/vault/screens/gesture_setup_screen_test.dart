@@ -88,6 +88,16 @@ class FakeFlutterSecureStorage extends Fake implements FlutterSecureStorage {
       Map.unmodifiable(_data);
 }
 
+// The default flutter_test surface is 800 x 600, which is too short to
+// build the second row of the chooser's 2-column grid, so the third card's
+// key cannot be found. 412 x 915 is the target device's logical size, where
+// both rows fit. setSurfaceSize must be called from inside a running test,
+// never from setUp or tearDown.
+Future<void> usePhoneSurface(WidgetTester tester) async {
+  await tester.binding.setSurfaceSize(const Size(412, 915));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+}
+
 void main() {
   group('GestureSetupScreen', () {
     late FakeFlutterSecureStorage fakeStorage;
@@ -101,6 +111,7 @@ void main() {
     testWidgets('T1: instruction and heading visible on first build, continue disabled, no error', (
       WidgetTester tester,
     ) async {
+      await usePhoneSurface(tester);
       await tester.pumpWidget(
         MaterialApp(
           home: GestureSetupScreen(
@@ -136,6 +147,7 @@ void main() {
     testWidgets('T2: all-identical sequence rejected without advancing or storing', (
       WidgetTester tester,
     ) async {
+      await usePhoneSurface(tester);
       await tester.pumpWidget(
         MaterialApp(
           home: GestureSetupScreen(
@@ -177,6 +189,7 @@ void main() {
     testWidgets('T3: mismatch between create and confirm returns to create with error and no writes', (
       WidgetTester tester,
     ) async {
+      await usePhoneSurface(tester);
       await tester.pumpWidget(
         MaterialApp(
           home: GestureSetupScreen(
@@ -225,6 +238,7 @@ void main() {
     testWidgets('T4: matching sequence saves salted verifier, invokes callback, and verifies', (
       WidgetTester tester,
     ) async {
+      await usePhoneSurface(tester);
       int onCompleteCallCount = 0;
 
       await tester.pumpWidget(
@@ -287,6 +301,134 @@ void main() {
 
       // verifyGesture([1, 0, 2]) returns true (Derivation 2)
       expect(await store.verifyGesture([1, 0, 2]), isTrue);
+    });
+
+    testWidgets('T5: allowCancel default false hides cancel button', (
+      WidgetTester tester,
+    ) async {
+      await usePhoneSurface(tester);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: GestureSetupScreen(
+            store: store,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('gesture_cancel')), findsNothing);
+    });
+
+    testWidgets('T6: allowCancel true shows cancel button and tapping pops the chooser', (
+      WidgetTester tester,
+    ) async {
+      await usePhoneSurface(tester);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) => Scaffold(
+              body: ElevatedButton(
+                key: const ValueKey('open_chooser'),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => GestureSetupScreen(
+                        store: store,
+                        allowCancel: true,
+                      ),
+                    ),
+                  );
+                },
+                child: const Text('OPEN'),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Open chooser
+      await tester.tap(find.byKey(const ValueKey('open_chooser')));
+      await tester.pumpAndSettle();
+
+      // Chooser is visible with cancel button
+      expect(find.byType(GestureSetupScreen), findsOneWidget);
+      expect(find.byKey(const ValueKey('gesture_cancel')), findsOneWidget);
+
+      // Tap cancel button
+      await tester.tap(find.byKey(const ValueKey('gesture_cancel')));
+      await tester.pumpAndSettle();
+
+      // Chooser is popped and gone
+      expect(find.byType(GestureSetupScreen), findsNothing);
+      expect(find.byKey(const ValueKey('open_chooser')), findsOneWidget);
+    });
+
+    testWidgets('T7: all three cards and dots render inside GridView layout', (
+      WidgetTester tester,
+    ) async {
+      await usePhoneSurface(tester);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: GestureSetupScreen(
+            store: store,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // GridView layout is used
+      expect(find.byType(GridView), findsOneWidget);
+
+      // 3 dots and 3 candidate cards present
+      expect(find.byKey(const ValueKey('gesture_dot_0')), findsOneWidget);
+      expect(find.byKey(const ValueKey('gesture_dot_1')), findsOneWidget);
+      expect(find.byKey(const ValueKey('gesture_dot_2')), findsOneWidget);
+      expect(find.byKey(const ValueKey('gesture_card_0')), findsOneWidget);
+      expect(find.byKey(const ValueKey('gesture_card_1')), findsOneWidget);
+      expect(find.byKey(const ValueKey('gesture_card_2')), findsOneWidget);
+    });
+
+    testWidgets('T8: START OVER during confirm phase returns to create phase', (
+      WidgetTester tester,
+    ) async {
+      await usePhoneSurface(tester);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: GestureSetupScreen(
+            store: store,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Create phase: Tap 1, 0, 2
+      await tester.tap(find.byKey(const ValueKey('gesture_card_1')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('gesture_card_0')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const ValueKey('gesture_card_2')));
+      await tester.pumpAndSettle();
+
+      // Tap CONTINUE -> screen enters confirm phase
+      await tester.tap(find.byKey(const ValueKey('gesture_continue')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Repeat your sequence'), findsOneWidget);
+
+      // Tap START OVER
+      await tester.tap(find.byKey(const ValueKey('gesture_startover')));
+      await tester.pumpAndSettle();
+
+      // Create phase restored
+      expect(find.text('Choose your sequence'), findsOneWidget);
+      expect(find.byKey(const ValueKey('gesture_instruction')), findsOneWidget);
+
+      // CONTINUE disabled again, proving taps cleared
+      final continueButton = tester.widget<ElevatedButton>(
+        find.byKey(const ValueKey('gesture_continue')),
+      );
+      expect(continueButton.onPressed, isNull);
     });
   });
 }

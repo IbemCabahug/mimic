@@ -427,6 +427,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
               Navigator.of(context).push(
                 MaterialPageRoute(
                   builder: (ctx) => GestureSetupScreen(
+                    allowCancel: true,
                     onComplete: () {
                       if (!ctx.mounted) return;
                       Navigator.of(ctx).pop();
