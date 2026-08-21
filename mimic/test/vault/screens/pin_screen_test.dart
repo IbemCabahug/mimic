@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'package:mimic/vault/screens/pin_screen.dart';
 import 'package:mimic/vault/screens/recovery_phrase_screen.dart';
+import 'package:mimic/vault/screens/gesture_setup_screen.dart';
 import 'package:mimic/vault/security/lockout_service.dart';
 import 'package:mimic/vault/security/duress_service.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
@@ -305,6 +306,44 @@ void main() {
 
     // Verify it reset state to Create PIN again
     expect(find.text('Create PIN'), findsWidgets);
+  });
+
+  testWidgets('PinScreen Create Mode successful creation navigates to GestureSetupScreen', (WidgetTester tester) async {
+    final fakePlatform = FakePlatformService();
+    final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          vaultCryptoProvider.overrideWith((ref) => crypto),
+        ],
+        child: const MaterialApp(
+          home: PinScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Verify Create Mode
+    expect(find.text('Create PIN'), findsWidgets);
+
+    // Enter PIN once
+    await tester.enterText(find.byType(TextField), '1234');
+    await tester.tap(find.byType(ElevatedButton));
+    await tester.pumpAndSettle();
+    expect(find.text('Confirm PIN'), findsWidgets);
+
+    // Enter PIN again (confirm)
+    await tester.enterText(find.byType(TextField), '1234');
+    await tester.tap(find.byType(ElevatedButton));
+    await tester.pumpAndSettle();
+
+    // Verify GestureSetupScreen is shown
+    expect(find.byType(GestureSetupScreen), findsOneWidget);
+
+    // Clean up AutoLock timer started on vault initialization
+    AutoLock().dispose();
   });
 
   group('Migration failure and recovery phrase preservation (F1/T1-T4)', () {

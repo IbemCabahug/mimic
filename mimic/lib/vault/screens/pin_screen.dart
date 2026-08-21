@@ -17,6 +17,7 @@ import '../security/lockout_service.dart';
 import '../crypto/keystore_service.dart';
 import 'wiped_vault_screen.dart';
 import 'recovery_phrase_screen.dart';
+import 'gesture_setup_screen.dart';
 import 'package:mimic/core/providers/provider_registration.dart'
     show vaultConcealServiceProvider;
 
@@ -147,11 +148,22 @@ class _PinScreenState extends ConsumerState<PinScreen> {
         PanicMode().init(context, ref);
         AutoLock().init(context, ref);
 
+        // The gesture chooser appears only inside deliberate vault creation and is unreachable otherwise.
+        final needsHardwareMigration = _crypto.needsHardwareMigration;
         navigator.pushReplacement(
           MaterialPageRoute(
-            builder: (_) => RecoveryPhraseScreen(
-              forcedSetup: true,
-              migrateAfter: _crypto.needsHardwareMigration,
+            builder: (ctx) => GestureSetupScreen(
+              onComplete: () {
+                if (!ctx.mounted) return;
+                Navigator.of(ctx).pushReplacement(
+                  MaterialPageRoute(
+                    builder: (_) => RecoveryPhraseScreen(
+                      forcedSetup: true,
+                      migrateAfter: needsHardwareMigration,
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         );
