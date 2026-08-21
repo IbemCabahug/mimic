@@ -5,3 +5,6 @@
 # Internal planning documents - never commit (repo was public until 2026-08-07)
 docs/future_feature.md
 docs/PROJECT_STATUS.md
+
+# Moved to docs repository (mimic-docs/notes.md)
+notes.md
