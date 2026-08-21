@@ -56,16 +56,21 @@ void main() {
   late FakeFlutterSecureStorage fakeStorage;
   late GestureStore store;
   String? currentSalt;
+  int saltReadCount = 0;
 
   setUp(() {
     fakeStorage = FakeFlutterSecureStorage();
     store = GestureStore(storage: fakeStorage);
     currentSalt = null;
+    saltReadCount = 0;
   });
 
   VaultEntrance createEntrance() {
     return VaultEntrance(
-      readVaultSalt: () async => currentSalt,
+      readVaultSalt: () async {
+        saltReadCount++;
+        return currentSalt;
+      },
       store: store,
     );
   }
@@ -113,6 +118,48 @@ void main() {
       final entrance = createEntrance();
       final result = await entrance.verify(VaultEntrance.setupPassage);
       expect(result, isFalse);
+    });
+
+    test('J1: vault exists, gesture [1, 0, 1] stored. Calling verify twice caches positive result (saltReadCount == 1)', () async {
+      currentSalt = 'some_base64_salt';
+      await store.setGesture([1, 0, 1]);
+      final entrance = createEntrance();
+      final result1 = await entrance.verify([1, 0, 1]);
+      final result2 = await entrance.verify([1, 0, 1]);
+      expect(result1, isTrue);
+      expect(result2, isTrue);
+      expect(saltReadCount, equals(1));
+    });
+
+    test('J2: no vault (salt null). Calling verify twice does not cache negative result (saltReadCount == 2)', () async {
+      currentSalt = null;
+      final entrance = createEntrance();
+      final result1 = await entrance.verify(VaultEntrance.setupPassage);
+      final result2 = await entrance.verify(VaultEntrance.setupPassage);
+      expect(result1, isTrue);
+      expect(result2, isTrue);
+      expect(saltReadCount, equals(2));
+    });
+
+    test('J3: passage dies as soon as a vault appears, even on an object that previously saw no vault', () async {
+      currentSalt = null;
+      final entrance = createEntrance();
+      final initialResult = await entrance.verify(VaultEntrance.setupPassage);
+      expect(initialResult, isTrue);
+      expect(saltReadCount, equals(1));
+
+      // Now create a vault and store a gesture
+      currentSalt = 'some_base64_salt';
+      await store.setGesture([1, 0, 1]);
+
+      // On the SAME VaultEntrance instance:
+      final passageResult = await entrance.verify(VaultEntrance.setupPassage);
+      expect(passageResult, isFalse); // passage is dead
+      expect(saltReadCount, equals(2)); // salt was read and cached
+
+      final gestureResult = await entrance.verify([1, 0, 1]);
+      expect(gestureResult, isTrue); // stored gesture works
+      expect(saltReadCount, equals(2)); // cache was used (no 3rd salt read)
     });
   });
 }

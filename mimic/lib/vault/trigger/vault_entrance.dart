@@ -21,18 +21,31 @@ class VaultEntrance {
   final Future<String?> Function() _readVaultSalt;
   final GestureStore _store;
 
+  /// Only the positive result ("vault exists") is cached.
+  ///
+  /// A vault can be created during the lifetime of this object, and caching
+  /// "no vault" would keep the setup passage alive after it should be dead.
+  /// Once a vault exists it can never stop existing while this object lives.
+  bool _vaultExistsCached = false;
+
   /// Never published anywhere. Live ONLY while no vault exists.
   static const List<int> setupPassage = [0, 2, 1];
 
   /// Verifies whether the given tap sequence should open the vault.
   ///
-  /// 1. Reads the vault salt via [readVaultSalt].
-  /// 2. If the salt is null or empty, no vault exists: returns true iff [taps]
+  /// 1. If [_vaultExistsCached] is true, skips [readVaultSalt] and verifies
+  ///    directly via [_store.verifyGesture].
+  /// 2. Otherwise reads the vault salt via [readVaultSalt].
+  /// 3. If the salt is null or empty, no vault exists: returns true iff [taps]
   ///    matches [setupPassage] element by element without key derivation.
-  /// 3. Otherwise a vault exists: returns the result of verifying against the
-  ///    stored gesture in [GestureStore]. Never falls back to [setupPassage]
-  ///    or any constant.
+  /// 4. Otherwise a vault exists: caches the positive result and returns the
+  ///    result of verifying against the stored gesture in [GestureStore].
+  ///    Never falls back to [setupPassage] or any constant.
   Future<bool> verify(List<int> taps) async {
+    if (_vaultExistsCached) {
+      return _store.verifyGesture(taps);
+    }
+
     final salt = await _readVaultSalt();
     if (salt == null || salt.isEmpty) {
       if (taps.length != setupPassage.length) {
@@ -46,6 +59,7 @@ class VaultEntrance {
       return true;
     }
 
+    _vaultExistsCached = true;
     return _store.verifyGesture(taps);
   }
 }
