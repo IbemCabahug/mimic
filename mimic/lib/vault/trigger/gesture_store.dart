@@ -10,11 +10,19 @@ import '../crypto/vault_kdf.dart';
 
 /// Manages persistence and verification of user-chosen unlock gestures.
 ///
-/// HONEST SECURITY LIMIT:
-/// The gesture space is small — a handful of zones and a few taps yields at
-/// most a few thousand combinations. Anyone with access to the device's secure
-/// storage can enumerate and test all possibilities in seconds, regardless of
-/// hashing or PBKDF2 iterations.
+/// HONEST SECURITY LIMIT & ZONE CONSTRAINTS:
+/// The gesture sequence is strictly constrained by in-game voting mechanics:
+/// - A tap is recorded when a vote is submitted on the voting screen.
+/// - The game enforces a 3-player minimum, meaning a 3-player round provides
+///   exactly 3 vote submissions and player candidate indices 0, 1, and 2.
+/// - A sequence longer than 3 taps or containing an index > 2 could never be
+///   physically entered in a 3-player match.
+///
+/// This yields a maximum of 24 usable combinations (3^3 = 27 total, minus the 3
+/// all-identical sequences [0,0,0], [1,1,1], and [2,2,2]).
+///
+/// Anyone with access to the device's secure storage can enumerate and test all
+/// 24 possibilities in seconds, regardless of PBKDF2 iterations.
 ///
 /// The unlock gesture is therefore OBSCURITY, not a second password. Its value
 /// is that the unlock sequence is no longer hardcoded into source code, cannot
@@ -38,23 +46,28 @@ class GestureStore {
   static const String _saltKey = 'vault_gesture_salt';
   static const String _lengthKey = 'vault_gesture_length';
 
-  /// Minimum allowable gesture length (taps/zones).
-  static const int minGestureLength = 4;
+  /// Required gesture length in taps (exactly 3).
+  static const int requiredGestureLength = 3;
 
-  /// Maximum allowable gesture length (taps/zones).
-  static const int maxGestureLength = 8;
+  /// Maximum allowed zone index (0, 1, or 2).
+  static const int maxZoneIndex = 2;
 
   void _validateGesture(List<int> gesture) {
-    if (gesture.length < minGestureLength || gesture.length > maxGestureLength) {
+    if (gesture.length != requiredGestureLength) {
       throw ArgumentError(
-        'Gesture length must be between $minGestureLength and $maxGestureLength inclusive, got ${gesture.length}',
+        'Gesture length must be exactly $requiredGestureLength taps, got ${gesture.length}',
       );
     }
     if (gesture.any((element) => element < 0)) {
-      throw ArgumentError('Gesture elements must be non-negative (>= 0)');
+      final negative = gesture.firstWhere((element) => element < 0);
+      throw ArgumentError('Gesture elements must be non-negative (>= 0), got $negative');
+    }
+    if (gesture.any((element) => element > maxZoneIndex)) {
+      final excessive = gesture.firstWhere((element) => element > maxZoneIndex);
+      throw ArgumentError('Gesture elements must not exceed $maxZoneIndex, got $excessive');
     }
     if (gesture.every((element) => element == gesture.first)) {
-      throw ArgumentError('Gesture elements cannot all be identical');
+      throw ArgumentError('Gesture elements cannot all be identical (got all ${gesture.first})');
     }
   }
 
@@ -93,8 +106,10 @@ class GestureStore {
     await _storage.write(key: _saltKey, value: saltBase64);
     // Storing the gesture length in plaintext is safe: an attacker who can read
     // secure storage can already brute-force the tiny gesture space in seconds,
-    // so knowing the length reveals nothing new. Storing it avoids running up to
-    // five expensive PBKDF2 derivations on every single tap during gameplay.
+    // so knowing the length reveals nothing new. Storing it keeps the detector to
+    // one verification per tap. With a fixed 3-tap gesture the length is now
+    // effectively constant; the key is retained so a future variable-length
+    // gesture needs no storage migration.
     await _storage.write(key: _lengthKey, value: gesture.length.toString());
   }
 

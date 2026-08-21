@@ -98,25 +98,28 @@ void main() {
 
     test('hasGesture() and verifyGesture() return false before anything is stored', () async {
       expect(await store.hasGesture(), isFalse);
-      expect(await store.verifyGesture([1, 2, 3, 4]), isFalse);
+      expect(await store.verifyGesture([1, 0, 2]), isFalse);
     });
 
     test('setGesture() validates length bounds and rejects all-identical elements', () async {
-      // Too short (< 4)
-      expect(() => store.setGesture([1, 2, 3]), throwsArgumentError);
+      // Too short (< 3)
+      expect(() => store.setGesture([1, 0]), throwsArgumentError);
 
-      // Too long (> 8)
+      // Too long (> 3)
       expect(
-        () => store.setGesture([1, 2, 3, 4, 5, 6, 7, 8, 9]),
+        () => store.setGesture([1, 0, 2, 1]),
         throwsArgumentError,
       );
 
       // Negative element
-      expect(() => store.setGesture([1, -1, 3, 4]), throwsArgumentError);
+      expect(() => store.setGesture([1, -1, 2]), throwsArgumentError);
+
+      // Element above maxZoneIndex (2)
+      expect(() => store.setGesture([1, 3, 0]), throwsArgumentError);
 
       // All elements identical
-      expect(() => store.setGesture([2, 2, 2, 2]), throwsArgumentError);
-      expect(() => store.setGesture([0, 0, 0, 0, 0]), throwsArgumentError);
+      expect(() => store.setGesture([2, 2, 2]), throwsArgumentError);
+      expect(() => store.setGesture([0, 0, 0]), throwsArgumentError);
 
       // Nothing was stored
       expect(await store.hasGesture(), isFalse);
@@ -125,20 +128,20 @@ void main() {
     test(
       'stores salted verifier without exposing raw gesture, verifies matching and non-matching gestures, and clearGesture() removes it',
       () async {
-        const gesture = [1, 2, 0, 3];
+        const gesture = [1, 0, 2];
 
         // 1. Set gesture (Derivation 1)
         await store.setGesture(gesture);
         expect(await store.hasGesture(), isTrue);
 
         // 2. verifyGesture with identical gesture returns true (Derivation 2)
-        expect(await store.verifyGesture([1, 2, 0, 3]), isTrue);
+        expect(await store.verifyGesture([1, 0, 2]), isTrue);
 
         // 3. verifyGesture with different gesture of same length returns false (Derivation 3)
-        expect(await store.verifyGesture([1, 2, 0, 4]), isFalse);
+        expect(await store.verifyGesture([0, 1, 2]), isFalse);
 
         // 4. verifyGesture with prefix of wrong length returns false (Derivation 4)
-        expect(await store.verifyGesture([1, 2, 0]), isFalse);
+        expect(await store.verifyGesture([1, 0]), isFalse);
 
         // 5. Assert raw gesture is not stored in plainly recoverable form
         final storedVerifier = await fakeStorage.read(
@@ -166,14 +169,14 @@ void main() {
         expect(await store.hasGesture(), isFalse);
         expect(await fakeStorage.read(key: 'vault_gesture_verifier'), isNull);
         expect(await fakeStorage.read(key: 'vault_gesture_salt'), isNull);
-        expect(await store.verifyGesture([1, 2, 0, 3]), isFalse);
+        expect(await store.verifyGesture([1, 0, 2]), isFalse);
       },
     );
 
     test(
       'setting the same gesture twice produces different salts and verifiers while verifying correctly',
       () async {
-        const gesture = [3, 1, 4, 2];
+        const gesture = [2, 1, 0];
 
         // First set (Derivation 5)
         await store.setGesture(gesture);
@@ -194,7 +197,7 @@ void main() {
         expect(verifier1 != verifier2, isTrue);
 
         // Must still verify correctly (Derivation 7)
-        expect(await store.verifyGesture([3, 1, 4, 2]), isTrue);
+        expect(await store.verifyGesture([2, 1, 0]), isTrue);
       },
     );
 
@@ -204,12 +207,12 @@ void main() {
         // Initial state before any gesture is stored
         expect(await store.gestureLength(), isNull);
 
-        // Set a 5-tap gesture (Derivation 8)
-        const fiveTapGesture = [1, 2, 0, 3, 1];
-        await store.setGesture(fiveTapGesture);
+        // Set a 3-tap gesture (Derivation 8)
+        const threeTapGesture = [1, 0, 2];
+        await store.setGesture(threeTapGesture);
 
-        // gestureLength returns 5 and hasGesture is true
-        expect(await store.gestureLength(), equals(5));
+        // gestureLength returns 3 and hasGesture is true
+        expect(await store.gestureLength(), equals(3));
         expect(await store.hasGesture(), isTrue);
 
         final savedVerifier = await fakeStorage.read(
@@ -218,7 +221,7 @@ void main() {
         final savedSalt = await fakeStorage.read(key: 'vault_gesture_salt');
         expect(
           await fakeStorage.read(key: 'vault_gesture_length'),
-          equals('5'),
+          equals('3'),
         );
 
         // Incomplete state 1: verifier and salt present, but length key deleted directly from fake
@@ -227,7 +230,7 @@ void main() {
         expect(await store.gestureLength(), isNull);
 
         // Incomplete state 2: length and salt present, but verifier deleted directly from fake
-        await fakeStorage.write(key: 'vault_gesture_length', value: '5');
+        await fakeStorage.write(key: 'vault_gesture_length', value: '3');
         await fakeStorage.delete(key: 'vault_gesture_verifier');
         expect(await store.hasGesture(), isFalse);
 
@@ -237,7 +240,7 @@ void main() {
           value: savedVerifier,
         );
         expect(await store.hasGesture(), isTrue);
-        expect(await store.gestureLength(), equals(5));
+        expect(await store.gestureLength(), equals(3));
 
         // clearGesture removes all three keys and gestureLength returns null
         await store.clearGesture();
