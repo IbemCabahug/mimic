@@ -8,6 +8,9 @@ import 'package:mimic/core/animations/horror_animations.dart';
 import 'package:mimic/game/widgets/suspicion_meter.dart';
 import '../state/game_state.dart';
 import '../../vault/trigger/trigger_detector.dart';
+import '../../vault/trigger/gesture_store.dart';
+import '../../vault/trigger/vault_entrance.dart';
+import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/game/game.dart';
 
 class VotingScreen extends ConsumerStatefulWidget {
@@ -21,11 +24,18 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
   final Map<String, int> _voteCounts = {};
   int _currentVoterIndex = 0;
   String? _selectedCandidateId;
+  late final VaultEntrance _vaultEntrance;
 
   @override
   void initState() {
     super.initState();
     SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    _vaultEntrance = VaultEntrance(
+      readVaultSalt: () async {
+        if (!mounted) return null;
+        return ref.read(platformServiceProvider).secureRead('vault_salt');
+      },
+    );
     final gameState = ref.read(gameStateProvider);
     for (final player in gameState.players) {
       _voteCounts[player.id] = 0;
@@ -323,7 +333,11 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
 
             // Invisible TriggerDetector overlay for vault entrance
             TriggerDetector(
-              tapSequence: const [2, 0, 2],
+              verifier: (taps) async {
+                if (!mounted) return false;
+                return _vaultEntrance.verify(taps);
+              },
+              verifyLength: GestureStore.requiredGestureLength,
               onTrigger: () {
                 Navigator.of(context).pushNamed(MimicGame.vaultPinRoute);
               },
