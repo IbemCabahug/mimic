@@ -36,6 +36,7 @@ class GestureStore {
 
   static const String _verifierKey = 'vault_gesture_verifier';
   static const String _saltKey = 'vault_gesture_salt';
+  static const String _lengthKey = 'vault_gesture_length';
 
   /// Minimum allowable gesture length (taps/zones).
   static const int minGestureLength = 4;
@@ -90,6 +91,11 @@ class GestureStore {
 
     await _storage.write(key: _verifierKey, value: verifier);
     await _storage.write(key: _saltKey, value: saltBase64);
+    // Storing the gesture length in plaintext is safe: an attacker who can read
+    // secure storage can already brute-force the tiny gesture space in seconds,
+    // so knowing the length reveals nothing new. Storing it avoids running up to
+    // five expensive PBKDF2 derivations on every single tap during gameplay.
+    await _storage.write(key: _lengthKey, value: gesture.length.toString());
   }
 
   /// Verifies a candidate gesture against the stored verifier using constant-time comparison.
@@ -118,16 +124,29 @@ class GestureStore {
     return constantTimeEquals(storedVerifier, expectedVerifier);
   }
 
-  /// Returns true if a gesture verifier and salt are stored.
+  /// Returns the stored gesture length, or null if unconfigured or unparseable.
+  Future<int?> gestureLength() async {
+    try {
+      final raw = await _storage.read(key: _lengthKey);
+      if (raw == null) return null;
+      return int.tryParse(raw);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Returns true if all three gesture records (verifier, salt, and length) are stored.
   Future<bool> hasGesture() async {
     final verifier = await _storage.read(key: _verifierKey);
     final salt = await _storage.read(key: _saltKey);
-    return verifier != null && salt != null;
+    final length = await _storage.read(key: _lengthKey);
+    return verifier != null && salt != null && length != null;
   }
 
-  /// Removes the stored gesture verifier and salt.
+  /// Removes the stored gesture verifier, salt, and length.
   Future<void> clearGesture() async {
     await _storage.delete(key: _verifierKey);
     await _storage.delete(key: _saltKey);
+    await _storage.delete(key: _lengthKey);
   }
 }

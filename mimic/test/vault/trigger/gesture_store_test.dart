@@ -197,5 +197,56 @@ void main() {
         expect(await store.verifyGesture([3, 1, 4, 2]), isTrue);
       },
     );
+
+    test(
+      'gestureLength() tracks stored gesture length and hasGesture() requires all three keys (verifier, salt, length)',
+      () async {
+        // Initial state before any gesture is stored
+        expect(await store.gestureLength(), isNull);
+
+        // Set a 5-tap gesture (Derivation 8)
+        const fiveTapGesture = [1, 2, 0, 3, 1];
+        await store.setGesture(fiveTapGesture);
+
+        // gestureLength returns 5 and hasGesture is true
+        expect(await store.gestureLength(), equals(5));
+        expect(await store.hasGesture(), isTrue);
+
+        final savedVerifier = await fakeStorage.read(
+          key: 'vault_gesture_verifier',
+        );
+        final savedSalt = await fakeStorage.read(key: 'vault_gesture_salt');
+        expect(
+          await fakeStorage.read(key: 'vault_gesture_length'),
+          equals('5'),
+        );
+
+        // Incomplete state 1: verifier and salt present, but length key deleted directly from fake
+        await fakeStorage.delete(key: 'vault_gesture_length');
+        expect(await store.hasGesture(), isFalse);
+        expect(await store.gestureLength(), isNull);
+
+        // Incomplete state 2: length and salt present, but verifier deleted directly from fake
+        await fakeStorage.write(key: 'vault_gesture_length', value: '5');
+        await fakeStorage.delete(key: 'vault_gesture_verifier');
+        expect(await store.hasGesture(), isFalse);
+
+        // Restore verifier to full valid state
+        await fakeStorage.write(
+          key: 'vault_gesture_verifier',
+          value: savedVerifier,
+        );
+        expect(await store.hasGesture(), isTrue);
+        expect(await store.gestureLength(), equals(5));
+
+        // clearGesture removes all three keys and gestureLength returns null
+        await store.clearGesture();
+        expect(await store.hasGesture(), isFalse);
+        expect(await store.gestureLength(), isNull);
+        expect(await fakeStorage.read(key: 'vault_gesture_length'), isNull);
+        expect(await fakeStorage.read(key: 'vault_gesture_verifier'), isNull);
+        expect(await fakeStorage.read(key: 'vault_gesture_salt'), isNull);
+      },
+    );
   });
 }
