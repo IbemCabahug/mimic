@@ -433,6 +433,17 @@ class _PinScreenState extends ConsumerState<PinScreen> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
+        leading: IconButton(
+          key: const ValueKey('pin_exit'),
+          icon: const Icon(Icons.close, color: Color(0xFF7F77DD)),
+          onPressed: () {
+            if (Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            } else {
+              Navigator.of(context).pushReplacementNamed('/');
+            }
+          },
+        ),
         title: Text(
           _isCreateMode ? 'Set Up PIN' : 'Security',
           style: const TextStyle(color: Color(0xFF7F77DD)),

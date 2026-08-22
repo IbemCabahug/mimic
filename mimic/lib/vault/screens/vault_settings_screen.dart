@@ -598,13 +598,6 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
               activeThumbColor: VaultColors.accent,
             ),
           ),
-          _buildSettingsTile(
-            icon: Icons.lock,
-            title: 'Lock Vault',
-            subtitle: 'Lock vault and return to PIN screen',
-            onTap: _lockVault,
-            iconColor: VaultColors.error,
-          ),
 
           const SizedBox(height: 24),
 

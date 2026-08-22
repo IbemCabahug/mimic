@@ -826,6 +826,18 @@ void main() {
 
       expect(find.byType(GestureSetupScreen), findsOneWidget);
     });
+
+    testWidgets('P4: the vault settings screen contains EXACTLY ONE Lock Vault row', (WidgetTester tester) async {
+      await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
+      await tester.pumpAndSettle();
+
+      // Derivation:
+      // In VaultSettingsScreen, the 'Lock Vault' row was previously rendered twice
+      // (once at the top of the Security section and once duplicated at the end of the Security section).
+      // Following the deletion of the duplicate, there is exactly one Lock Vault tile in the entire widget tree.
+      expect(find.text('Lock Vault'), findsOneWidget);
+      expect(find.text('Lock vault and return to PIN screen'), findsOneWidget);
+    });
   });
 
   group('7 - BreakInLogScreen', () {

@@ -602,4 +602,94 @@ void main() {
     expect(find.text('Enter PIN'), findsWidgets);
     expect(find.text('Create PIN'), findsNothing);
   });
+
+  testWidgets('P1: the PIN screen renders a widget with key pin_exit', (WidgetTester tester) async {
+    final fakePlatform = FakePlatformService();
+    final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          vaultCryptoProvider.overrideWith((ref) => crypto),
+        ],
+        child: const MaterialApp(
+          home: PinScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const ValueKey('pin_exit')), findsOneWidget);
+  });
+
+  testWidgets('P2: tapping pin_exit while the vault is locked does not unlock anything and does not change wrong_attempts', (WidgetTester tester) async {
+    final fakePlatform = FakePlatformService();
+    fakePlatform.store['vault_salt'] = 'some_salt';
+    fakePlatform.store['wrong_attempts'] = '2';
+    final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+    expect(crypto.isUnlocked, isFalse);
+    expect(fakePlatform.store['wrong_attempts'], equals('2'));
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          vaultCryptoProvider.overrideWith((ref) => crypto),
+        ],
+        child: MaterialApp(
+          initialRoute: '/vault-pin',
+          routes: {
+            '/vault-pin': (_) => const PinScreen(),
+            '/': (_) => const Scaffold(body: Text('GAME_HOME')),
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final exitButton = find.byKey(const ValueKey('pin_exit'));
+    expect(exitButton, findsOneWidget);
+
+    await tester.tap(exitButton);
+    await tester.pumpAndSettle();
+
+    expect(crypto.isUnlocked, isFalse);
+    expect(fakePlatform.store['wrong_attempts'], equals('2'));
+    expect(find.text('GAME_HOME'), findsOneWidget);
+  });
+
+  testWidgets('P3: pin_exit is still present when the screen is in the locked-out state', (WidgetTester tester) async {
+    final fakePlatform = FakePlatformService();
+    final fakeClock = FakeMonotonicClock();
+    final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+    fakePlatform.store['vault_salt'] = 'some_salt';
+    fakePlatform.store['wrong_attempts'] = '5';
+    fakePlatform.store['lockout_set_wall'] = DateTime.now().millisecondsSinceEpoch.toString();
+    fakePlatform.store['lockout_set_elapsed'] = fakeClock.value.toString();
+    fakePlatform.store['lockout_duration_ms'] = '30000';
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          vaultCryptoProvider.overrideWith((ref) => crypto),
+          lockoutServiceProvider.overrideWith((ref) => LockoutService(fakePlatform, fakeClock)),
+        ],
+        child: const MaterialApp(
+          home: PinScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Try again in '), findsOneWidget);
+    final textField = tester.widget<TextField>(find.byType(TextField));
+    expect(textField.readOnly, isTrue);
+
+    // pin_exit remains available and visible
+    expect(find.byKey(const ValueKey('pin_exit')), findsOneWidget);
+  });
 }
