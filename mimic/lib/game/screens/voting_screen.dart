@@ -1,4 +1,5 @@
 // lib/game/screens/voting_screen.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -36,6 +37,7 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
         return ref.read(platformServiceProvider).secureRead('vault_salt');
       },
     );
+    unawaited(_vaultEntrance.prewarm().catchError((_) {}));
     final gameState = ref.read(gameStateProvider);
     for (final player in gameState.players) {
       _voteCounts[player.id] = 0;

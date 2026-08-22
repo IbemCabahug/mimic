@@ -28,6 +28,23 @@ class VaultEntrance {
   /// Once a vault exists it can never stop existing while this object lives.
   bool _vaultExistsCached = false;
 
+  /// Warms [_vaultExistsCached] during idle time (e.g. when the voting screen
+  /// mounts) by checking whether a gesture record is stored.
+  ///
+  /// This moves one platform-channel read off the unlock path so the first
+  /// gesture attempt only needs a single read (for verification) instead of
+  /// two. Never throws to the caller and never caches a negative result.
+  Future<void> prewarm() async {
+    try {
+      if (_vaultExistsCached) return;
+      if (await _store.hasGesture()) {
+        _vaultExistsCached = true;
+      }
+    } catch (_) {
+      // Swallowed: idle prewarming must never disrupt startup or surface errors.
+    }
+  }
+
   /// Never published anywhere. Live ONLY while no vault exists.
   static const List<int> setupPassage = [0, 2, 1];
 

@@ -197,5 +197,62 @@ void main() {
         expect(fakeStorage.readCount, equals(1)); // cached entrance delegates directly to verifyGesture (1 read)
       },
     );
+
+    test('O1: gesture stored. Call prewarm(), then verify the correct gesture. Expected recordReadCount is 2 (1 prewarm + 1 verify), saltReadCount is 0', () async {
+      currentSalt = 'some_base64_salt';
+      await store.setGesture([1, 0, 1]);
+      fakeStorage.recordReadCount = 0;
+      saltReadCount = 0;
+
+      final entrance = createEntrance();
+      await entrance.prewarm();
+
+      // Derivation:
+      // 1. prewarm() calls hasGesture() -> 1 record read, sets _vaultExistsCached = true.
+      // 2. verify([1, 0, 1]) sees _vaultExistsCached == true -> delegates directly to verifyGesture -> 1 record read.
+      // Total recordReadCount = 1 + 1 = 2.
+      // vault_salt is never read because hasGesture was true -> saltReadCount = 0.
+      final result = await entrance.verify([1, 0, 1]);
+      expect(result, isTrue);
+      expect(saltReadCount, equals(0));
+      expect(fakeStorage.recordReadCount, equals(2));
+    });
+
+    test('O2: gesture stored. Call prewarm() twice, then verify. Assert the second prewarm performed zero extra reads', () async {
+      currentSalt = 'some_base64_salt';
+      await store.setGesture([1, 0, 1]);
+      fakeStorage.recordReadCount = 0;
+      saltReadCount = 0;
+
+      final entrance = createEntrance();
+      await entrance.prewarm();
+      expect(fakeStorage.recordReadCount, equals(1)); // first prewarm: hasGesture (1)
+
+      await entrance.prewarm();
+      expect(fakeStorage.recordReadCount, equals(1)); // second prewarm: returns immediately with 0 reads
+
+      final result = await entrance.verify([1, 0, 1]);
+      expect(result, isTrue);
+      expect(saltReadCount, equals(0));
+      expect(fakeStorage.recordReadCount, equals(2)); // verify: verifyGesture (1)
+    });
+
+    test('O3: no vault and no gesture. Call prewarm(), then confirm setup passage [0, 2, 1] returns true and wrong sequence returns false (prewarm does not poison cache)', () async {
+      currentSalt = null;
+      fakeStorage.recordReadCount = 0;
+      saltReadCount = 0;
+
+      final entrance = createEntrance();
+      await entrance.prewarm();
+
+      // prewarm called hasGesture() which returned false -> _vaultExistsCached stays false.
+      final passageResult = await entrance.verify(VaultEntrance.setupPassage);
+      expect(passageResult, isTrue);
+      expect(saltReadCount, equals(1)); // salt read on passage verification
+
+      final wrongResult = await entrance.verify([1, 1, 0]);
+      expect(wrongResult, isFalse);
+      expect(saltReadCount, equals(2)); // salt read again because negative result is not cached
+    });
   });
 }
