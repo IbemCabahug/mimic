@@ -93,6 +93,51 @@ class VaultCrypto extends ChangeNotifier {
   bool get needsHardwareMigration => _needsHardwareMigration;
   bool get hasRecoveryPhrase => _hasRecoveryPhrase;
 
+  /// Verifies a candidate PIN against the stored verifier.
+  ///
+  /// This method is read-only, does not unlock the vault, does not alter internal
+  /// crypto state or keys in memory, does not write any storage keys, and does
+  /// not count toward lockout attempts. Returns true if the PIN matches the
+  /// stored verifier, or false otherwise (including when the vault is uninitialized
+  /// or keys are missing/empty).
+  Future<bool> verifyPin(String pin) async {
+    try {
+      if (kIsWeb) {
+        final salt = _webKeyStore[_storageKeySalt];
+        final storedHash = _webKeyStore[_storageKeyPinHash];
+        if (salt == null || salt.isEmpty || storedHash == null || storedHash.isEmpty) {
+          return false;
+        }
+        final parsed = parseVerifier(storedHash);
+        final candidateKey = await _deriveKey(pin, salt, parsed.iterations);
+        final digest = SHA256Digest().process(candidateKey);
+        final expectedVerifier = parsed.version == 3
+            ? 'v3:${parsed.iterations}:${base64Encode(digest)}'
+            : 'v2:${base64Encode(digest)}';
+        return _constantTimeEquals(storedHash, expectedVerifier);
+      }
+
+      final storedSalt = await _platformService.secureRead(_storageKeySalt);
+      if (storedSalt == null || storedSalt.isEmpty) {
+        return false;
+      }
+      final storedHash = await _platformService.secureRead(_storageKeyPinHash);
+      if (storedHash == null || storedHash.isEmpty) {
+        return false;
+      }
+
+      final parsed = parseVerifier(storedHash);
+      final candidateKey = await _deriveKey(pin, storedSalt, parsed.iterations);
+      final digest = SHA256Digest().process(candidateKey);
+      final expectedVerifier = parsed.version == 3
+          ? 'v3:${parsed.iterations}:${base64Encode(digest)}'
+          : 'v2:${base64Encode(digest)}';
+      return _constantTimeEquals(storedHash, expectedVerifier);
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> initialize(String pin) {
     final epoch = _lockEpoch;
     return _synchronized(() => _initializeInternal(pin, epoch));

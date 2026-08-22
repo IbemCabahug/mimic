@@ -22,6 +22,7 @@ import 'package:mimic/core/services/platform_service.dart';
 class FakePlatformService implements PlatformService {
   final Map<String, String> store = {};
   final Map<String, Uint8List> fileStore = {};
+  int writeCount = 0;
 
   @override
   bool isWeb() => false;
@@ -34,6 +35,7 @@ class FakePlatformService implements PlatformService {
 
   @override
   Future<void> secureWrite(String key, String value) async {
+    writeCount++;
     store[key] = value;
   }
 
@@ -867,6 +869,103 @@ void main() {
       expect(actualSlice.length, equals(rangeLength));
       expect(actualSlice, equals(expectedSlice),
           reason: 'decryptRangeSystem on c2 must correctly decrypt off-boundary byte ranges');
+    });
+
+    group('verifyPin — read-only PIN verification against stored verifier', () {
+      test('2a: correct PIN returns true', () async {
+        final platform = FakePlatformService();
+        final keystore = FakeKeystoreService();
+        final crypto = VaultCrypto(platform, keystore);
+        const pin = '1234';
+        await crypto.initialize(pin);
+        crypto.lock();
+
+        // Derivation: The vault was initialized with PIN '1234'. Stored salt and v3 verifier match '1234'.
+        // verifyPin('1234') recomputes PBKDF2(pin, salt, iterations) and compares with stored verifier; expected true.
+        final result = await crypto.verifyPin(pin);
+        expect(result, isTrue, reason: 'Correct PIN must verify to true');
+      });
+
+      test('2b: wrong PIN returns false', () async {
+        final platform = FakePlatformService();
+        final keystore = FakeKeystoreService();
+        final crypto = VaultCrypto(platform, keystore);
+        const correctPin = '1234';
+        const wrongPin = '5678';
+        await crypto.initialize(correctPin);
+        crypto.lock();
+
+        // Derivation: The stored verifier matches '1234'. Deriving with '5678' produces a different KEK and digest,
+        // constant-time comparison fails; expected false.
+        final result = await crypto.verifyPin(wrongPin);
+        expect(result, isFalse, reason: 'Wrong PIN must verify to false');
+      });
+
+      test('2c: missing vault_salt returns false and does not throw', () async {
+        final platform = FakePlatformService();
+        final keystore = FakeKeystoreService();
+        final crypto = VaultCrypto(platform, keystore);
+        platform.store['vault_pin_hash'] = 'v3:100000:dummyDigest';
+
+        // Derivation: 'vault_salt' is absent from storage. verifyPin cannot compute KDF without salt; expected false without throwing.
+        final result = await crypto.verifyPin('1234');
+        expect(result, isFalse, reason: 'Missing vault_salt must return false without throwing');
+      });
+
+      test('2d: missing vault_pin_hash returns false and does not throw', () async {
+        final platform = FakePlatformService();
+        final keystore = FakeKeystoreService();
+        final crypto = VaultCrypto(platform, keystore);
+        platform.store['vault_salt'] = generateTestSalt();
+
+        // Derivation: 'vault_pin_hash' is absent from storage. verifyPin has nothing to compare against; expected false without throwing.
+        final result = await crypto.verifyPin('1234');
+        expect(result, isFalse, reason: 'Missing vault_pin_hash must return false without throwing');
+      });
+
+      test('2e: verifyPin does not unlock vault and records ZERO storage writes', () async {
+        final platform = FakePlatformService();
+        final keystore = FakeKeystoreService();
+        final crypto = VaultCrypto(platform, keystore);
+        const pin = '1234';
+        await crypto.initialize(pin);
+        crypto.lock();
+
+        expect(crypto.isUnlocked, isFalse);
+        final writesBefore = platform.writeCount;
+        final storeBefore = Map<String, String>.from(platform.store);
+
+        // Derivation: verifyPin is strictly read-only. crypto.isUnlocked must remain false,
+        // platform.writeCount must remain unchanged (0 writes delta), and store contents must remain identical.
+        final verified = await crypto.verifyPin(pin);
+        expect(verified, isTrue);
+        expect(crypto.isUnlocked, isFalse, reason: 'verifyPin must never set isUnlocked');
+        expect(platform.writeCount - writesBefore, equals(0), reason: 'FakePlatformService recorded zero writes during verifyPin');
+        expect(platform.store, equals(storeBefore), reason: 'Storage entries must be completely unmodified by verifyPin');
+      });
+
+      test('2f: verifier stored with non-default iteration count verifies correctly', () async {
+        final platform = FakePlatformService();
+        final keystore = FakeKeystoreService();
+        final crypto = VaultCrypto(platform, keystore);
+        const pin = '1234';
+        const customIterations = 150000;
+        final saltBase64 = generateTestSalt();
+        final derivedKey = deriveVaultPinKek(pin, saltBase64, customIterations);
+        final customVerifier = formatVerifier(derivedKey, customIterations);
+
+        platform.store['vault_salt'] = saltBase64;
+        platform.store['vault_pin_hash'] = customVerifier;
+
+        // Derivation: Stored verifier declares 150,000 iterations (v3:150000:<digest>).
+        // verifyPin must parse parsed.iterations (150,000) instead of compile-time default (100,000),
+        // successfully matching the digest; expected true for '1234' and false for '9999'.
+        final matchCorrect = await crypto.verifyPin(pin);
+        expect(matchCorrect, isTrue, reason: 'verifyPin must honor iterations parsed from stored verifier');
+
+        final matchWrong = await crypto.verifyPin('9999');
+        expect(matchWrong, isFalse, reason: 'Wrong PIN with custom iterations must return false');
+      });
     });
   });
 }
