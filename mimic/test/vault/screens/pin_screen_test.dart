@@ -17,10 +17,27 @@ import 'package:mimic/vault/security/auto_lock.dart';
 class FakePlatformService implements PlatformService {
   final Map<String, String> store = {};
   bool intruderStorageUntouched = true;
+  int secureReadAllCount = 0;
+  int secureReadCount = 0;
+  bool forceEmptyReadAll = false;
+
   @override
   bool isWeb() => false;
+
   @override
-  Future<String?> secureRead(String key) async => store[key];
+  Future<String?> secureRead(String key) async {
+    secureReadCount++;
+    return store[key];
+  }
+
+  @override
+  Future<Map<String, String>> secureReadAll() async {
+    secureReadAllCount++;
+    if (forceEmptyReadAll) {
+      return {};
+    }
+    return Map.from(store);
+  }
   @override
   Future<void> secureWrite(String key, String value) async {
     if (key.startsWith('intruder') || key.startsWith('break_in')) {
@@ -531,5 +548,58 @@ void main() {
       expect(fakePlatform.store['master_key_wrapped']?.startsWith('hw1:'), isTrue);
       AutoLock().dispose();
     });
+  });
+
+  testWidgets('PinScreen uses exactly ONE secureReadAll call and zero secureRead calls on startup when map is non-empty', (WidgetTester tester) async {
+    final fakePlatform = FakePlatformService();
+    fakePlatform.store['vault_salt'] = 'some_salt';
+    fakePlatform.store['vault_setup_completed'] = 'true';
+    fakePlatform.store['vault_pin_hash'] = 'some_hash';
+    fakePlatform.store['wrong_attempts'] = '1';
+
+    final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          vaultCryptoProvider.overrideWith((ref) => crypto),
+        ],
+        child: const MaterialApp(
+          home: PinScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(fakePlatform.secureReadAllCount, equals(1));
+    expect(fakePlatform.secureReadCount, equals(0));
+    expect(find.text('Enter PIN'), findsWidgets);
+  });
+
+  testWidgets('PinScreen falls back to secureRead("vault_salt") when secureReadAll returns empty map (lockout guard)', (WidgetTester tester) async {
+    final fakePlatform = FakePlatformService();
+    fakePlatform.store['vault_salt'] = 'some_salt';
+    fakePlatform.forceEmptyReadAll = true;
+
+    final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          vaultCryptoProvider.overrideWith((ref) => crypto),
+        ],
+        child: const MaterialApp(
+          home: PinScreen(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(fakePlatform.secureReadAllCount, equals(1));
+    expect(fakePlatform.secureReadCount, greaterThanOrEqualTo(1));
+    expect(find.text('Enter PIN'), findsWidgets);
+    expect(find.text('Create PIN'), findsNothing);
   });
 }

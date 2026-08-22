@@ -20,6 +20,9 @@ class FakePlatformService implements PlatformService {
   Future<String?> secureRead(String key) async => store[key];
 
   @override
+  Future<Map<String, String>> secureReadAll() async => Map.from(store);
+
+  @override
   Future<void> secureWrite(String key, String value) async {
     store[key] = value;
   }

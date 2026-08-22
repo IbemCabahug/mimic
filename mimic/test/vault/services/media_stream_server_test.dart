@@ -27,6 +27,8 @@ class FakePlatformService implements PlatformService {
   @override
   Future<String?> secureRead(String key) async => _secureStorage[key];
   @override
+  Future<Map<String, String>> secureReadAll() async => Map.from(_secureStorage);
+  @override
   Future<void> secureDelete(String key) async => _secureStorage.remove(key);
   @override
   Future<void> saveEncryptedFile(String path, Uint8List data) async =>

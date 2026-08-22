@@ -203,6 +203,8 @@ class PlatformServicePlaceholder implements PlatformService {
   @override
   Future<String?> secureRead(String key) async => null;
   @override
+  Future<Map<String, String>> secureReadAll() async => {};
+  @override
   Future<void> secureWrite(String key, String value) async {}
   @override
   Future<void> secureDelete(String key) async {}

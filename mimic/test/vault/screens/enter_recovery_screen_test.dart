@@ -1,6 +1,4 @@
-import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'dart:io';
-// test/vault/screens/enter_recovery_screen_test.dart
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/vault/screens/enter_recovery_screen.dart';
 import 'package:mimic/vault/screens/reset_pin_screen.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
+import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'package:mimic/vault/crypto/bip39_wordlist.dart';
 import 'package:mimic/core/services/platform_service.dart';
 
@@ -17,6 +16,8 @@ class FakePlatformService implements PlatformService {
   bool isWeb() => false;
   @override
   Future<String?> secureRead(String key) async => store[key];
+  @override
+  Future<Map<String, String>> secureReadAll() async => Map.from(store);
   @override
   Future<void> secureWrite(String key, String value) async {
     store[key] = value;
@@ -120,4 +121,3 @@ void main() {
     expect(find.text('Create New PIN'), findsOneWidget);
   });
 }
-

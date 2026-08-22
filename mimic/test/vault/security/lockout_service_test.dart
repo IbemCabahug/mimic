@@ -12,6 +12,9 @@ class FakePlatformService implements PlatformService {
   Future<String?> secureRead(String key) async => _storage[key];
 
   @override
+  Future<Map<String, String>> secureReadAll() async => Map.from(_storage);
+
+  @override
   Future<void> secureWrite(String key, String value) async {
     if (key.startsWith('intruder') || key.startsWith('break_in')) {
       intruderStorageUntouched = false;

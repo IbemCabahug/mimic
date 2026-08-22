@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 
 abstract class PlatformService {
   Future<String?> secureRead(String key);
+  Future<Map<String, String>> secureReadAll();
   Future<void> secureWrite(String key, String value);
   Future<void> secureDelete(String key);
   Future<void> saveEncryptedFile(String path, Uint8List data);
@@ -42,6 +43,11 @@ class AndroidPlatformService implements PlatformService {
   @override
   Future<String?> secureRead(String key) async {
     return await _secureStorage.read(key: key);
+  }
+
+  @override
+  Future<Map<String, String>> secureReadAll() async {
+    return await _secureStorage.readAll();
   }
 
   @override
@@ -102,6 +108,20 @@ class WebPlatformService implements PlatformService {
   Future<String?> secureRead(String key) async {
     await _ensureInitialized();
     return _prefs!.getString(key);
+  }
+
+  @override
+  Future<Map<String, String>> secureReadAll() async {
+    await _ensureInitialized();
+    final keys = _prefs!.getKeys();
+    final map = <String, String>{};
+    for (final key in keys) {
+      final val = _prefs!.getString(key);
+      if (val != null) {
+        map[key] = val;
+      }
+    }
+    return map;
   }
 
   @override

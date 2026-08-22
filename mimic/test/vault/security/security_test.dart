@@ -48,6 +48,9 @@ class FakePlatformService implements PlatformService {
   Future<String?> secureRead(String key) async => store[key];
 
   @override
+  Future<Map<String, String>> secureReadAll() async => Map.from(store);
+
+  @override
   Future<void> secureWrite(String key, String value) async {
     store[key] = value;
   }
@@ -1631,6 +1634,7 @@ class _NoOpPlatformService implements PlatformService {
   const _NoOpPlatformService();
   @override bool isWeb() => false;
   @override Future<String?> secureRead(String key) async => null;
+  @override Future<Map<String, String>> secureReadAll() async => {};
   @override Future<void> secureWrite(String key, String value) async {}
   @override Future<void> secureDelete(String key) async {}
   @override Future<void> saveEncryptedFile(String path, Uint8List data) async {}

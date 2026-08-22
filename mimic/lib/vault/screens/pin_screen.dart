@@ -11,7 +11,6 @@ import '../services/intruder_service.dart';
 import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
 import '../security/duress_service.dart';
-import '../security/pin_wipe_service.dart';
 import '../security/vault_conceal_service.dart';
 import '../security/lockout_service.dart';
 import '../crypto/keystore_service.dart';
@@ -47,10 +46,84 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     super.initState();
     _crypto = ref.read(vaultCryptoProvider);
     _concealService = ref.read(vaultConcealServiceProvider);
-    _checkCreateMode();
-    _checkIfWiped();
-    _loadWrongAttempts();
-    _checkLockout();
+    _loadStartupState();
+  }
+
+  Future<void> _loadStartupState() async {
+    final platform = ref.read(platformServiceProvider);
+    Map<String, String> data;
+
+    try {
+      data = await platform.secureReadAll();
+    } catch (_) {
+      // Fallback on ANY error: a security screen must never silently skip the
+      // wiped or lockout checks if bulk read fails. Fall back to targeted
+      // individual secureRead calls so the downstream logic still executes.
+      final salt = await platform.secureRead('vault_salt');
+      final setup = await platform.secureRead('vault_setup_completed');
+      final hash = await platform.secureRead('vault_pin_hash');
+      final wrong = await platform.secureRead('wrong_attempts');
+      final wall = await platform.secureRead('lockout_set_wall');
+      final elapsed = await platform.secureRead('lockout_set_elapsed');
+      final duration = await platform.secureRead('lockout_duration_ms');
+
+      data = {
+        if (salt != null) 'vault_salt': salt,
+        if (setup != null) 'vault_setup_completed': setup,
+        if (hash != null) 'vault_pin_hash': hash,
+        if (wrong != null) 'wrong_attempts': wrong,
+        if (wall != null) 'lockout_set_wall': wall,
+        if (elapsed != null) 'lockout_set_elapsed': elapsed,
+        if (duration != null) 'lockout_duration_ms': duration,
+      };
+    }
+
+    final salt = data['vault_salt'];
+    final setup = data['vault_setup_completed'];
+    final hash = data['vault_pin_hash'];
+    final wrong = data['wrong_attempts'];
+    final wall = data['lockout_set_wall'];
+    final elapsed = data['lockout_set_elapsed'];
+    final duration = data['lockout_duration_ms'];
+
+    if (!mounted) return;
+
+    if (!kIsWeb) {
+      if (setup == 'true' && hash == null) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const WipedVaultScreen()),
+        );
+        return;
+      }
+    }
+
+    String? effectiveSalt = salt;
+    if (data.isEmpty) {
+      // An empty map can mean a genuinely fresh install, or a transient storage
+      // misconfiguration. Guessing "no vault" on an existing vault is a lockout
+      // risk, so fall back to a direct targeted read of vault_salt.
+      effectiveSalt = await platform.secureRead('vault_salt');
+    }
+    final isCreateMode = (effectiveSalt == null || effectiveSalt.isEmpty);
+
+    int wrongAttempts = 0;
+    if (!kIsWeb) {
+      wrongAttempts = int.tryParse(wrong ?? '') ?? 0;
+    }
+
+    final hasLockoutKeys = wall != null && elapsed != null && duration != null;
+
+    if (mounted) {
+      setState(() {
+        _isCreateMode = isCreateMode;
+        _wrongAttempts = wrongAttempts;
+      });
+    }
+
+    if (hasLockoutKeys) {
+      await _checkLockout();
+    }
   }
 
   Future<void> _checkLockout() async {
@@ -93,37 +166,6 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     final minutes = duration.inMinutes;
     final seconds = duration.inSeconds % 60;
     return '$minutes:${seconds.toString().padLeft(2, '0')}';
-  }
-
-  Future<void> _checkCreateMode() async {
-    final salt = await ref.read(platformServiceProvider).secureRead('vault_salt');
-    if (mounted) {
-      setState(() {
-        _isCreateMode = (salt == null || salt.isEmpty);
-      });
-    }
-  }
-
-  Future<void> _checkIfWiped() async {
-    if (kIsWeb) return;
-    final wiped = await ref.read(pinWipeServiceProvider).isPinWiped();
-    if (wiped && mounted) {
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const WipedVaultScreen()),
-      );
-    }
-  }
-
-  Future<void> _loadWrongAttempts() async {
-    if (kIsWeb) return;
-    try {
-      final stored = await ref.read(platformServiceProvider).secureRead('wrong_attempts');
-      final count = int.tryParse(stored ?? '') ?? 0;
-      if (mounted) {
-        setState(() => _wrongAttempts = count);
-      }
-    } catch (_) {}
   }
 
   Future<void> _authenticateWithSecret(String secret) async {
