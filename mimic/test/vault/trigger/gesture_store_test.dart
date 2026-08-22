@@ -251,5 +251,20 @@ void main() {
         expect(await fakeStorage.read(key: 'vault_gesture_salt'), isNull);
       },
     );
+
+    test(
+      'K1: verifyGesture returns false early when length key is deleted from storage',
+      () async {
+        const gesture = [1, 0, 1];
+        // Store a gesture (Derivation 9)
+        await store.setGesture(gesture);
+
+        // Delete ONLY the length key from fake storage
+        await fakeStorage.delete(key: 'vault_gesture_length');
+
+        // verifyGesture([1, 0, 1]) -> false (early null return before PBKDF2 derivation)
+        expect(await store.verifyGesture([1, 0, 1]), isFalse);
+      },
+    );
   });
 }

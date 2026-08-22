@@ -117,9 +117,12 @@ class GestureStore {
   ///
   /// Returns false if no gesture is currently stored or if verification fails.
   Future<bool> verifyGesture(List<int> gesture) async {
-    final storedVerifier = await _storage.read(key: _verifierKey);
-    final storedSalt = await _storage.read(key: _saltKey);
-    final storedLength = await _storage.read(key: _lengthKey);
+    // Reads are concurrent because each crosses a platform channel and they do not depend on each other.
+    final [storedVerifier, storedSalt, storedLength] = await Future.wait([
+      _storage.read(key: _verifierKey),
+      _storage.read(key: _saltKey),
+      _storage.read(key: _lengthKey),
+    ]);
 
     // The length is checked so verifyGesture and hasGesture agree on incomplete state.
     if (storedVerifier == null || storedSalt == null || storedLength == null) {
