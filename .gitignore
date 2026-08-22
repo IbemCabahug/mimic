@@ -8,3 +8,7 @@ docs/PROJECT_STATUS.md
 
 # Moved to docs repository (mimic-docs/notes.md)
 notes.md
+
+# IDE and editor settings, not part of the build
+.idea/
+.kilo/
