@@ -33,16 +33,26 @@ class VaultEntrance {
 
   /// Verifies whether the given tap sequence should open the vault.
   ///
-  /// 1. If [_vaultExistsCached] is true, skips [readVaultSalt] and verifies
-  ///    directly via [_store.verifyGesture].
-  /// 2. Otherwise reads the vault salt via [readVaultSalt].
-  /// 3. If the salt is null or empty, no vault exists: returns true iff [taps]
-  ///    matches [setupPassage] element by element without key derivation.
-  /// 4. Otherwise a vault exists: caches the positive result and returns the
-  ///    result of verifying against the stored gesture in [GestureStore].
-  ///    Never falls back to [setupPassage] or any constant.
+  /// 1. If [_vaultExistsCached] is true, delegates directly to
+  ///    [_store.verifyGesture].
+  /// 2. Otherwise asks [_store.hasGesture] whether a gesture record exists.
+  ///    If it does, a vault necessarily exists (a gesture can only be set
+  ///    during or after vault creation), so caches [_vaultExistsCached] = true
+  ///    and delegates to [_store.verifyGesture].
+  /// 3. Only if there is no gesture record, reads vault salt via
+  ///    [_readVaultSalt]:
+  ///    - If the salt is null or empty, no vault exists: returns true iff [taps]
+  ///      matches [setupPassage] element by element without key derivation,
+  ///      caching nothing.
+  ///    - Otherwise a vault exists but no gesture is stored: returns false
+  ///      without caching. The passage remains dead.
   Future<bool> verify(List<int> taps) async {
     if (_vaultExistsCached) {
+      return _store.verifyGesture(taps);
+    }
+
+    if (await _store.hasGesture()) {
+      _vaultExistsCached = true;
       return _store.verifyGesture(taps);
     }
 
@@ -59,7 +69,6 @@ class VaultEntrance {
       return true;
     }
 
-    _vaultExistsCached = true;
-    return _store.verifyGesture(taps);
+    return false;
   }
 }

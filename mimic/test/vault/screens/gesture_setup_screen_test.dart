@@ -289,15 +289,13 @@ void main() {
       // hasGesture() is true
       expect(await store.hasGesture(), isTrue);
 
-      // All three storage keys are present
-      final verifier = await fakeStorage.read(key: 'vault_gesture_verifier');
-      final salt = await fakeStorage.read(key: 'vault_gesture_salt');
-      final length = await fakeStorage.read(key: 'vault_gesture_length');
-
-      expect(verifier, isNotNull);
-      expect(verifier!.startsWith('v3:100000:'), isTrue);
-      expect(salt, isNotNull);
-      expect(length, equals('3'));
+      // Combined gesture record is present
+      final record = await fakeStorage.read(key: 'vault_gesture_record');
+      expect(record, isNotNull);
+      final parts = record!.split('|');
+      expect(parts.length, equals(3));
+      expect(parts[0].startsWith('v3:100000:'), isTrue);
+      expect(parts[2], equals('3'));
 
       // verifyGesture([1, 0, 2]) returns true (Derivation 2)
       expect(await store.verifyGesture([1, 0, 2]), isTrue);

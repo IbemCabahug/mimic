@@ -1,7 +1,9 @@
-// test/vault/trigger/gesture_store_test.dart
+import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mimic/vault/crypto/vault_kdf.dart';
 import 'package:mimic/vault/trigger/gesture_store.dart';
 
 class FakeFlutterSecureStorage extends Fake implements FlutterSecureStorage {
@@ -144,16 +146,15 @@ void main() {
         expect(await store.verifyGesture([1, 0]), isFalse);
 
         // 5. Assert raw gesture is not stored in plainly recoverable form
-        final storedVerifier = await fakeStorage.read(
-          key: 'vault_gesture_verifier',
-        );
-        final storedSalt = await fakeStorage.read(key: 'vault_gesture_salt');
-
-        expect(storedVerifier, isNotNull);
-        expect(storedSalt, isNotNull);
+        final record = await fakeStorage.read(key: 'vault_gesture_record');
+        expect(record, isNotNull);
+        final parts = record!.split('|');
+        expect(parts.length, equals(3));
+        final storedVerifier = parts[0];
+        final storedSalt = parts[1];
 
         // Must start with v3:
-        expect(storedVerifier!.startsWith('v3:100000:'), isTrue);
+        expect(storedVerifier.startsWith('v3:100000:'), isTrue);
 
         // Stored verifier must not contain concatenated digits, join with separator, or toString()
         expect(storedVerifier.contains(gesture.join(',')), isFalse);
@@ -161,14 +162,21 @@ void main() {
         expect(storedVerifier == gesture.toString(), isFalse);
 
         // Salt must not contain the gesture
-        expect(storedSalt!.contains(gesture.join(',')), isFalse);
+        expect(storedSalt.contains(gesture.join(',')), isFalse);
         expect(storedSalt.contains(gesture.join('')), isFalse);
+
+        // All three legacy keys are null after setGesture
+        expect(await fakeStorage.read(key: 'vault_gesture_verifier'), isNull);
+        expect(await fakeStorage.read(key: 'vault_gesture_salt'), isNull);
+        expect(await fakeStorage.read(key: 'vault_gesture_length'), isNull);
 
         // 6. clearGesture removes stored keys
         await store.clearGesture();
         expect(await store.hasGesture(), isFalse);
+        expect(await fakeStorage.read(key: 'vault_gesture_record'), isNull);
         expect(await fakeStorage.read(key: 'vault_gesture_verifier'), isNull);
         expect(await fakeStorage.read(key: 'vault_gesture_salt'), isNull);
+        expect(await fakeStorage.read(key: 'vault_gesture_length'), isNull);
         expect(await store.verifyGesture([1, 0, 2]), isFalse);
       },
     );
@@ -180,20 +188,24 @@ void main() {
 
         // First set (Derivation 5)
         await store.setGesture(gesture);
-        final verifier1 = await fakeStorage.read(key: 'vault_gesture_verifier');
-        final salt1 = await fakeStorage.read(key: 'vault_gesture_salt');
+        final record1 = await fakeStorage.read(key: 'vault_gesture_record');
+        expect(record1, isNotNull);
+        final parts1 = record1!.split('|');
+        expect(parts1.length, equals(3));
+        final verifier1 = parts1[0];
+        final salt1 = parts1[1];
 
         // Second set of identical gesture (Derivation 6)
         await store.setGesture(gesture);
-        final verifier2 = await fakeStorage.read(key: 'vault_gesture_verifier');
-        final salt2 = await fakeStorage.read(key: 'vault_gesture_salt');
+        final record2 = await fakeStorage.read(key: 'vault_gesture_record');
+        expect(record2, isNotNull);
+        final parts2 = record2!.split('|');
+        expect(parts2.length, equals(3));
+        final verifier2 = parts2[0];
+        final salt2 = parts2[1];
 
         // Salts and verifiers must be distinct
-        expect(salt1, isNotNull);
-        expect(salt2, isNotNull);
         expect(salt1 != salt2, isTrue);
-        expect(verifier1, isNotNull);
-        expect(verifier2, isNotNull);
         expect(verifier1 != verifier2, isTrue);
 
         // Must still verify correctly (Derivation 7)
@@ -202,7 +214,7 @@ void main() {
     );
 
     test(
-      'gestureLength() tracks stored gesture length and hasGesture() requires all three keys (verifier, salt, length)',
+      'gestureLength() tracks stored gesture length and hasGesture() requires a valid stored record',
       () async {
         // Initial state before any gesture is stored
         expect(await store.gestureLength(), isNull);
@@ -215,37 +227,40 @@ void main() {
         expect(await store.gestureLength(), equals(3));
         expect(await store.hasGesture(), isTrue);
 
-        final savedVerifier = await fakeStorage.read(
-          key: 'vault_gesture_verifier',
+        final savedRecord = await fakeStorage.read(
+          key: 'vault_gesture_record',
         );
-        final savedSalt = await fakeStorage.read(key: 'vault_gesture_salt');
-        expect(
-          await fakeStorage.read(key: 'vault_gesture_length'),
-          equals('3'),
-        );
+        expect(savedRecord, isNotNull);
+        final parts = savedRecord!.split('|');
+        expect(parts.length, equals(3));
+        expect(parts[2], equals('3'));
 
-        // Incomplete state 1: verifier and salt present, but length key deleted directly from fake
-        await fakeStorage.delete(key: 'vault_gesture_length');
+        // Incomplete/malformed state 1: record deleted directly from fake
+        await fakeStorage.delete(key: 'vault_gesture_record');
         expect(await store.hasGesture(), isFalse);
         expect(await store.gestureLength(), isNull);
 
-        // Incomplete state 2: length and salt present, but verifier deleted directly from fake
-        await fakeStorage.write(key: 'vault_gesture_length', value: '3');
-        await fakeStorage.delete(key: 'vault_gesture_verifier');
-        expect(await store.hasGesture(), isFalse);
-
-        // Restore verifier to full valid state
+        // Incomplete/malformed state 2: record has invalid length part
         await fakeStorage.write(
-          key: 'vault_gesture_verifier',
-          value: savedVerifier,
+          key: 'vault_gesture_record',
+          value: '${parts[0]}|${parts[1]}|not_a_number',
+        );
+        expect(await store.hasGesture(), isFalse);
+        expect(await store.gestureLength(), isNull);
+
+        // Restore record to full valid state
+        await fakeStorage.write(
+          key: 'vault_gesture_record',
+          value: savedRecord,
         );
         expect(await store.hasGesture(), isTrue);
         expect(await store.gestureLength(), equals(3));
 
-        // clearGesture removes all three keys and gestureLength returns null
+        // clearGesture removes record and gestureLength returns null
         await store.clearGesture();
         expect(await store.hasGesture(), isFalse);
         expect(await store.gestureLength(), isNull);
+        expect(await fakeStorage.read(key: 'vault_gesture_record'), isNull);
         expect(await fakeStorage.read(key: 'vault_gesture_length'), isNull);
         expect(await fakeStorage.read(key: 'vault_gesture_verifier'), isNull);
         expect(await fakeStorage.read(key: 'vault_gesture_salt'), isNull);
@@ -259,10 +274,80 @@ void main() {
         // Store a gesture (Derivation 9)
         await store.setGesture(gesture);
 
-        // Delete ONLY the length key from fake storage
-        await fakeStorage.delete(key: 'vault_gesture_length');
+        // Replace the record with a malformed value (single-part string with no '|')
+        await fakeStorage.write(
+          key: 'vault_gesture_record',
+          value: 'malformed_record_without_separator',
+        );
 
         // verifyGesture([1, 0, 1]) -> false (early null return before PBKDF2 derivation)
+        expect(await store.verifyGesture([1, 0, 1]), isFalse);
+      },
+    );
+
+    test(
+      'M1: setGesture writes vault_gesture_record and deletes all three legacy keys, then verifyGesture verifies',
+      () async {
+        const gesture = [1, 0, 2];
+        // Derivation 10 (setGesture) + Derivation 11 (verifyGesture)
+        await store.setGesture(gesture);
+
+        expect(await store.verifyGesture(gesture), isTrue);
+
+        final record = await fakeStorage.read(key: 'vault_gesture_record');
+        expect(record, isNotNull);
+        expect(record!.split('|').length, equals(3));
+        expect(await fakeStorage.read(key: 'vault_gesture_verifier'), isNull);
+        expect(await fakeStorage.read(key: 'vault_gesture_salt'), isNull);
+        expect(await fakeStorage.read(key: 'vault_gesture_length'), isNull);
+      },
+    );
+
+    test(
+      'M2: legacy 3-key storage migrates on verifyGesture to combined record and deletes legacy keys',
+      () async {
+        const gesture = [1, 0, 2];
+        final passwordBytes = Uint8List.fromList(utf8.encode(gesture.join(',')));
+        final saltBytes = Uint8List.fromList(List<int>.generate(16, (i) => i));
+        final saltBase64 = base64Encode(saltBytes);
+
+        // Derivation 12 (helper deriving legacy verifier)
+        final derivedKey = await derivePbkdf2Async(
+          passwordBytes,
+          saltBytes,
+          kPbkdf2Iterations,
+          kDerivedKeyLength,
+        );
+        final verifier = formatVerifier(derivedKey, kPbkdf2Iterations);
+
+        // Write directly to fake storage in legacy 3-key format
+        await fakeStorage.write(key: 'vault_gesture_verifier', value: verifier);
+        await fakeStorage.write(key: 'vault_gesture_salt', value: saltBase64);
+        await fakeStorage.write(key: 'vault_gesture_length', value: '3');
+        expect(await fakeStorage.read(key: 'vault_gesture_record'), isNull);
+
+        // Derivation 13 (verifyGesture during migration)
+        expect(await store.verifyGesture(gesture), isTrue);
+
+        // Combined record now exists and legacy keys are deleted
+        final record = await fakeStorage.read(key: 'vault_gesture_record');
+        expect(record, equals('$verifier|$saltBase64|3'));
+        expect(await fakeStorage.read(key: 'vault_gesture_verifier'), isNull);
+        expect(await fakeStorage.read(key: 'vault_gesture_salt'), isNull);
+        expect(await fakeStorage.read(key: 'vault_gesture_length'), isNull);
+      },
+    );
+
+    test(
+      'M3: malformed record (only two parts) returns false for verifyGesture and hasGesture with zero derivations',
+      () async {
+        await fakeStorage.write(
+          key: 'vault_gesture_record',
+          value: 'v3:100000:abc|c2FsdDEyMw==',
+        );
+
+        // 0 derivations
+        expect(await store.hasGesture(), isFalse);
         expect(await store.verifyGesture([1, 0, 1]), isFalse);
       },
     );

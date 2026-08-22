@@ -42,6 +42,10 @@ class GestureStore {
 
   final FlutterSecureStorage _storage;
 
+  // Stored as a single record (<verifier>|<salt>|<length>) because each read
+  // crosses a serialised platform channel at ~477ms on device; reducing the
+  // read count is what saves time, not parallelism.
+  static const String _recordKey = 'vault_gesture_record';
   static const String _verifierKey = 'vault_gesture_verifier';
   static const String _saltKey = 'vault_gesture_salt';
   static const String _lengthKey = 'vault_gesture_length';
@@ -79,6 +83,47 @@ class GestureStore {
     return base64Encode(bytes);
   }
 
+  /// Reads and parses the gesture record.
+  ///
+  /// Fast path: reads [_recordKey] in a single secure-storage read.
+  /// Migration fallback: reads the three legacy keys, writes the combined
+  /// record, deletes legacy keys, and returns the parsed value.
+  /// Returns null if missing or malformed.
+  Future<({String verifier, String salt, int length})?> _readRecord() async {
+    final record = await _storage.read(key: _recordKey);
+    if (record != null) {
+      final parts = record.split('|');
+      if (parts.length == 3) {
+        final length = int.tryParse(parts[2]);
+        if (length != null) {
+          return (verifier: parts[0], salt: parts[1], length: length);
+        }
+      }
+      return null;
+    }
+
+    // One-time migration fallback from legacy 3-key storage.
+    final legacyVerifier = await _storage.read(key: _verifierKey);
+    final legacySalt = await _storage.read(key: _saltKey);
+    final legacyLengthStr = await _storage.read(key: _lengthKey);
+
+    if (legacyVerifier != null &&
+        legacySalt != null &&
+        legacyLengthStr != null) {
+      final length = int.tryParse(legacyLengthStr);
+      if (length != null) {
+        final combined = '$legacyVerifier|$legacySalt|$legacyLengthStr';
+        await _storage.write(key: _recordKey, value: combined);
+        await _storage.delete(key: _verifierKey);
+        await _storage.delete(key: _saltKey);
+        await _storage.delete(key: _lengthKey);
+        return (verifier: legacyVerifier, salt: legacySalt, length: length);
+      }
+    }
+
+    return null;
+  }
+
   /// Sets a new unlock gesture, deriving a salted v3 verifier and persisting it.
   ///
   /// Throws [ArgumentError] if the gesture fails validation.
@@ -101,37 +146,26 @@ class GestureStore {
     );
 
     final verifier = formatVerifier(derivedKey, kPbkdf2Iterations);
+    final combined = '$verifier|$saltBase64|${gesture.length}';
 
-    await _storage.write(key: _verifierKey, value: verifier);
-    await _storage.write(key: _saltKey, value: saltBase64);
-    // Storing the gesture length in plaintext is safe: an attacker who can read
-    // secure storage can already brute-force the tiny gesture space in seconds,
-    // so knowing the length reveals nothing new. Storing it keeps the detector to
-    // one verification per tap. With a fixed 3-tap gesture the length is now
-    // effectively constant; the key is retained so a future variable-length
-    // gesture needs no storage migration.
-    await _storage.write(key: _lengthKey, value: gesture.length.toString());
+    await _storage.write(key: _recordKey, value: combined);
+    await _storage.delete(key: _verifierKey);
+    await _storage.delete(key: _saltKey);
+    await _storage.delete(key: _lengthKey);
   }
 
   /// Verifies a candidate gesture against the stored verifier using constant-time comparison.
   ///
   /// Returns false if no gesture is currently stored or if verification fails.
   Future<bool> verifyGesture(List<int> gesture) async {
-    // Reads are concurrent because each crosses a platform channel and they do not depend on each other.
-    final [storedVerifier, storedSalt, storedLength] = await Future.wait([
-      _storage.read(key: _verifierKey),
-      _storage.read(key: _saltKey),
-      _storage.read(key: _lengthKey),
-    ]);
-
-    // The length is checked so verifyGesture and hasGesture agree on incomplete state.
-    if (storedVerifier == null || storedSalt == null || storedLength == null) {
+    final record = await _readRecord();
+    if (record == null) {
       return false;
     }
 
     final canonical = gesture.join(',');
     final passwordBytes = Uint8List.fromList(utf8.encode(canonical));
-    final saltBytes = base64Decode(storedSalt);
+    final saltBytes = base64Decode(record.salt);
 
     final derivedKey = await derivePbkdf2Async(
       passwordBytes,
@@ -141,30 +175,24 @@ class GestureStore {
     );
 
     final expectedVerifier = formatVerifier(derivedKey, kPbkdf2Iterations);
-    return constantTimeEquals(storedVerifier, expectedVerifier);
+    return constantTimeEquals(record.verifier, expectedVerifier);
   }
 
   /// Returns the stored gesture length, or null if unconfigured or unparseable.
   Future<int?> gestureLength() async {
-    try {
-      final raw = await _storage.read(key: _lengthKey);
-      if (raw == null) return null;
-      return int.tryParse(raw);
-    } catch (_) {
-      return null;
-    }
+    final record = await _readRecord();
+    return record?.length;
   }
 
-  /// Returns true if all three gesture records (verifier, salt, and length) are stored.
+  /// Returns true if a valid gesture record is stored.
   Future<bool> hasGesture() async {
-    final verifier = await _storage.read(key: _verifierKey);
-    final salt = await _storage.read(key: _saltKey);
-    final length = await _storage.read(key: _lengthKey);
-    return verifier != null && salt != null && length != null;
+    final record = await _readRecord();
+    return record != null;
   }
 
-  /// Removes the stored gesture verifier, salt, and length.
+  /// Removes the stored gesture record and any legacy keys.
   Future<void> clearGesture() async {
+    await _storage.delete(key: _recordKey);
     await _storage.delete(key: _verifierKey);
     await _storage.delete(key: _saltKey);
     await _storage.delete(key: _lengthKey);

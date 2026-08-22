@@ -7,6 +7,8 @@ import 'package:mimic/vault/trigger/vault_entrance.dart';
 
 class FakeFlutterSecureStorage extends Fake implements FlutterSecureStorage {
   final Map<String, String> _data = {};
+  int readCount = 0;
+  int recordReadCount = 0;
 
   @override
   Future<String?> read({
@@ -17,8 +19,13 @@ class FakeFlutterSecureStorage extends Fake implements FlutterSecureStorage {
     WebOptions? webOptions,
     MacOsOptions? mOptions,
     WindowsOptions? wOptions,
-  }) async =>
-      _data[key];
+  }) async {
+    readCount++;
+    if (key == 'vault_gesture_record') {
+      recordReadCount++;
+    }
+    return _data[key];
+  }
 
   @override
   Future<void> write({
@@ -63,6 +70,7 @@ void main() {
     store = GestureStore(storage: fakeStorage);
     currentSalt = null;
     saltReadCount = 0;
+    fakeStorage.recordReadCount = 0;
   });
 
   VaultEntrance createEntrance() {
@@ -120,15 +128,19 @@ void main() {
       expect(result, isFalse);
     });
 
-    test('J1: vault exists, gesture [1, 0, 1] stored. Calling verify twice caches positive result (saltReadCount == 1)', () async {
+    test('J1: vault exists, gesture [1, 0, 1] stored. Calling verify twice caches positive result without reading salt (first verify: 2 record reads, second: 1)', () async {
       currentSalt = 'some_base64_salt';
       await store.setGesture([1, 0, 1]);
+      fakeStorage.recordReadCount = 0;
+      saltReadCount = 0;
+
       final entrance = createEntrance();
       final result1 = await entrance.verify([1, 0, 1]);
       final result2 = await entrance.verify([1, 0, 1]);
       expect(result1, isTrue);
       expect(result2, isTrue);
-      expect(saltReadCount, equals(1));
+      expect(saltReadCount, equals(0));
+      expect(fakeStorage.recordReadCount, equals(3)); // first verify: 2 reads (hasGesture + verifyGesture); second verify: 1 read (cached)
     });
 
     test('J2: no vault (salt null). Calling verify twice does not cache negative result (saltReadCount == 2)', () async {
@@ -155,11 +167,35 @@ void main() {
       // On the SAME VaultEntrance instance:
       final passageResult = await entrance.verify(VaultEntrance.setupPassage);
       expect(passageResult, isFalse); // passage is dead
-      expect(saltReadCount, equals(2)); // salt was read and cached
+      expect(saltReadCount, equals(1)); // salt is NOT read because hasGesture is true and sets cache
 
       final gestureResult = await entrance.verify([1, 0, 1]);
       expect(gestureResult, isTrue); // stored gesture works
-      expect(saltReadCount, equals(2)); // cache was used (no 3rd salt read)
+      expect(saltReadCount, equals(1)); // cache was used (no salt read)
     });
+
+    test(
+      'M4: vault exists, gesture record present: verify counts storage reads and asserts vault_salt was NEVER read on the happy path',
+      () async {
+        currentSalt = 'some_base64_salt';
+        await store.setGesture([1, 0, 1]);
+
+        fakeStorage.readCount = 0;
+        saltReadCount = 0;
+
+        final entrance = createEntrance();
+        final result1 = await entrance.verify([1, 0, 1]);
+
+        expect(result1, isTrue);
+        expect(saltReadCount, equals(0)); // vault_salt was NEVER read on the happy path
+        expect(fakeStorage.readCount, equals(2)); // hasGesture (1) + verifyGesture (1)
+
+        fakeStorage.readCount = 0;
+        final result2 = await entrance.verify([1, 0, 1]);
+        expect(result2, isTrue);
+        expect(saltReadCount, equals(0));
+        expect(fakeStorage.readCount, equals(1)); // cached entrance delegates directly to verifyGesture (1 read)
+      },
+    );
   });
 }
