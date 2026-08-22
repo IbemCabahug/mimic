@@ -863,10 +863,14 @@ void main() {
       await tester.enterText(find.widgetWithText(TextField, 'New PIN'), '9999');
       await tester.enterText(find.widgetWithText(TextField, 'Confirm New PIN'), '9999');
 
+      // Capture the verifier before changePin begins
+      final verifierBefore = fakePlatform.secureStore['vault_pin_hash'];
+
       await tester.runAsync(() async {
         await tester.tap(find.text('Change'));
         final deadline = DateTime.now().add(const Duration(seconds: 20));
-        while (fakePlatform.secureStore['vault_pin'] != '9999' &&
+        while ((fakePlatform.secureStore['vault_pin_hash'] == null ||
+                fakePlatform.secureStore['vault_pin_hash'] == verifierBefore) &&
                DateTime.now().isBefore(deadline)) {
           await tester.pump(const Duration(milliseconds: 50));
           await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -874,9 +878,19 @@ void main() {
       });
       await tester.pump();
 
-      // Verify PIN updated in secure platform storage
-      expect(fakePlatform.secureStore['vault_pin'], equals('9999'),
-          reason: 'Decoy PIN flow / PIN configuration must write new PIN to platform secure storage');
+      // Negative assertion: Plaintext PIN is never stored in platform secure storage
+      expect(fakePlatform.secureStore['vault_pin'], isNull,
+          reason: 'The app must never store a plaintext PIN in platform secure storage');
+
+      // Positive assertion: The stored verifier changed to a new non-null verifier
+      expect(fakePlatform.secureStore['vault_pin_hash'], isNotNull,
+          reason: 'The PIN change must be recorded as a derived verifier, not a PIN');
+      expect(fakePlatform.secureStore['vault_pin_hash'], isNot(equals(verifierBefore)),
+          reason: 'The PIN change must be recorded as a derived verifier, not a PIN');
+
+      // Verify the new PIN verifies against the updated verifier
+      expect(await fakeCrypto.verifyPin('9999'), isTrue,
+          reason: 'New PIN must verify successfully against the updated stored verifier');
       
       // Verify no plain-text file data is written to disk during settings configuration
       verifyNoPlaintextWritten(fakePlatform, ['My secret note']);

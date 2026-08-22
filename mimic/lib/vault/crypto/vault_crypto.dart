@@ -495,7 +495,6 @@ class VaultCrypto extends ChangeNotifier {
     await _cleanupSwapArtifacts();
 
     if (!kIsWeb) {
-      await _platformService.secureWrite('vault_pin', newPin);
       await _platformService.secureWrite('wrong_attempts', '0');
       await _platformService.secureWrite('vault_setup_completed', 'true');
       await _platformService.secureDelete('vault_wiped');

@@ -301,7 +301,6 @@ class _PinScreenState extends ConsumerState<PinScreen> {
         await _concealService.setConcealed(false);
       }
       if (!kIsWeb) {
-        await ref.read(platformServiceProvider).secureWrite('vault_pin', pin);
         await ref.read(platformServiceProvider).secureWrite('wrong_attempts', '0');
         await ref.read(platformServiceProvider).secureWrite('vault_setup_completed', 'true');
       }
