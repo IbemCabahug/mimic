@@ -93,11 +93,13 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
       final result = await biometricService.authenticate(reason: 'Unlock');
       if (mounted) setState(() => _isLoadingBiometric = false);
       if (result == BiometricResult.success) {
-        final pin = await ref.read(platformServiceProvider).secureRead('vault_pin') ?? '';
-        await unlockStore.enable(BiometricLayer.vault, pin);
-        await unlockStore.disable(BiometricLayer.admin);
-        ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
-        ref.invalidate(biometricEnabledProvider(BiometricLayer.admin));
+        final pin = await _promptForVaultPin();
+        if (pin != null && pin.isNotEmpty) {
+          await unlockStore.enable(BiometricLayer.vault, pin);
+          await unlockStore.disable(BiometricLayer.admin);
+          ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
+          ref.invalidate(biometricEnabledProvider(BiometricLayer.admin));
+        }
       }
     } else if (selection == BiometricLayer.admin) {
       setState(() => _isLoadingBiometric = true);
@@ -286,6 +288,85 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
         ),
       ),
     );
+  }
+
+  Future<String?> _promptForVaultPin() async {
+    // Intentionally not disposed here because showDialog returns before the dialog finishes closing.
+    final pinController = TextEditingController();
+    String? error;
+    bool isProcessing = false;
+
+    final enteredPin = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Text(
+            'Confirm Vault PIN',
+            style: TextStyle(
+              color: VaultColors.textPrimary,
+              fontWeight: FontWeight.bold,
+              fontFamily: 'Inter',
+            ),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildPinField(pinController, 'Vault PIN'),
+              if (error != null) ...[
+                const SizedBox(height: 12),
+                Text(
+                  error!,
+                  style: const TextStyle(color: VaultColors.error, fontSize: 13, fontFamily: 'Inter'),
+                ),
+              ],
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: isProcessing ? null : () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+            ),
+            TextButton(
+              onPressed: isProcessing
+                  ? null
+                  : () async {
+                      final pin = pinController.text;
+                      if (pin.isEmpty) {
+                        setDialogState(() => error = 'Please enter your PIN');
+                        return;
+                      }
+
+                      setDialogState(() {
+                        isProcessing = true;
+                        error = null;
+                      });
+
+                      final crypto = ref.read(vaultCryptoProvider);
+                      final isValid = await crypto.verifyPin(pin);
+
+                      if (!isValid) {
+                        setDialogState(() {
+                          isProcessing = false;
+                          error = 'Incorrect PIN';
+                        });
+                        return;
+                      }
+
+                      if (dialogContext.mounted) {
+                        Navigator.of(dialogContext).pop(pin);
+                      }
+                    },
+              child: const Text('Confirm', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    return enteredPin;
   }
 
   Widget _buildPinField(TextEditingController controller, String label) {

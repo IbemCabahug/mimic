@@ -14,8 +14,7 @@ import 'package:mimic/vault/crypto/keystore_service.dart';
 // - AutoLockWrapper is present and connected
 // - Screen respects vaultTheme (light background, VaultColors tokens)
 // - No decrypted file data is written to disk
-
-import 'dart:convert';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -33,6 +32,9 @@ import 'package:mimic/vault/services/file_vault_service.dart';
 import 'package:mimic/vault/widgets/vault_scaffold.dart';
 import 'package:mimic/vault/security/auto_lock.dart';
 import 'package:mimic/vault/security/breakin_log.dart';
+import 'package:mimic/core/providers/biometric_providers.dart';
+import 'package:mimic/core/services/biometric_service.dart';
+import 'package:mimic/core/services/biometric_unlock_store.dart';
 
 // Screens to test
 import 'package:mimic/vault/screens/vault_home_screen.dart';
@@ -63,12 +65,16 @@ final Uint8List kTransparentImage = Uint8List.fromList(<int>[
 class FakePlatformService implements PlatformService {
   final Map<String, String> secureStore = {};
   final Map<String, Uint8List> fileStore = {};
+  final List<String> readKeys = [];
 
   @override
   bool isWeb() => false;
 
   @override
-  Future<String?> secureRead(String key) async => secureStore[key];
+  Future<String?> secureRead(String key) async {
+    readKeys.add(key);
+    return secureStore[key];
+  }
 
   @override
   Future<Map<String, String>> secureReadAll() async => Map.from(secureStore);
@@ -98,6 +104,58 @@ class FakePlatformService implements PlatformService {
 
   @override
   Future<File> resolveVaultFile(String path) async => throw UnimplementedError();
+}
+
+class FakeBiometricService extends BiometricService {
+  bool available = true;
+  BiometricResult authResult = BiometricResult.success;
+
+  @override
+  Future<bool> isAvailable() async => available;
+
+  @override
+  Future<BiometricResult> authenticate({required String reason, bool biometricOnly = true}) async {
+    return authResult;
+  }
+}
+
+class FakeBiometricUnlockStore implements BiometricUnlockStore {
+  final Map<BiometricLayer, String> secrets = {};
+  final Set<BiometricLayer> enabledLayers = {};
+
+  @override
+  Future<bool> isEnabled(BiometricLayer layer) async => enabledLayers.contains(layer);
+
+  @override
+  Future<void> enable(BiometricLayer layer, String secret) async {
+    secrets[layer] = secret;
+    enabledLayers.add(layer);
+  }
+
+  @override
+  Future<void> disable(BiometricLayer layer) async {
+    secrets.remove(layer);
+    enabledLayers.remove(layer);
+  }
+
+  @override
+  Future<String?> readSecret(BiometricLayer layer) async {
+    if (!await isEnabled(layer)) return null;
+    return secrets[layer];
+  }
+
+  @override
+  Future<BiometricLayer?> activeLayer() async {
+    if (await isEnabled(BiometricLayer.vault)) return BiometricLayer.vault;
+    if (await isEnabled(BiometricLayer.admin)) return BiometricLayer.admin;
+    return null;
+  }
+
+  @override
+  Future<void> wipeAll() async {
+    secrets.clear();
+    enabledLayers.clear();
+  }
 }
 
 /// Fake implementation of NotesService that stores notes in memory.
@@ -371,6 +429,12 @@ void verifyNoPlaintextWritten(FakePlatformService fakePlatform, List<String> pla
 // Tests Main Entry
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Configures a standard phone viewport so scrollable screens render reliably.
+Future<void> usePhoneSurface(WidgetTester tester) async {
+  await tester.binding.setSurfaceSize(const Size(412, 915));
+  addTearDown(() => tester.binding.setSurfaceSize(null));
+}
+
 void main() {
   late FakePlatformService fakePlatform;
   late VaultCrypto fakeCrypto;
@@ -378,6 +442,8 @@ void main() {
   late FakeFileVaultService fakePhotos;
   late FakeVideoVaultService fakeVideos;
   late FakeDocumentVaultService fakeDocuments;
+  late FakeBiometricService fakeBiometricService;
+  late FakeBiometricUnlockStore fakeBiometricStore;
   late Directory testTempDir;
   List<Map<String, dynamic>> mockLogs = [];
 
@@ -392,6 +458,8 @@ void main() {
     fakePhotos = FakeFileVaultService(fakePlatform, fakeCrypto);
     fakeVideos = FakeVideoVaultService(fakePlatform, fakeCrypto);
     fakeDocuments = FakeDocumentVaultService(fakePlatform, fakeCrypto);
+    fakeBiometricService = FakeBiometricService();
+    fakeBiometricStore = FakeBiometricUnlockStore();
     mockLogs = [];
     SharedPreferences.setMockInitialValues({});
   });
@@ -407,6 +475,8 @@ void main() {
         fileVaultServiceProvider.overrideWithValue(fakePhotos),
         videoVaultServiceProvider.overrideWithValue(fakeVideos),
         documentVaultServiceProvider.overrideWithValue(fakeDocuments),
+        biometricServiceProvider.overrideWithValue(fakeBiometricService),
+        biometricUnlockStoreProvider.overrideWithValue(fakeBiometricStore),
       ],
       child: MaterialApp(
         theme: vaultTheme,
@@ -1027,6 +1097,149 @@ void main() {
         }
       }
       expect(find.text('PIN_SCREEN'), findsOneWidget);
+    });
+
+    group('Biometric Unlock Configuration (C9)', () {
+      testWidgets('A1: correct PIN stores entered PIN as vault biometric secret and enables layer', (WidgetTester tester) async {
+        await usePhoneSurface(tester);
+        await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
+        await tester.pumpAndSettle();
+
+        final radioFinder = find.widgetWithText(RadioListTile<String>, 'Vault (shortcut)');
+        await tester.scrollUntilVisible(radioFinder, 100.0, scrollable: find.byType(Scrollable).first);
+        await tester.pumpAndSettle();
+
+        await tester.tap(radioFinder);
+        await tester.pumpAndSettle();
+
+        // Dialog 'Confirm Vault PIN' must appear
+        expect(find.text('Confirm Vault PIN'), findsOneWidget);
+
+        // Enter the correct vault PIN ('1234')
+        await tester.enterText(find.widgetWithText(TextField, 'Vault PIN'), '1234');
+        await tester.tap(find.text('Confirm'));
+        await tester.pumpAndSettle();
+
+        // Derivation: Initialized with PIN '1234'. verifyPin('1234') returns true,
+        // unlockStore.enable(BiometricLayer.vault, '1234') is called.
+        // Expected: biometric secret == '1234', isEnabled(BiometricLayer.vault) == true.
+        expect(await fakeBiometricStore.readSecret(BiometricLayer.vault), equals('1234'),
+            reason: 'Correct PIN must be saved as vault biometric secret');
+        expect(await fakeBiometricStore.isEnabled(BiometricLayer.vault), isTrue,
+            reason: 'BiometricLayer.vault must be enabled after entering correct PIN');
+      });
+
+      testWidgets('A2: wrong PIN leaves layer disabled and writes no secret', (WidgetTester tester) async {
+        await usePhoneSurface(tester);
+        await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
+        await tester.pumpAndSettle();
+
+        final radioFinder = find.widgetWithText(RadioListTile<String>, 'Vault (shortcut)');
+        await tester.scrollUntilVisible(radioFinder, 100.0, scrollable: find.byType(Scrollable).first);
+        await tester.pumpAndSettle();
+
+        await tester.tap(radioFinder);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Confirm Vault PIN'), findsOneWidget);
+
+        // Enter wrong PIN ('9999')
+        await tester.enterText(find.widgetWithText(TextField, 'Vault PIN'), '9999');
+        await tester.tap(find.text('Confirm'));
+        await tester.pumpAndSettle();
+
+        // Derivation: verifyPin('9999') returns false against '1234' verifier.
+        // Dialog shows 'Incorrect PIN', dialog does not pop, no secret written, layer disabled.
+        expect(find.text('Incorrect PIN'), findsOneWidget);
+        expect(await fakeBiometricStore.readSecret(BiometricLayer.vault), isNull,
+            reason: 'Wrong PIN must not write any biometric secret');
+        expect(await fakeBiometricStore.isEnabled(BiometricLayer.vault), isFalse,
+            reason: 'BiometricLayer.vault must remain disabled after wrong PIN');
+
+        // Dismiss dialog
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+      });
+
+      testWidgets('A3: dialog cancelled leaves layer disabled and writes no secret', (WidgetTester tester) async {
+        await usePhoneSurface(tester);
+        await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
+        await tester.pumpAndSettle();
+
+        final radioFinder = find.widgetWithText(RadioListTile<String>, 'Vault (shortcut)');
+        await tester.scrollUntilVisible(radioFinder, 100.0, scrollable: find.byType(Scrollable).first);
+        await tester.pumpAndSettle();
+
+        await tester.tap(radioFinder);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Confirm Vault PIN'), findsOneWidget);
+
+        // Cancel dialog
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
+
+        // Derivation: User cancelled PIN prompt. No enable call executed.
+        // Expected: secret == null, isEnabled == false.
+        expect(await fakeBiometricStore.readSecret(BiometricLayer.vault), isNull,
+            reason: 'Cancelling PIN prompt must not write any biometric secret');
+        expect(await fakeBiometricStore.isEnabled(BiometricLayer.vault), isFalse,
+            reason: 'BiometricLayer.vault must remain disabled after cancel');
+      });
+
+      testWidgets('A4: empty-secret defect cannot recur: missing vault_pin still enables with non-empty secret when correct PIN entered', (WidgetTester tester) async {
+        // Ensure 'vault_pin' is completely absent from storage
+        fakePlatform.secureStore.remove('vault_pin');
+
+        await usePhoneSurface(tester);
+        await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
+        await tester.pumpAndSettle();
+
+        final radioFinder = find.widgetWithText(RadioListTile<String>, 'Vault (shortcut)');
+        await tester.scrollUntilVisible(radioFinder, 100.0, scrollable: find.byType(Scrollable).first);
+        await tester.pumpAndSettle();
+
+        await tester.tap(radioFinder);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Confirm Vault PIN'), findsOneWidget);
+
+        await tester.enterText(find.widgetWithText(TextField, 'Vault PIN'), '1234');
+        await tester.tap(find.text('Confirm'));
+        await tester.pumpAndSettle();
+
+        // Derivation: Even when 'vault_pin' storage key is absent, the PIN entered into the dialog
+        // is verified and stored; expected secret == '1234' (non-empty), isEnabled == true.
+        final secret = await fakeBiometricStore.readSecret(BiometricLayer.vault);
+        expect(secret, equals('1234'), reason: 'Biometric secret must equal entered PIN, not empty string');
+        expect(secret?.isNotEmpty, isTrue, reason: 'Empty-secret defect must not recur');
+        expect(await fakeBiometricStore.isEnabled(BiometricLayer.vault), isTrue);
+      });
+
+      testWidgets('A5: settings screen does not read vault_pin during biometric enable flow', (WidgetTester tester) async {
+        await usePhoneSurface(tester);
+        await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
+        await tester.pumpAndSettle();
+
+        // Clear read tracking before triggering biometric enable flow
+        fakePlatform.readKeys.clear();
+
+        final radioFinder = find.widgetWithText(RadioListTile<String>, 'Vault (shortcut)');
+        await tester.scrollUntilVisible(radioFinder, 100.0, scrollable: find.byType(Scrollable).first);
+        await tester.pumpAndSettle();
+
+        await tester.tap(radioFinder);
+        await tester.pumpAndSettle();
+
+        await tester.enterText(find.widgetWithText(TextField, 'Vault PIN'), '1234');
+        await tester.tap(find.text('Confirm'));
+        await tester.pumpAndSettle();
+
+        // Derivation: _promptForVaultPin delegates to VaultCrypto.verifyPin (which reads vault_salt and vault_pin_hash).
+        // 'vault_pin' must never appear in fakePlatform.readKeys.
+        expect(fakePlatform.readKeys.contains('vault_pin'), isFalse,
+            reason: 'VaultSettingsScreen must never read vault_pin from storage during biometric enable');
+      });
     });
   });
 }
