@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import '../crypto/vault_crypto.dart';
+import '../crypto/keystore_service.dart';
 import '../../core/services/platform_service.dart';
 import '../../core/services/stealth_mode_service.dart';
 import '../../core/services/launcher_icon_service.dart';
@@ -89,16 +90,49 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     final unlockStore = ref.read(biometricUnlockStoreProvider);
     
     if (selection == BiometricLayer.vault) {
-      setState(() => _isLoadingBiometric = true);
-      final result = await biometricService.authenticate(reason: 'Unlock');
-      if (mounted) setState(() => _isLoadingBiometric = false);
-      if (result == BiometricResult.success) {
-        final pin = await _promptForVaultPin();
-        if (pin != null && pin.isNotEmpty) {
-          await unlockStore.enable(BiometricLayer.vault, pin);
+      final pin = await _promptForVaultPin();
+      if (pin != null && pin.isNotEmpty) {
+        setState(() => _isLoadingBiometric = true);
+        try {
+          await unlockStore.writeBioSecret(pin);
           await unlockStore.disable(BiometricLayer.admin);
-          ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
-          ref.invalidate(biometricEnabledProvider(BiometricLayer.admin));
+          if (mounted) {
+            ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
+            ref.invalidate(biometricEnabledProvider(BiometricLayer.admin));
+          }
+        } on BiometricCancelledException {
+          if (mounted) {
+            ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
+            ref.invalidate(biometricEnabledProvider(BiometricLayer.admin));
+          }
+        } on BiometricKeyInvalidatedException {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('Fingerprint changed - unlock with your PIN to re-enable'),
+                backgroundColor: VaultColors.error,
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            );
+            ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
+            ref.invalidate(biometricEnabledProvider(BiometricLayer.admin));
+          }
+        } on BiometricUnavailableException {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: const Text('Biometric unlock is unavailable on this device'),
+                backgroundColor: VaultColors.error,
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            );
+            ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
+            ref.invalidate(biometricEnabledProvider(BiometricLayer.admin));
+          }
+        } finally {
+          if (mounted) setState(() => _isLoadingBiometric = false);
         }
       }
     } else if (selection == BiometricLayer.admin) {
