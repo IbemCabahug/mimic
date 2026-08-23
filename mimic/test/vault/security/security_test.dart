@@ -1383,6 +1383,26 @@ void main() {
             reason: 'Break-in selfie must be stored as an encrypted .enc file');
       },
     );
+
+    test(
+      '13d · break-in evidence encryption works while the vault has never been unlocked',
+      () async {
+        final fakePlatform = FakePlatformService();
+        final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+        expect(crypto.isUnlocked, isFalse);
+
+        final photoBytes =
+            Uint8List.fromList(utf8.encode('cold-start-break-in-evidence'));
+        final encrypted = await crypto.encryptBreakInEvidenceBytes(photoBytes);
+
+        expect(encrypted, isNotEmpty);
+        expect(encrypted, isNot(equals(photoBytes)));
+
+        final decrypted = await crypto.decryptBytes(encrypted);
+        expect(decrypted, equals(photoBytes));
+      },
+    );
   });
 
   // ═══════════════════════════════════════════════════════════════════════

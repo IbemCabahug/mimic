@@ -697,6 +697,26 @@ class VaultCrypto extends ChangeNotifier {
     return result;
   }
 
+  /// Encrypts break-in evidence with the device-local system key.
+  ///
+  /// This exists for one purpose: storing intruder photos captured while the
+  /// vault is LOCKED, before any PIN has been entered. It must work with no
+  /// derived key present, and it must never be used for user vault content.
+  /// The output is deliberately written without a media magic prefix so that
+  /// decryptBytes routes it to the system-key legacy path, which likewise
+  /// works while the vault is locked.
+  Future<Uint8List> encryptBreakInEvidenceBytes(Uint8List plaintext) async {
+    if (plaintext.isEmpty) return Uint8List(0);
+    final key = await _getSystemKey();
+    final iv = _generateSecureRandomBytes(_ivLength);
+    final cipher = _createCipher(key, iv, true);
+    final encrypted = cipher.process(plaintext);
+    final result = Uint8List(iv.length + encrypted.length);
+    result.setRange(0, iv.length, iv);
+    result.setRange(iv.length, result.length, encrypted);
+    return result;
+  }
+
   bool isLegacySystemBlob(Uint8List cipher) {
     if (cipher.length < _mediaMagic.length) return true;
     for (int i = 0; i < _mediaMagic.length; i++) {

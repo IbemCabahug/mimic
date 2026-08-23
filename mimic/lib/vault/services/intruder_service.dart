@@ -38,6 +38,10 @@ class IntruderService {
   Future<void> captureIntruder(VaultCrypto crypto) async {
     if (kIsWeb) return;
     try {
+      final capabilityProbe =
+          await crypto.encryptBreakInEvidenceBytes(Uint8List(16));
+      if (capabilityProbe.isEmpty) return;
+
       final cameras = await availableCameras();
       if (cameras.isEmpty) return;
 
@@ -58,7 +62,7 @@ class IntruderService {
         final image = await controller.takePicture();
         final bytes = await image.readAsBytes();
 
-        final encryptedBytes = await crypto.encryptBytes(bytes);
+        final encryptedBytes = await crypto.encryptBreakInEvidenceBytes(bytes);
 
         final appDir = await getApplicationDocumentsDirectory();
         final timestamp = DateTime.now().microsecondsSinceEpoch;
@@ -69,8 +73,12 @@ class IntruderService {
       } finally {
         await controller.dispose();
       }
-    } catch (_) {
+    } catch (e) {
       // Silent failure — never reveal capture status to the user
+      assert(() {
+        debugPrint('captureIntruder failed: $e');
+        return true;
+      }());
     }
   }
 
