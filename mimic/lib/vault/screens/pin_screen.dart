@@ -549,20 +549,6 @@ class _PinScreenState extends ConsumerState<PinScreen> {
                       ),
                     ),
             ),
-            if (!kIsWeb && !_isCreateMode) const SizedBox(height: 16),
-            if (!kIsWeb && !_isCreateMode)
-              BiometricVaultUnlock(
-                onUnlockedVault: (secret) => _authenticateWithSecret(secret),
-                onDecoyAdmin: () {
-                  if (mounted) {
-                    Navigator.of(context).pushReplacementNamed('/admin-panel');
-                  }
-                },
-                onError: (result) {
-                  if (mounted)
-                    setState(() => _error = _biometricResultToMessage(result));
-                },
-              ),
             if (_isCreateMode) ...[
               const SizedBox(height: 16),
               TextButton(
@@ -597,6 +583,21 @@ class _PinScreenState extends ConsumerState<PinScreen> {
                 ),
               ),
             ],
+            if (!kIsWeb && !_isCreateMode) const SizedBox(height: 16),
+            if (!kIsWeb && !_isCreateMode)
+              BiometricVaultUnlock(
+                autoStart: _remainingLockout == Duration.zero,
+                onUnlockedVault: (secret) => _authenticateWithSecret(secret),
+                onDecoyAdmin: () {
+                  if (mounted) {
+                    Navigator.of(context).pushReplacementNamed('/admin-panel');
+                  }
+                },
+                onError: (result) {
+                  if (mounted)
+                    setState(() => _error = _biometricResultToMessage(result));
+                },
+              ),
           ],
         ),
       ),

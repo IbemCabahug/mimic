@@ -11,11 +11,16 @@ class BiometricVaultUnlock extends ConsumerStatefulWidget {
     required this.onUnlockedVault,
     required this.onDecoyAdmin,
     this.onError,
+    this.autoStart = false,
   });
 
   final void Function(String secret) onUnlockedVault;
   final VoidCallback onDecoyAdmin;
   final void Function(BiometricResult result)? onError;
+
+  /// When true, fires one automatic unlock attempt per mount once
+  /// availability and an enabled layer are known.
+  final bool autoStart;
 
   @override
   ConsumerState<BiometricVaultUnlock> createState() =>
@@ -29,6 +34,7 @@ class _BiometricVaultUnlockState extends ConsumerState<BiometricVaultUnlock> {
   );
 
   bool _busy = false;
+  bool _autoStartFired = false;
 
   Future<void> _run() async {
     if (_busy) return;
@@ -91,6 +97,13 @@ class _BiometricVaultUnlockState extends ConsumerState<BiometricVaultUnlock> {
 
     if (!available || (!isVaultEnabled && !isAdminEnabled)) {
       return const SizedBox.shrink();
+    }
+
+    if (widget.autoStart && !_autoStartFired && !_busy) {
+      _autoStartFired = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _run();
+      });
     }
 
     return IconButton(
