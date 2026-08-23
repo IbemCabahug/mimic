@@ -6,6 +6,8 @@ import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
+import androidx.biometric.BiometricManager
+import androidx.fragment.app.FragmentActivity
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodCall
 import java.security.KeyStore
@@ -17,7 +19,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-class KeystoreChannel : MethodChannel.MethodCallHandler {
+class KeystoreChannel(private val activity: FragmentActivity? = null) : MethodChannel.MethodCallHandler {
     private val KEY_ALIAS = "mimic_vault_kek"
     private val BIO_KEY_ALIAS = "mimic_vault_bio_kek"
     private val ANDROID_KEYSTORE = "AndroidKeyStore"
@@ -34,6 +36,7 @@ class KeystoreChannel : MethodChannel.MethodCallHandler {
             "elapsedRealtime" -> result.success(android.os.SystemClock.elapsedRealtime())
             "ensureBioKey" -> ensureBioKey(result)
             "deleteBioKey" -> deleteBioKey(result)
+            "bioAvailable" -> bioAvailable(result)
             else -> result.notImplemented()
         }
     }
@@ -205,6 +208,21 @@ class KeystoreChannel : MethodChannel.MethodCallHandler {
             result.success(true)
         } catch (e: Exception) {
             result.error("DELETE_ERROR", e.message, null)
+        }
+    }
+
+    private fun bioAvailable(result: MethodChannel.Result) {
+        val act = activity
+        if (act == null) {
+            result.error("NO_ACTIVITY", "activity unavailable", null)
+            return
+        }
+        try {
+            val status = BiometricManager.from(act)
+                .canAuthenticate(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+            result.success(status)
+        } catch (e: Exception) {
+            result.error("KEYSTORE_ERROR", e.message, null)
         }
     }
 

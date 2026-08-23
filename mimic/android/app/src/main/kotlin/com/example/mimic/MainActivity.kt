@@ -74,6 +74,6 @@ class MainActivity : FlutterFragmentActivity() {
             }
         }
 
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "mimic/keystore").setMethodCallHandler(KeystoreChannel())
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "mimic/keystore").setMethodCallHandler(KeystoreChannel(this))
     }
 }
