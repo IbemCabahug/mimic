@@ -156,6 +156,26 @@ class FakeBiometricUnlockStore implements BiometricUnlockStore {
     secrets.clear();
     enabledLayers.clear();
   }
+
+  @override
+  Future<void> writeBioSecret(String secret) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<String?> readBioSecret() async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> clearBioSecret() async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<bool> hasBioSecret() async {
+    throw UnimplementedError();
+  }
 }
 
 /// Fake implementation of NotesService that stores notes in memory.

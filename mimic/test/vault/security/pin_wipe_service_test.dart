@@ -56,6 +56,26 @@ class FakeBiometricUnlockStore implements BiometricUnlockStore {
 
   @override
   Future<void> wipeAll() async => wiped = true;
+
+  @override
+  Future<void> writeBioSecret(String secret) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<String?> readBioSecret() async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> clearBioSecret() async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<bool> hasBioSecret() async {
+    throw UnimplementedError();
+  }
 }
 
 void main() {
