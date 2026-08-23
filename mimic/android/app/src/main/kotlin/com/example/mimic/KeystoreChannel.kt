@@ -1,5 +1,6 @@
 package com.example.mimic
 
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
@@ -18,6 +19,7 @@ import javax.crypto.spec.SecretKeySpec
 
 class KeystoreChannel : MethodChannel.MethodCallHandler {
     private val KEY_ALIAS = "mimic_vault_kek"
+    private val BIO_KEY_ALIAS = "mimic_vault_bio_kek"
     private val ANDROID_KEYSTORE = "AndroidKeyStore"
     private val executor = Executors.newCachedThreadPool()
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -30,6 +32,8 @@ class KeystoreChannel : MethodChannel.MethodCallHandler {
             "deleteKey" -> deleteKey(result)
             "pbkdf2" -> pbkdf2(call, result)
             "elapsedRealtime" -> result.success(android.os.SystemClock.elapsedRealtime())
+            "ensureBioKey" -> ensureBioKey(result)
+            "deleteBioKey" -> deleteBioKey(result)
             else -> result.notImplemented()
         }
     }
@@ -63,6 +67,59 @@ class KeystoreChannel : MethodChannel.MethodCallHandler {
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setRandomizedEncryptionRequired(true)
             .setUserAuthenticationRequired(false)
+
+        if (useStrongBox) {
+            builder.setIsStrongBoxBacked(true)
+        }
+
+        keyGenerator.init(builder.build())
+        keyGenerator.generateKey()
+    }
+
+    private fun ensureBioKey(result: MethodChannel.Result) {
+        try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            if (keyStore.containsAlias(BIO_KEY_ALIAS)) {
+                result.success(true)
+                return
+            }
+
+            try {
+                ensureBioKey(true)
+            } catch (e: StrongBoxUnavailableException) {
+                ensureBioKey(false)
+            }
+            result.success(true)
+        } catch (e: Exception) {
+            result.error("KEYSTORE_ERROR", e.message, null)
+        }
+    }
+
+    private fun ensureBioKey(useStrongBox: Boolean) {
+        val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+        if (keyStore.containsAlias(BIO_KEY_ALIAS)) {
+            return
+        }
+
+        val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE)
+        val builder = KeyGenParameterSpec.Builder(
+            BIO_KEY_ALIAS,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setRandomizedEncryptionRequired(true)
+            .setUserAuthenticationRequired(true)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            builder.setInvalidatedByBiometricEnrollment(true)
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            builder.setUserAuthenticationParameters(0, KeyProperties.AUTH_BIOMETRIC_STRONG)
+        } else {
+            builder.setUserAuthenticationValidityDurationSeconds(-1)
+        }
 
         if (useStrongBox) {
             builder.setIsStrongBoxBacked(true)
@@ -135,6 +192,16 @@ class KeystoreChannel : MethodChannel.MethodCallHandler {
             // Alias deletion is safe here: this is only called during a full vault wipe/reset
             // when no live wrapped data depends on this key anymore.
             keyStore.deleteEntry(KEY_ALIAS)
+            result.success(true)
+        } catch (e: Exception) {
+            result.error("DELETE_ERROR", e.message, null)
+        }
+    }
+
+    private fun deleteBioKey(result: MethodChannel.Result) {
+        try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            keyStore.deleteEntry(BIO_KEY_ALIAS)
             result.success(true)
         } catch (e: Exception) {
             result.error("DELETE_ERROR", e.message, null)
