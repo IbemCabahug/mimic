@@ -159,22 +159,26 @@ class FakeBiometricUnlockStore implements BiometricUnlockStore {
 
   @override
   Future<void> writeBioSecret(String secret) async {
-    throw UnimplementedError();
+    secrets[BiometricLayer.vault] = secret;
+    enabledLayers.add(BiometricLayer.vault);
   }
 
   @override
   Future<String?> readBioSecret() async {
-    throw UnimplementedError();
+    if (!enabledLayers.contains(BiometricLayer.vault)) return null;
+    return secrets[BiometricLayer.vault];
   }
 
   @override
   Future<void> clearBioSecret() async {
-    throw UnimplementedError();
+    secrets.remove(BiometricLayer.vault);
+    enabledLayers.remove(BiometricLayer.vault);
   }
 
   @override
   Future<bool> hasBioSecret() async {
-    throw UnimplementedError();
+    if (!enabledLayers.contains(BiometricLayer.vault)) return false;
+    return secrets.containsKey(BiometricLayer.vault);
   }
 }
 
