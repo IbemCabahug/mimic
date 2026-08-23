@@ -4,14 +4,18 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
 import androidx.biometric.BiometricManager
+import androidx.biometric.BiometricPrompt
 import androidx.fragment.app.FragmentActivity
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.MethodCall
 import java.security.KeyStore
+import java.util.concurrent.Executor
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.Mac
@@ -25,6 +29,7 @@ class KeystoreChannel(private val activity: FragmentActivity? = null) : MethodCh
     private val ANDROID_KEYSTORE = "AndroidKeyStore"
     private val executor = Executors.newCachedThreadPool()
     private val mainHandler = Handler(Looper.getMainLooper())
+    private val mainExecutor = Executor { command -> mainHandler.post(command) }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
@@ -37,6 +42,8 @@ class KeystoreChannel(private val activity: FragmentActivity? = null) : MethodCh
             "ensureBioKey" -> ensureBioKey(result)
             "deleteBioKey" -> deleteBioKey(result)
             "bioAvailable" -> bioAvailable(result)
+            "bioWrap" -> bioWrap(call, result)
+            "bioUnwrap" -> bioUnwrap(call, result)
             else -> result.notImplemented()
         }
     }
@@ -286,5 +293,147 @@ class KeystoreChannel(private val activity: FragmentActivity? = null) : MethodCh
         }
 
         return result
+    }
+
+    private class SafeResult(
+        private val result: MethodChannel.Result,
+        private val mainHandler: Handler
+    ) {
+        private val answered = AtomicBoolean(false)
+
+        fun success(resultObj: Any?) {
+            if (answered.compareAndSet(false, true)) {
+                mainHandler.post { result.success(resultObj) }
+            }
+        }
+
+        fun error(errorCode: String, errorMessage: String?, errorDetails: Any?) {
+            if (answered.compareAndSet(false, true)) {
+                mainHandler.post { result.error(errorCode, errorMessage, errorDetails) }
+            }
+        }
+    }
+
+    private fun authenticateWithCrypto(
+        cipher: Cipher,
+        result: MethodChannel.Result,
+        cryptoOp: (Cipher) -> ByteArray
+    ) {
+        val act = activity
+        if (act == null) {
+            result.error("NO_ACTIVITY", "activity unavailable", null)
+            return
+        }
+
+        val safeResult = SafeResult(result, mainHandler)
+
+        mainHandler.post {
+            try {
+                val promptInfo = BiometricPrompt.PromptInfo.Builder()
+                    .setTitle("Unlock")
+                    .setNegativeButtonText("Use PIN")
+                    .setAllowedAuthenticators(BiometricManager.Authenticators.BIOMETRIC_STRONG)
+                    .setConfirmationRequired(false)
+                    .build()
+
+                val prompt = BiometricPrompt(
+                    act,
+                    mainExecutor,
+                    object : BiometricPrompt.AuthenticationCallback() {
+                        override fun onAuthenticationSucceeded(authResult: BiometricPrompt.AuthenticationResult) {
+                            try {
+                                val authenticatedCipher = authResult.cryptoObject?.cipher ?: cipher
+                                val data = cryptoOp(authenticatedCipher)
+                                safeResult.success(data)
+                            } catch (e: Exception) {
+                                safeResult.error("KEYSTORE_ERROR", e.message, null)
+                            }
+                        }
+
+                        override fun onAuthenticationError(errorCode: Int, errString: CharSequence) {
+                            val code = if (errorCode == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
+                                errorCode == BiometricPrompt.ERROR_USER_CANCELED
+                            ) {
+                                "BIO_CANCELLED"
+                            } else {
+                                "BIO_ERROR"
+                            }
+                            safeResult.error(code, errString.toString(), null)
+                        }
+
+                        override fun onAuthenticationFailed() {
+                        }
+                    }
+                )
+
+                prompt.authenticate(promptInfo, BiometricPrompt.CryptoObject(cipher))
+            } catch (e: Exception) {
+                safeResult.error("KEYSTORE_ERROR", e.message, null)
+            }
+        }
+    }
+
+    private fun bioWrap(call: MethodCall, result: MethodChannel.Result) {
+        val data = call.argument<ByteArray>("bytes") ?: return result.error("INVALID_ARG", "bytes required", null)
+        try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            val secretKey = keyStore.getKey(BIO_KEY_ALIAS, null) as? SecretKey
+            if (secretKey == null) {
+                result.error("KEY_INVALID", "Key missing", null)
+                return
+            }
+
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            try {
+                cipher.init(Cipher.ENCRYPT_MODE, secretKey)
+            } catch (e: KeyPermanentlyInvalidatedException) {
+                result.error("BIO_KEY_INVALID", "Biometric key invalidated", null)
+                return
+            }
+
+            authenticateWithCrypto(cipher, result) { authenticatedCipher ->
+                val iv = authenticatedCipher.iv
+                val ciphertext = authenticatedCipher.doFinal(data)
+                val combined = ByteArray(iv.size + ciphertext.size)
+                System.arraycopy(iv, 0, combined, 0, iv.size)
+                System.arraycopy(ciphertext, 0, combined, iv.size, ciphertext.size)
+                combined
+            }
+        } catch (e: Exception) {
+            result.error("KEYSTORE_ERROR", e.message, null)
+        }
+    }
+
+    private fun bioUnwrap(call: MethodCall, result: MethodChannel.Result) {
+        val data = call.argument<ByteArray>("bytes") ?: return result.error("INVALID_ARG", "bytes required", null)
+        if (data.size < 12) {
+            return result.error("INVALID_DATA", "Data too short", null)
+        }
+
+        try {
+            val keyStore = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            val secretKey = keyStore.getKey(BIO_KEY_ALIAS, null) as? SecretKey
+            if (secretKey == null) {
+                result.error("KEY_INVALID", "Key missing", null)
+                return
+            }
+
+            val iv = data.copyOfRange(0, 12)
+            val ciphertext = data.copyOfRange(12, data.size)
+
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            try {
+                cipher.init(Cipher.DECRYPT_MODE, secretKey, GCMParameterSpec(128, iv))
+            } catch (e: KeyPermanentlyInvalidatedException) {
+                result.error("BIO_KEY_INVALID", "Biometric key invalidated", null)
+                return
+            }
+
+            authenticateWithCrypto(cipher, result) { authenticatedCipher ->
+                authenticatedCipher.doFinal(ciphertext)
+            }
+        } catch (e: Exception) {
+            result.error("KEYSTORE_ERROR", e.message, null)
+        }
     }
 }
