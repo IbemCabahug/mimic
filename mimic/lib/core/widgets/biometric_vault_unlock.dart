@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/core/providers/biometric_providers.dart';
 import 'package:mimic/core/services/biometric_service.dart';
 import 'package:mimic/core/services/biometric_unlock_store.dart';
+import 'package:mimic/vault/crypto/keystore_service.dart';
 
 class BiometricVaultUnlock extends ConsumerStatefulWidget {
   const BiometricVaultUnlock({
@@ -37,22 +38,41 @@ class _BiometricVaultUnlockState extends ConsumerState<BiometricVaultUnlock> {
         widget.onError?.call(BiometricResult.unavailable);
         return;
       }
-      final result = await _service.authenticate(reason: 'Unlock');
-      if (result != BiometricResult.success) {
-        widget.onError?.call(result);
-        return;
-      }
       
       if (layer == BiometricLayer.vault) {
-        final secret = await _store.readSecret(layer);
+        final secret = await _store.readBioSecret();
         if (secret == null) {
+          if (mounted) {
+            ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
+            ref.invalidate(biometricEnabledProvider(BiometricLayer.admin));
+          }
           widget.onError?.call(BiometricResult.error);
           return;
         }
         widget.onUnlockedVault(secret);
       } else if (layer == BiometricLayer.admin) {
+        final result = await _service.authenticate(reason: 'Unlock');
+        if (result != BiometricResult.success) {
+          widget.onError?.call(result);
+          return;
+        }
         widget.onDecoyAdmin();
       }
+    } on BiometricCancelledException {
+      return;
+    } on BiometricKeyInvalidatedException {
+      try {
+        await _store.clearBioSecret();
+      } on BiometricUnavailableException {
+      } on BiometricCancelledException {
+      }
+      if (mounted) {
+        ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
+        ref.invalidate(biometricEnabledProvider(BiometricLayer.admin));
+      }
+      widget.onError?.call(BiometricResult.error);
+    } on BiometricUnavailableException {
+      widget.onError?.call(BiometricResult.unavailable);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
