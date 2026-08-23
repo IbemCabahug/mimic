@@ -178,7 +178,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     final navigator = Navigator.of(context);
     try {
       await _crypto.initialize(pin);
-      
+
       if (mounted) {
         setState(() {
           _error = null;
@@ -301,8 +301,12 @@ class _PinScreenState extends ConsumerState<PinScreen> {
         await _concealService.setConcealed(false);
       }
       if (!kIsWeb) {
-        await ref.read(platformServiceProvider).secureWrite('wrong_attempts', '0');
-        await ref.read(platformServiceProvider).secureWrite('vault_setup_completed', 'true');
+        await ref
+            .read(platformServiceProvider)
+            .secureWrite('wrong_attempts', '0');
+        await ref
+            .read(platformServiceProvider)
+            .secureWrite('vault_setup_completed', 'true');
       }
 
       if (mounted) {
@@ -349,23 +353,33 @@ class _PinScreenState extends ConsumerState<PinScreen> {
       if (mounted) {
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(e.message), backgroundColor: Colors.redAccent, duration: const Duration(seconds: 4)),
+          SnackBar(
+            content: Text(e.message),
+            backgroundColor: Colors.redAccent,
+            duration: const Duration(seconds: 4),
+          ),
         );
         Navigator.of(context).pushNamed('/vault-enter-recovery');
       }
     } on InvalidPinException catch (_) {
       if (!kIsWeb) {
         try {
-          final stored = await ref.read(platformServiceProvider).secureRead('wrong_attempts');
+          final stored = await ref
+              .read(platformServiceProvider)
+              .secureRead('wrong_attempts');
           final currentCount = (int.tryParse(stored ?? '') ?? 0) + 1;
           if (currentCount % 3 == 0) {
             _intruderService.captureIntruder(_crypto);
           }
-          await ref.read(platformServiceProvider).secureWrite('wrong_attempts', currentCount.toString());
+          await ref
+              .read(platformServiceProvider)
+              .secureWrite('wrong_attempts', currentCount.toString());
           await ref.read(lockoutServiceProvider).setLockout(currentCount);
           if (mounted) setState(() => _wrongAttempts = currentCount);
 
-          final newRemaining = await ref.read(lockoutServiceProvider).remainingLockout();
+          final newRemaining = await ref
+              .read(lockoutServiceProvider)
+              .remainingLockout();
           if (newRemaining > Duration.zero && mounted) {
             setState(() {
               _remainingLockout = newRemaining;
@@ -377,16 +391,18 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           }
         } catch (ex) {
           debugPrint('Failed to save wrong attempts log: $ex');
-          if (mounted) setState(() {
+          if (mounted)
+            setState(() {
+              _wrongAttempts++;
+              _error = 'Invalid PIN';
+            });
+        }
+      } else {
+        if (mounted)
+          setState(() {
             _wrongAttempts++;
             _error = 'Invalid PIN';
           });
-        }
-      } else {
-        if (mounted) setState(() {
-          _wrongAttempts++;
-          _error = 'Invalid PIN';
-        });
       }
     } catch (e) {
       // Operational failure (e.g. storage error, keystore wrap error, serialization wait): do not increment wrong_attempts!
@@ -413,6 +429,8 @@ class _PinScreenState extends ConsumerState<PinScreen> {
         return 'Biometric error';
       case BiometricResult.failed:
         return 'Biometric authentication failed';
+      case BiometricResult.keyInvalidated:
+        return 'Fingerprint changed - unlock with your PIN to re-enable';
       case BiometricResult.success:
         return null;
     }
@@ -474,7 +492,9 @@ class _PinScreenState extends ConsumerState<PinScreen> {
               style: const TextStyle(color: Colors.white),
               decoration: InputDecoration(
                 hintText: '____',
-                hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
+                hintStyle: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.3),
+                ),
                 filled: true,
                 fillColor: Colors.white.withValues(alpha: 0.05),
                 border: OutlineInputBorder(
@@ -500,22 +520,10 @@ class _PinScreenState extends ConsumerState<PinScreen> {
                 ),
               ),
             const SizedBox(height: 24),
-            if (!kIsWeb && !_isCreateMode)
-              BiometricVaultUnlock(
-                onUnlockedVault: (secret) => _authenticateWithSecret(secret),
-                onDecoyAdmin: () {
-                  if (mounted) {
-                    Navigator.of(context).pushReplacementNamed('/admin-panel');
-                  }
-                },
-                onError: (result) {
-                  if (mounted) setState(() => _error = _biometricResultToMessage(result));
-                },
-              ),
-            if (!kIsWeb && !_isCreateMode)
-              const SizedBox(height: 16),
             ElevatedButton(
-              onPressed: (_isLoading || _remainingLockout > Duration.zero) ? null : _authenticate,
+              onPressed: (_isLoading || _remainingLockout > Duration.zero)
+                  ? null
+                  : _authenticate,
               style: ElevatedButton.styleFrom(
                 backgroundColor: const Color(0xFF7F77DD),
                 foregroundColor: Colors.white,
@@ -535,9 +543,26 @@ class _PinScreenState extends ConsumerState<PinScreen> {
                     )
                   : Text(
                       _isCreateMode ? 'Create PIN' : 'Unlock',
-                      style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
             ),
+            if (!kIsWeb && !_isCreateMode) const SizedBox(height: 16),
+            if (!kIsWeb && !_isCreateMode)
+              BiometricVaultUnlock(
+                onUnlockedVault: (secret) => _authenticateWithSecret(secret),
+                onDecoyAdmin: () {
+                  if (mounted) {
+                    Navigator.of(context).pushReplacementNamed('/admin-panel');
+                  }
+                },
+                onError: (result) {
+                  if (mounted)
+                    setState(() => _error = _biometricResultToMessage(result));
+                },
+              ),
             if (_isCreateMode) ...[
               const SizedBox(height: 16),
               TextButton(

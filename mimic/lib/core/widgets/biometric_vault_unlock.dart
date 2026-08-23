@@ -24,8 +24,9 @@ class BiometricVaultUnlock extends ConsumerStatefulWidget {
 
 class _BiometricVaultUnlockState extends ConsumerState<BiometricVaultUnlock> {
   late final BiometricService _service = ref.read(biometricServiceProvider);
-  late final BiometricUnlockStore _store =
-      ref.read(biometricUnlockStoreProvider);
+  late final BiometricUnlockStore _store = ref.read(
+    biometricUnlockStoreProvider,
+  );
 
   bool _busy = false;
 
@@ -38,7 +39,7 @@ class _BiometricVaultUnlockState extends ConsumerState<BiometricVaultUnlock> {
         widget.onError?.call(BiometricResult.unavailable);
         return;
       }
-      
+
       if (layer == BiometricLayer.vault) {
         final secret = await _store.readBioSecret();
         if (secret == null) {
@@ -64,13 +65,12 @@ class _BiometricVaultUnlockState extends ConsumerState<BiometricVaultUnlock> {
       try {
         await _store.clearBioSecret();
       } on BiometricUnavailableException {
-      } on BiometricCancelledException {
-      }
+      } on BiometricCancelledException {}
       if (mounted) {
         ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
         ref.invalidate(biometricEnabledProvider(BiometricLayer.admin));
       }
-      widget.onError?.call(BiometricResult.error);
+      widget.onError?.call(BiometricResult.keyInvalidated);
     } on BiometricUnavailableException {
       widget.onError?.call(BiometricResult.unavailable);
     } finally {
@@ -82,8 +82,12 @@ class _BiometricVaultUnlockState extends ConsumerState<BiometricVaultUnlock> {
   Widget build(BuildContext context) {
     final available =
         ref.watch(biometricAvailableProvider).valueOrNull ?? false;
-    final isVaultEnabled = ref.watch(biometricEnabledProvider(BiometricLayer.vault)).valueOrNull ?? false;
-    final isAdminEnabled = ref.watch(biometricEnabledProvider(BiometricLayer.admin)).valueOrNull ?? false;
+    final isVaultEnabled =
+        ref.watch(biometricEnabledProvider(BiometricLayer.vault)).valueOrNull ??
+        false;
+    final isAdminEnabled =
+        ref.watch(biometricEnabledProvider(BiometricLayer.admin)).valueOrNull ??
+        false;
 
     if (!available || (!isVaultEnabled && !isAdminEnabled)) {
       return const SizedBox.shrink();

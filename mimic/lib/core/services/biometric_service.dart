@@ -1,11 +1,19 @@
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
 
-enum BiometricResult { success, failed, unavailable, notEnrolled, lockedOut, error }
+enum BiometricResult {
+  success,
+  failed,
+  unavailable,
+  notEnrolled,
+  lockedOut,
+  error,
+  keyInvalidated,
+}
 
 class BiometricService {
   BiometricService({LocalAuthentication? auth})
-      : _auth = auth ?? LocalAuthentication();
+    : _auth = auth ?? LocalAuthentication();
 
   final LocalAuthentication _auth;
 
