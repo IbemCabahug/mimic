@@ -60,16 +60,30 @@ class IntruderService {
 
       try {
         final image = await controller.takePicture();
-        final bytes = await image.readAsBytes();
+        try {
+          final bytes = await image.readAsBytes();
 
-        final encryptedBytes = await crypto.encryptBreakInEvidenceBytes(bytes);
+          final encryptedBytes = await crypto.encryptBreakInEvidenceBytes(bytes);
 
-        final appDir = await getApplicationDocumentsDirectory();
-        final timestamp = DateTime.now().microsecondsSinceEpoch;
-        final fileName = '$_prefix$timestamp$_extension';
-        final filePath = p.join(appDir.path, fileName);
-        final file = File(filePath);
-        await file.writeAsBytes(encryptedBytes);
+          final appDir = await getApplicationDocumentsDirectory();
+          final timestamp = DateTime.now().microsecondsSinceEpoch;
+          final fileName = '$_prefix$timestamp$_extension';
+          final filePath = p.join(appDir.path, fileName);
+          final file = File(filePath);
+          await file.writeAsBytes(encryptedBytes);
+        } finally {
+          try {
+            final tempFile = File(image.path);
+            if (await tempFile.exists()) {
+              await tempFile.delete();
+            }
+          } catch (tempDeleteError) {
+            assert(() {
+              debugPrint('captureIntruder temp delete failed: $tempDeleteError');
+              return true;
+            }());
+          }
+        }
       } finally {
         await controller.dispose();
       }
