@@ -586,7 +586,6 @@ class _PinScreenState extends ConsumerState<PinScreen> {
             if (!kIsWeb && !_isCreateMode) const SizedBox(height: 16),
             if (!kIsWeb && !_isCreateMode)
               BiometricVaultUnlock(
-                autoStart: _remainingLockout == Duration.zero,
                 onUnlockedVault: (secret) => _authenticateWithSecret(secret),
                 onDecoyAdmin: () {
                   if (mounted) {
