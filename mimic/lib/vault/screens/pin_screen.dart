@@ -40,6 +40,8 @@ class _PinScreenState extends ConsumerState<PinScreen> {
   String _firstEnteredPin = '';
   Duration _remainingLockout = Duration.zero;
   Timer? _lockoutTimer;
+  Duration _lockoutCountdown = Duration.zero;
+  int _lockoutReconcileTick = 0;
 
   @override
   void initState() {
@@ -140,25 +142,54 @@ class _PinScreenState extends ConsumerState<PinScreen> {
 
   void _startLockoutTimer() {
     _lockoutTimer?.cancel();
-    _lockoutTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
-      final lockoutService = ref.read(lockoutServiceProvider);
-      final remaining = await lockoutService.remainingLockout();
-      if (mounted) {
-        if (remaining <= Duration.zero) {
-          timer.cancel();
-          setState(() {
-            _remainingLockout = Duration.zero;
-            _error = null;
-          });
-        } else {
-          setState(() {
-            _remainingLockout = remaining;
-            _error = 'Try again in ${_formatDuration(remaining)}';
-          });
-        }
-      } else {
-        timer.cancel();
+    final lockoutService = ref.read(lockoutServiceProvider);
+    lockoutService.remainingLockout().then((initialRemaining) {
+      if (!mounted) return;
+      if (initialRemaining <= Duration.zero) {
+        setState(() { _remainingLockout = Duration.zero; _error = null; });
+        return;
       }
+      _lockoutCountdown = initialRemaining;
+      _lockoutReconcileTick = 0;
+      _lockoutTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        if (!mounted) { timer.cancel(); return; }
+        _lockoutCountdown -= const Duration(seconds: 1);
+        if (_lockoutCountdown > Duration.zero) {
+          setState(() {
+            _remainingLockout = _lockoutCountdown;
+            _error = 'Try again in ${_formatDuration(_lockoutCountdown)}';
+          });
+          _lockoutReconcileTick++;
+          if (_lockoutReconcileTick >= 5) {
+            _lockoutReconcileTick = 0;
+            lockoutService.remainingLockout().then((authoritative) {
+              if (!mounted) return;
+              if (authoritative <= Duration.zero) {
+                timer.cancel();
+                setState(() { _remainingLockout = Duration.zero; _error = null; });
+                return;
+              }
+              _lockoutCountdown = authoritative;
+              setState(() {
+                _remainingLockout = _lockoutCountdown;
+                _error = 'Try again in ${_formatDuration(_lockoutCountdown)}';
+              });
+            });
+          }
+          return;
+        }
+        timer.cancel();
+        setState(() { _remainingLockout = Duration.zero; _error = null; });
+        _confirmLockoutExpiry();
+      });
+    });
+  }
+
+  void _confirmLockoutExpiry() {
+    ref.read(lockoutServiceProvider).remainingLockout().then((authoritative) {
+      if (!mounted) return;
+      if (authoritative <= Duration.zero) return;
+      _startLockoutTimer();
     });
   }
 

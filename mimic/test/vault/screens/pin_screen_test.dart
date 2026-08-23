@@ -208,7 +208,9 @@ void main() {
 
     fakeClock.value += 31000;
     fakeNow = fakeNow.add(const Duration(seconds: 31));
-    await tester.pump(const Duration(seconds: 1)); 
+    for (int i = 0; i < 31; i++) {
+      await tester.pump(const Duration(seconds: 1));
+    }
     await tester.pumpAndSettle();
     
     expect(find.textContaining('Try again in '), findsNothing);
