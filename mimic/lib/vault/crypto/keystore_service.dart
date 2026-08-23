@@ -10,6 +10,14 @@ abstract class KeystoreService {
   Future<void> deleteKey();
 }
 
+abstract class BiometricKeystoreService {
+  Future<void> ensureBioKey();
+  Future<String> bioWrap(String base64Data);
+  Future<String> bioUnwrap(String base64Data);
+  Future<void> deleteBioKey();
+  Future<int> bioAvailable();
+}
+
 /// Invokes native PBKDF2-HMAC-SHA256 over MethodChannel('mimic/keystore').
 Future<Uint8List> nativePbkdf2(
   Uint8List password,
@@ -28,7 +36,7 @@ Future<Uint8List> nativePbkdf2(
   return result;
 }
 
-class AndroidKeystoreService implements KeystoreService {
+class AndroidKeystoreService implements KeystoreService, BiometricKeystoreService {
   static const MethodChannel _channel = MethodChannel('mimic/keystore');
 
   @override
@@ -71,9 +79,107 @@ class AndroidKeystoreService implements KeystoreService {
     if (kIsWeb) return;
     await _channel.invokeMethod('deleteKey');
   }
+
+  @override
+  Future<void> ensureBioKey() async {
+    if (kIsWeb) {
+      throw const BiometricUnavailableException(
+        code: 'WEB_UNSUPPORTED',
+        message: 'Biometrics are not supported on web',
+      );
+    }
+    try {
+      await _channel.invokeMethod('ensureBioKey');
+    } on PlatformException catch (e) {
+      throw _mapBioPlatformException(e);
+    }
+  }
+
+  @override
+  Future<String> bioWrap(String base64Data) async {
+    if (kIsWeb) {
+      throw const BiometricUnavailableException(
+        code: 'WEB_UNSUPPORTED',
+        message: 'Biometrics are not supported on web',
+      );
+    }
+    final bytes = base64Decode(base64Data);
+    try {
+      final result = await _channel.invokeMethod<Uint8List>('bioWrap', {'bytes': bytes});
+      if (result == null) {
+        throw const BiometricUnavailableException(
+          code: 'NULL_RESULT',
+          message: 'bioWrap returned null',
+        );
+      }
+      return base64Encode(result);
+    } on PlatformException catch (e) {
+      throw _mapBioPlatformException(e);
+    }
+  }
+
+  @override
+  Future<String> bioUnwrap(String base64Data) async {
+    if (kIsWeb) {
+      throw const BiometricUnavailableException(
+        code: 'WEB_UNSUPPORTED',
+        message: 'Biometrics are not supported on web',
+      );
+    }
+    final bytes = base64Decode(base64Data);
+    try {
+      final result = await _channel.invokeMethod<Uint8List>('bioUnwrap', {'bytes': bytes});
+      if (result == null) {
+        throw const BiometricUnavailableException(
+          code: 'NULL_RESULT',
+          message: 'bioUnwrap returned null',
+        );
+      }
+      return base64Encode(result);
+    } on PlatformException catch (e) {
+      throw _mapBioPlatformException(e);
+    }
+  }
+
+  @override
+  Future<void> deleteBioKey() async {
+    if (kIsWeb) {
+      throw const BiometricUnavailableException(
+        code: 'WEB_UNSUPPORTED',
+        message: 'Biometrics are not supported on web',
+      );
+    }
+    try {
+      await _channel.invokeMethod('deleteBioKey');
+    } on PlatformException catch (e) {
+      throw _mapBioPlatformException(e);
+    }
+  }
+
+  @override
+  Future<int> bioAvailable() async {
+    if (kIsWeb) {
+      throw const BiometricUnavailableException(
+        code: 'WEB_UNSUPPORTED',
+        message: 'Biometrics are not supported on web',
+      );
+    }
+    try {
+      final result = await _channel.invokeMethod<int>('bioAvailable');
+      if (result == null) {
+        throw const BiometricUnavailableException(
+          code: 'NULL_RESULT',
+          message: 'bioAvailable returned null',
+        );
+      }
+      return result;
+    } on PlatformException catch (e) {
+      throw _mapBioPlatformException(e);
+    }
+  }
 }
 
-class FakeKeystoreService implements KeystoreService {
+class FakeKeystoreService implements KeystoreService, BiometricKeystoreService {
   @override
   Future<void> ensureKey() async {}
 
@@ -97,6 +203,46 @@ class FakeKeystoreService implements KeystoreService {
 
   @override
   Future<void> deleteKey() async {}
+
+  @override
+  Future<void> ensureBioKey() async {
+    throw const BiometricUnavailableException(
+      code: 'FAKE_UNSUPPORTED',
+      message: 'Biometrics are not supported in FakeKeystoreService',
+    );
+  }
+
+  @override
+  Future<String> bioWrap(String base64Data) async {
+    throw const BiometricUnavailableException(
+      code: 'FAKE_UNSUPPORTED',
+      message: 'Biometrics are not supported in FakeKeystoreService',
+    );
+  }
+
+  @override
+  Future<String> bioUnwrap(String base64Data) async {
+    throw const BiometricUnavailableException(
+      code: 'FAKE_UNSUPPORTED',
+      message: 'Biometrics are not supported in FakeKeystoreService',
+    );
+  }
+
+  @override
+  Future<void> deleteBioKey() async {
+    throw const BiometricUnavailableException(
+      code: 'FAKE_UNSUPPORTED',
+      message: 'Biometrics are not supported in FakeKeystoreService',
+    );
+  }
+
+  @override
+  Future<int> bioAvailable() async {
+    throw const BiometricUnavailableException(
+      code: 'FAKE_UNSUPPORTED',
+      message: 'Biometrics are not supported in FakeKeystoreService',
+    );
+  }
 }
 
 class KeystoreInvalidException implements Exception {
@@ -110,4 +256,52 @@ class KeystoreWrapException implements Exception {
   KeystoreWrapException([this.message = 'Keystore wrap failed']);
   @override
   String toString() => 'KeystoreWrapException: $message';
+}
+
+class BiometricKeyInvalidatedException implements Exception {
+  final String message;
+  const BiometricKeyInvalidatedException([
+    this.message = 'Biometric enrollment changed. Please unlock with your PIN.',
+  ]);
+
+  @override
+  String toString() => 'BiometricKeyInvalidatedException: $message';
+}
+
+class BiometricCancelledException implements Exception {
+  final String message;
+  const BiometricCancelledException([
+    this.message = 'Biometric prompt was cancelled.',
+  ]);
+
+  @override
+  String toString() => 'BiometricCancelledException: $message';
+}
+
+class BiometricUnavailableException implements Exception {
+  final String code;
+  final String? message;
+
+  const BiometricUnavailableException({
+    required this.code,
+    this.message,
+  });
+
+  @override
+  String toString() =>
+      'BiometricUnavailableException(code: $code, message: $message)';
+}
+
+Exception _mapBioPlatformException(PlatformException e) {
+  switch (e.code) {
+    case 'BIO_KEY_INVALID':
+      return const BiometricKeyInvalidatedException();
+    case 'BIO_CANCELLED':
+      return const BiometricCancelledException();
+    default:
+      return BiometricUnavailableException(
+        code: e.code,
+        message: e.message,
+      );
+  }
 }
