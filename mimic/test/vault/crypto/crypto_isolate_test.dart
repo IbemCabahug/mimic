@@ -521,8 +521,8 @@ void main() {
       final src = createTempFile('locked_src.bin', [1, 2, 3, 4]);
       final enc = File(p.join(tempDir.path, 'locked_enc.bin'));
 
-      expect(
-        () async => await vaultCrypto.encryptStreamSystem(src, enc),
+      await expectLater(
+        vaultCrypto.encryptStreamSystem(src, enc),
         throwsA(isA<Exception>().having((e) => e.toString(), 'message', contains('Vault is locked'))),
         reason: 'Locked vault must throw Exception("Vault is locked")',
       );
@@ -547,6 +547,107 @@ void main() {
 
       expect(dec.readAsBytesSync(), equals(pattern),
           reason: 'Round trip through new encryptStreamSystem and decryptStreamSystem must match byte-for-byte');
+    });
+    test('T-WIRE-V1: a v1 blob decrypts through the delegated isolate path byte-identically', () async {
+      const size = 128 * 1024 + 37;
+      final pattern = Uint8List(size);
+      for (int i = 0; i < size; i++) {
+        pattern[i] = (i * 23 + 11) & 0xFF;
+      }
+
+      final src = createTempFile('wire_v1_src.bin', pattern);
+      final enc = createTempFile('wire_v1_enc.bin');
+      final dec = createTempFile('wire_v1_dec.bin');
+
+      // Pre-existing inline expectation: encryptStreamSystem -> decryptStreamSystem
+      // round-trips. The type 1 branch now delegates to the background isolate;
+      // the recovered bytes must not change.
+      await vaultCrypto.encryptStreamSystem(src, enc);
+      await vaultCrypto.decryptStreamSystem(enc, dec);
+
+      expect(dec.readAsBytesSync(), equals(pattern),
+          reason: 'Delegated v1 decryption must be byte-identical to the inline expectation');
+    });
+
+    test('T-WIRE-C2: a c2 blob decrypts through the delegated isolate path byte-identically', () async {
+      // Crosses several 64 KB chunk boundaries and ends mid-block.
+      const size = 2 * 1024 * 1024 + 13;
+      final pattern = Uint8List(size);
+      for (int i = 0; i < size; i++) {
+        pattern[i] = (i * 19 + 23) & 0xFF;
+      }
+
+      final src = createTempFile('wire_c2_src.bin', pattern);
+      final enc = createTempFile('wire_c2_enc.bin');
+      final dec = createTempFile('wire_c2_dec.bin');
+
+      // Pre-existing inline expectation: CTR payload written by
+      // encryptStreamSystemCtr round-trips byte-for-byte through full-file decrypt.
+      await vaultCrypto.encryptStreamSystemCtr(src, enc);
+      await vaultCrypto.decryptStreamSystem(enc, dec);
+
+      expect(dec.readAsBytesSync(), equals(pattern),
+          reason: 'Delegated c2 decryption must be byte-identical to the inline expectation');
+    });
+
+    test('T-CHANGEPIN-WIRE: isolate decrypt recovers plaintext after changePin (DEK, not PIN KEK)', () async {
+      const size = 64 * 1024 + 21;
+      final pattern = Uint8List(size);
+      for (int i = 0; i < size; i++) {
+        pattern[i] = (i * 29 + 31) & 0xFF;
+      }
+
+      // Fresh provision under a first pin, independent of the setUp fixture.
+      final freshVault = VaultCrypto(FakePlatformService(), FakeKeystoreService());
+      await freshVault.initialize('111111');
+
+      final src = createTempFile('changepin_wire_src.bin', pattern);
+      final enc = createTempFile('changepin_wire_enc.bin');
+      final dec = createTempFile('changepin_wire_dec.bin');
+
+      // Blob keyed by the live master DEK before the swap.
+      await freshVault.encryptStreamSystem(src, enc);
+
+      // changePin rewraps the SAME DEK under a new PIN KEK; _derivedKey itself is
+      // unchanged. Any delegation that passes a freshly derived PIN key instead of
+      // the DEK produces garbage or a padding failure right here.
+      await freshVault.changePin('222222');
+
+      await freshVault.decryptStreamSystem(enc, dec);
+
+      expect(dec.readAsBytesSync(), equals(pattern),
+          reason: 'After changePin the DEK still decrypts the blob; handing a freshly derived PIN KEK to the isolate would corrupt this round trip');
+    });
+
+    test('T-LOCKED-DECRYPT: decryptStreamSystem on a locked vault throws before any isolate work', () async {
+      final v1Src = createTempFile('locked_v1_src.bin', [1, 2, 3, 4, 5, 6, 7, 8]);
+      final v1Blob = createTempFile('locked_v1_blob.bin');
+      await vaultCrypto.encryptStreamSystem(v1Src, v1Blob);
+
+      final c2Src = createTempFile('locked_c2_src.bin', List.generate(40, (i) => i));
+      final c2Blob = createTempFile('locked_c2_blob.bin');
+      await vaultCrypto.encryptStreamSystemCtr(c2Src, c2Blob);
+
+      vaultCrypto.lock();
+
+      final decV1 = File(p.join(tempDir.path, 'locked_v1_out.bin'));
+      await expectLater(
+        vaultCrypto.decryptStreamSystem(v1Blob, decV1),
+        throwsA(isA<Exception>().having((e) => e.toString(), 'message', contains('Vault is locked'))),
+        reason: 'Type 1 branch must reject a locked vault before delegating to the isolate',
+      );
+
+      final decC2 = File(p.join(tempDir.path, 'locked_c2_out.bin'));
+      await expectLater(
+        vaultCrypto.decryptStreamSystem(c2Blob, decC2),
+        throwsA(isA<Exception>().having((e) => e.toString(), 'message', contains('Vault is locked'))),
+        reason: 'Type 3 branch must reject a locked vault before delegating to the isolate',
+      );
+
+      expect(decV1.existsSync(), isFalse,
+          reason: 'No destination file should be created by the locked-vault guard');
+      expect(decC2.existsSync(), isFalse,
+          reason: 'No destination file should be created by the locked-vault guard');
     });
   });
 }

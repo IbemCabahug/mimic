@@ -924,90 +924,11 @@ class VaultCrypto extends ChangeNotifier {
 
       if (magicType == 1) {
         if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
-        
-        final iv = Uint8List(_ivLength);
-        final ivRead = await raf.readInto(iv);
-        if (ivRead < _ivLength) {
-          throw const CorruptedMediaFileException();
-        }
-
-        final destRaf = await dest.open(mode: FileMode.write);
-        try {
-          final cipher = CBCBlockCipher(AESEngine());
-          cipher.init(false, ParametersWithIV(KeyParameter(_derivedKey!), iv));
-
-          final buffer = Uint8List(64 * 1024);
-          final outBuffer = Uint8List(64 * 1024 + 16);
-          var bytesRead = 0;
-          
-          var leftoverCipher = <int>[];
-          Uint8List? heldPlaintextBlock;
-
-          while ((bytesRead = await raf.readInto(buffer)) > 0) {
-            int offset = 0;
-            int outOffset = 0;
-            
-            if (leftoverCipher.isNotEmpty) {
-              final needed = 16 - leftoverCipher.length;
-              if (bytesRead < needed) {
-                leftoverCipher.addAll(buffer.sublist(0, bytesRead));
-                continue;
-              } else {
-                final temp = Uint8List(16);
-                temp.setRange(0, leftoverCipher.length, leftoverCipher);
-                temp.setRange(leftoverCipher.length, 16, buffer.sublist(0, needed));
-                
-                final tempOut = Uint8List(16);
-                cipher.processBlock(temp, 0, tempOut, 0);
-                
-                if (heldPlaintextBlock != null) {
-                  outBuffer.setRange(outOffset, outOffset + 16, heldPlaintextBlock);
-                  outOffset += 16;
-                }
-                heldPlaintextBlock = tempOut;
-                
-                offset = needed;
-                leftoverCipher.clear();
-              }
-            }
-
-            while (offset + 16 <= bytesRead) {
-              final tempOut = Uint8List(16);
-              cipher.processBlock(buffer, offset, tempOut, 0);
-              
-              if (heldPlaintextBlock != null) {
-                outBuffer.setRange(outOffset, outOffset + 16, heldPlaintextBlock);
-                outOffset += 16;
-              }
-              heldPlaintextBlock = tempOut;
-              offset += 16;
-            }
-
-            if (outOffset > 0) {
-              await destRaf.writeFrom(outBuffer, 0, outOffset);
-            }
-
-            if (offset < bytesRead) {
-              leftoverCipher.addAll(buffer.sublist(offset, bytesRead));
-            }
-          }
-
-          if (leftoverCipher.isNotEmpty) {
-            throw const CorruptedMediaFileException();
-          }
-
-          if (heldPlaintextBlock != null) {
-            final padLength = heldPlaintextBlock[15];
-            if (padLength > 0 && padLength <= 16) {
-              await destRaf.writeFrom(heldPlaintextBlock.sublist(0, 16 - padLength));
-            } else {
-              throw const CorruptedMediaFileException();
-            }
-          }
-        } finally {
-          await destRaf.flush();
-          await destRaf.close();
-        }
+        await cryptoIsolateDecryptFile(
+          key: Uint8List.fromList(_derivedKey!),
+          srcPath: src.path,
+          destPath: dest.path,
+        );
       } else if (magicType == 2) {
         final systemKey = await _getSystemKey();
         final iv = Uint8List(16);
@@ -1050,44 +971,11 @@ class VaultCrypto extends ChangeNotifier {
         }
       } else if (magicType == 3) {
         if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
-        final iv = Uint8List(16);
-        final ivRead = await raf.readInto(iv);
-        if (ivRead < 16) throw const CorruptedMediaFileException();
-
-        final destRaf = await dest.open(mode: FileMode.write);
-        try {
-          final aes = AESEngine()..init(true, KeyParameter(_derivedKey!));
-          final counter = Uint8List.fromList(iv);
-          final ksBlock = Uint8List(16);
-
-          final buffer = Uint8List(64 * 1024);
-          final outBuffer = Uint8List(64 * 1024);
-          var bytesRead = 0;
-
-          while ((bytesRead = await raf.readInto(buffer)) > 0) {
-            int offset = 0;
-            while (offset + 16 <= bytesRead) {
-              aes.processBlock(counter, 0, ksBlock, 0);
-              for (int i = 0; i < 16; i++) {
-                outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
-              }
-              _ctrIncrement(counter);
-              offset += 16;
-            }
-            if (offset < bytesRead) {
-              aes.processBlock(counter, 0, ksBlock, 0);
-              final remaining = bytesRead - offset;
-              for (int i = 0; i < remaining; i++) {
-                outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
-              }
-              _ctrIncrement(counter);
-            }
-            await destRaf.writeFrom(outBuffer, 0, bytesRead);
-          }
-        } finally {
-          await destRaf.flush();
-          await destRaf.close();
-        }
+        await cryptoIsolateDecryptFile(
+          key: Uint8List.fromList(_derivedKey!),
+          srcPath: src.path,
+          destPath: dest.path,
+        );
       }
     } finally {
       await raf.close();
