@@ -186,13 +186,16 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
         throw const CorruptedMediaFileException('Invalid ciphertext: missing magic header');
       }
       bool magicMatches = true;
+      bool magicMatchesCtrV2 = true;
       for (int i = 0; i < kMediaMagicV1.length; i++) {
         if (magicBuffer[i] != kMediaMagicV1[i]) {
           magicMatches = false;
-          break;
+        }
+        if (magicBuffer[i] != kMediaMagicCtrV2[i]) {
+          magicMatchesCtrV2 = false;
         }
       }
-      if (!magicMatches) {
+      if (!magicMatches && !magicMatchesCtrV2) {
         throw const UnsupportedMediaFormatException('Unsupported media format header');
       }
 
@@ -204,6 +207,9 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
 
       final destRaf = await dest.open(mode: FileMode.write);
       try {
+        if (magicMatchesCtrV2) {
+          await _decryptStreamCtrV2(key, iv, raf, destRaf, progressPort);
+        } else {
         final cipher = CBCBlockCipher(AESEngine());
         cipher.init(false, ParametersWithIV(KeyParameter(key), iv));
 
@@ -283,6 +289,7 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
         } else {
           throw const CorruptedMediaFileException('Invalid ciphertext: empty payload');
         }
+        }
       } finally {
         await destRaf.flush();
         await destRaf.close();
@@ -314,6 +321,62 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
     });
   } finally {
     params.key.fillRange(0, params.key.length, 0);
+  }
+}
+
+/// Decrypts the c2 payload (AES-CTR under the master DEK) from [raf], which
+/// must already be positioned past the 8-byte magic and the 16-byte IV, into
+/// [destRaf]. Byte-for-byte mirror of the inline production c2 branch in
+/// VaultCrypto.decryptStreamSystem (magicType == 3), including the partial
+/// final-block handling.
+Future<void> _decryptStreamCtrV2(
+  Uint8List key,
+  Uint8List iv,
+  RandomAccessFile raf,
+  RandomAccessFile destRaf,
+  SendPort? progressPort,
+) async {
+  final aes = AESEngine()..init(true, KeyParameter(key));
+  final counter = Uint8List.fromList(iv);
+  final ksBlock = Uint8List(16);
+
+  final buffer = Uint8List(64 * 1024);
+  final outBuffer = Uint8List(64 * 1024);
+  var bytesRead = 0;
+  var totalBytesRead = 0;
+
+  while ((bytesRead = await raf.readInto(buffer)) > 0) {
+    totalBytesRead += bytesRead;
+    if (progressPort != null) {
+      progressPort.send(totalBytesRead);
+    }
+
+    int offset = 0;
+    while (offset + 16 <= bytesRead) {
+      aes.processBlock(counter, 0, ksBlock, 0);
+      for (int i = 0; i < 16; i++) {
+        outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+      }
+      _ctrIncrement(counter);
+      offset += 16;
+    }
+    if (offset < bytesRead) {
+      aes.processBlock(counter, 0, ksBlock, 0);
+      final remaining = bytesRead - offset;
+      for (int i = 0; i < remaining; i++) {
+        outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+      }
+      _ctrIncrement(counter);
+    }
+    await destRaf.writeFrom(outBuffer, 0, bytesRead);
+  }
+}
+
+/// Increments a 16-byte big-endian CTR counter block.
+void _ctrIncrement(Uint8List counter) {
+  for (int i = 15; i >= 0; i--) {
+    counter[i] = (counter[i] + 1) & 0xFF;
+    if (counter[i] != 0) break;
   }
 }
 
@@ -417,7 +480,9 @@ Future<void> cryptoIsolateEncryptFile({
 
 /// Spawns a background isolate to decrypt [srcPath] to [destPath].
 ///
-/// NOTE: Supports v1 only and must not be used for playback until the classifier is ported.
+/// Supports the v1 (MVKEYv1\0, AES-CBC) and c2 (MVKEYc2\0, AES-CTR) formats;
+/// legacy headerless blobs and c1 blobs are rejected as unsupported. Must not
+/// be used for playback until the classifier is ported.
 Future<void> cryptoIsolateDecryptFile({
   required Uint8List key,
   required String srcPath,
