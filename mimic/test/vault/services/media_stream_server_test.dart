@@ -1,15 +1,22 @@
 import 'package:mimic/vault/crypto/keystore_service.dart';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mimic/vault/crypto/media_format.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/core/services/platform_service.dart';
+import 'package:mimic/vault/security/auto_lock.dart';
+import 'package:mimic/vault/screens/video_player_screen.dart';
 import 'package:mimic/vault/services/video_vault_service.dart';
 import 'package:mimic/vault/services/media_stream_server.dart';
+import 'package:mimic/vault/services/local_streaming_server.dart';
 import 'package:path/path.dart' as p;
+import 'package:pointycastle/export.dart';
 
 class FakePlatformService implements PlatformService {
   final Map<String, String> _secureStorage = {};
@@ -193,6 +200,177 @@ void main() {
         () => MediaStreamServer.instance.urlFor(testId),
         throwsA(isA<StateError>()),
       );
+    });
+
+    test('e. C10/M34: after the manual-lock teardown path (AutoLock.dispose), the previously valid URL no longer connects', () async {
+      MediaStreamServer.instance.init(
+        videoVaultService: videoVaultService,
+        resolveVaultFile: platformService.resolveVaultFile,
+        decryptRange: crypto.decryptRangeSystem,
+      );
+
+      final url = await MediaStreamServer.instance.urlFor(testId);
+      final first = await makeGet(url);
+      expect(first.statusCode, 200);
+      await readBody(first);
+
+      AutoLock().dispose();
+
+      final deadline = DateTime.now().add(const Duration(seconds: 3));
+      var stopped = false;
+      while (DateTime.now().isBefore(deadline)) {
+        try {
+          final r = await makeGet(url);
+          await readBody(r);
+        } catch (_) {
+          stopped = true;
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+      expect(stopped, isTrue,
+          reason: 'AutoLock.dispose must stop the media server so a locked vault never serves content');
+    });
+
+    testWidgets('f. M34: popping VideoPlayerScreen stops the media server', (tester) async {
+      MediaStreamServer.instance.init(
+        videoVaultService: videoVaultService,
+        resolveVaultFile: platformService.resolveVaultFile,
+        decryptRange: crypto.decryptRangeSystem,
+      );
+
+      late Uri url;
+      await tester.runAsync(() async {
+        url = await MediaStreamServer.instance.urlFor(testId);
+        final first = await makeGet(url);
+        expect(first.statusCode, 200);
+        await readBody(first);
+      });
+
+      await tester.pumpWidget(MaterialApp(home: VideoPlayerScreen(videoId: testId)));
+      await tester.pump();
+      // Give _initializePlayer's async work (real file IO, missing
+      // video_player plugin) time to settle before popping.
+      await tester.runAsync(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+      });
+      await tester.pump();
+
+      await tester.tap(find.byIcon(Icons.arrow_back));
+      await tester.pumpAndSettle();
+
+      await tester.runAsync(() async {
+        final deadline = DateTime.now().add(const Duration(seconds: 3));
+        var stopped = false;
+        while (DateTime.now().isBefore(deadline)) {
+          try {
+            final r = await makeGet(url);
+            await readBody(r);
+          } catch (_) {
+            stopped = true;
+            break;
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+        expect(stopped, isTrue,
+            reason: 'VideoPlayerScreen.dispose must stop the media server on pop');
+      });
+    });
+
+    test('g. C10: a real c1 blob is refused rather than served', () async {
+      // Build a REAL c1 blob: kMediaMagicCtrV1 + 16-byte IV + AES-CTR
+      // ciphertext under the device-local system key (the legacy format).
+      final random = Random.secure();
+      final rawStoredKey = await platformService.secureRead('system_key');
+      final Uint8List systemKey;
+      if (rawStoredKey != null) {
+        systemKey = base64Decode(rawStoredKey);
+      } else {
+        systemKey =
+            Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
+        await platformService.secureWrite('system_key', base64Encode(systemKey));
+        await platformService.secureWrite('system_key_provisioned', 'true');
+      }
+
+      const marker = 'MIMIC_C1_SERVABLE_MARKER';
+      final plainBytes = Uint8List.fromList([
+        ...utf8.encode(marker),
+        ...List<int>.filled(4096, 0x42),
+      ]);
+      final iv = Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
+      final aes = AESEngine()..init(true, KeyParameter(systemKey));
+      final counter = Uint8List.fromList(iv);
+      final ksBlock = Uint8List(16);
+      final ciphertext = Uint8List(plainBytes.length);
+      var off = 0;
+      while (off < plainBytes.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        final n =
+            (plainBytes.length - off) < 16 ? (plainBytes.length - off) : 16;
+        for (int i = 0; i < n; i++) {
+          ciphertext[off + i] = plainBytes[off + i] ^ ksBlock[i];
+        }
+        for (int i = 15; i >= 0; i--) {
+          counter[i] = (counter[i] + 1) & 0xFF;
+          if (counter[i] != 0) break;
+        }
+        off += n;
+      }
+
+      const c1Id = 'test-video-c1';
+      final c1File = await platformService.resolveVaultFile(c1Id);
+      final c1Blob = Uint8List(24 + ciphertext.length);
+      c1Blob.setRange(0, 8, kMediaMagicCtrV1);
+      c1Blob.setRange(8, 24, iv);
+      c1Blob.setRange(24, c1Blob.length, ciphertext);
+      await c1File.writeAsBytes(c1Blob);
+
+      // Sanity: the blob is genuinely servable content — decryptRangeSystem's
+      // legacy c1 branch recovers the marker while unlocked.
+      final probe = await crypto.decryptRangeSystem(c1File, 0, marker.length);
+      expect(utf8.decode(probe), equals(marker));
+
+      // The server itself must refuse it instead of serving plaintext.
+      final server = LocalStreamingServer(
+        resolveVaultFile: platformService.resolveVaultFile,
+        decryptRange: crypto.decryptRangeSystem,
+      );
+      await server.start();
+      try {
+        final url = Uri.parse(
+            'http://127.0.0.1:${server.port}/media/$c1Id?token=${server.token}');
+        final response = await makeGet(url);
+        expect(response.statusCode, 500,
+            reason: 'a c1 blob must be refused with the non-CTR rejection');
+        final body = await readBody(response);
+        expect(utf8.decode(body), contains('Blob not CTR-encrypted'));
+      } finally {
+        await server.stop();
+      }
+    });
+
+    test('h. C10 regression guard: a c2 blob is still served correctly while unlocked', () async {
+      final srcFile = File(p.join(tempDir.path, 'src_c2.bin'));
+      await srcFile.writeAsBytes(plaintext);
+      const c2Id = 'test-video-c2';
+      final c2BlobFile = await platformService.resolveVaultFile(c2Id);
+      await crypto.encryptStreamSystemCtr(srcFile, c2BlobFile);
+      await srcFile.delete();
+      expect((await c2BlobFile.readAsBytes()).sublist(0, 8),
+          equals(kMediaMagicCtrV2));
+
+      MediaStreamServer.instance.init(
+        videoVaultService: videoVaultService,
+        resolveVaultFile: platformService.resolveVaultFile,
+        decryptRange: crypto.decryptRangeSystem,
+      );
+
+      final url = await MediaStreamServer.instance.urlFor(c2Id);
+      final response = await makeGet(url);
+      expect(response.statusCode, 200);
+      final body = await readBody(response);
+      expect(body, equals(plaintext),
+          reason: 'c2 must remain servable byte-for-byte after restricting the accepted magic to c2-only');
     });
   });
 }

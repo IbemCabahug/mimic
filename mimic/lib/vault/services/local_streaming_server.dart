@@ -135,13 +135,15 @@ class LocalStreamingServer {
         try {
           final magic = Uint8List(8);
           await raf.readInto(magic);
-          bool isC1 = true;
+          // C10: accept c2 ONLY. Legacy c1 blobs are keyed by the device-local
+          // system key, which stays readable while the vault is locked, so
+          // serving a c1 blob here would leak plaintext from a locked vault.
+          // A c1 blob falls through to the non-CTR rejection below.
           bool isC2 = true;
           for (int i = 0; i < 8; i++) {
-            if (magic[i] != kMediaMagicCtrV1[i]) isC1 = false;
             if (magic[i] != kMediaMagicCtrV2[i]) isC2 = false;
           }
-          isCtr = isC1 || isC2;
+          isCtr = isC2;
         } finally {
           await raf.close();
         }

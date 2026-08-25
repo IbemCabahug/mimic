@@ -1,5 +1,5 @@
 // lib/vault/screens/video_player_screen.dart
-import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
@@ -93,12 +93,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     _chewieController?.dispose();
     _videoPlayerController?.pause();
     _videoPlayerController?.dispose();
-    try {
-      final file = File('');
-      if (file.existsSync()) {
-        file.deleteSync();
-      }
-    } catch (_) {}
+    unawaited(MediaStreamServer.instance.stop());
     super.dispose();
   }
 

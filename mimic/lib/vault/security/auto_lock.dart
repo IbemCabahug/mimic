@@ -185,8 +185,10 @@ class AutoLock with WidgetsBindingObserver {
     dispose();
   }
 
-  /// Cancels the timer. Called when manually locked or panic mode triggers.
+  /// Cancels the timer and stops the media server. Called when manually locked
+  /// or panic mode triggers, so every manual lock path tears down streaming.
   void dispose() {
+    unawaited(MediaStreamServer.instance.stop());
     _timer?.cancel();
     _timer = null;
     _suspendTimer?.cancel();
