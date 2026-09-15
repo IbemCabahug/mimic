@@ -29,6 +29,25 @@ class CryptoIsolateEncryptParams {
   });
 }
 
+/// Parameters passed to the crypto worker isolate for c2 (CTR) encryption.
+class CryptoIsolateEncryptCtrParams {
+  final Uint8List key;
+  final Uint8List iv;
+  final String srcPath;
+  final String destPath;
+  final SendPort? progressPort;
+  final SendPort replyPort;
+
+  CryptoIsolateEncryptCtrParams({
+    required this.key,
+    required this.iv,
+    required this.srcPath,
+    required this.destPath,
+    this.progressPort,
+    required this.replyPort,
+  });
+}
+
 /// Parameters passed to the crypto worker isolate for decryption.
 class CryptoIsolateDecryptParams {
   final Uint8List key;
@@ -168,6 +187,73 @@ Future<void> isolateEncryptWorker(CryptoIsolateEncryptParams params) async {
   }
 }
 
+/// Top-level worker function running in a background isolate to encrypt a
+/// stream as c2 (AES-CTR under the passed key).
+///
+/// Writes the c2 header (kMediaMagicCtrV2 + IV) itself, then XORs the payload
+/// with the CTR keystream. Byte-for-byte identical to the inline c2 write this
+/// replaces, including the partial final-block handling.
+///
+/// WARNING: Zeroes params.key in finally; must never be invoked directly with a live caller key.
+Future<void> isolateEncryptCtrWorker(CryptoIsolateEncryptCtrParams params) async {
+  final key = params.key;
+  final iv = params.iv;
+  final src = File(params.srcPath);
+  final dest = File(params.destPath);
+  final progressPort = params.progressPort;
+
+  try {
+    final destRaf = await dest.open(mode: FileMode.write);
+    bool writeSucceeded = false;
+    try {
+      await destRaf.writeFrom(kMediaMagicCtrV2);
+      await destRaf.writeFrom(iv);
+
+      final srcRaf = await src.open(mode: FileMode.read);
+      try {
+        await _encryptStreamCtrV2(key, iv, srcRaf, destRaf, progressPort);
+        writeSucceeded = true;
+      } finally {
+        await srcRaf.close();
+      }
+    } finally {
+      await destRaf.flush();
+      await destRaf.close();
+      if (!writeSucceeded) {
+        try {
+          if (await dest.exists()) {
+            await dest.delete();
+          }
+        } catch (_) {}
+      }
+    }
+    params.replyPort.send(null);
+  } catch (e, st) {
+    final String errorKind;
+    final String message;
+    if (e is CorruptedMediaFileException) {
+      errorKind = 'corrupted';
+      message = e.message;
+    } else if (e is UnsupportedMediaFormatException) {
+      errorKind = 'unsupportedFormat';
+      message = e.message;
+    } else if (e is IOException) {
+      errorKind = 'io';
+      message = e.toString();
+    } else {
+      errorKind = 'unknown';
+      message = e.toString();
+    }
+    params.replyPort.send({
+      'errorKind': errorKind,
+      'message': message,
+      'stack': st.toString(),
+    });
+  } finally {
+    params.key.fillRange(0, params.key.length, 0);
+  }
+}
+
 /// Top-level worker function running in a background isolate to decrypt a stream.
 ///
 /// WARNING: Zeroes params.key in finally; must never be invoked directly with a live caller key.
@@ -186,16 +272,20 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
         throw const CorruptedMediaFileException('Invalid ciphertext: missing magic header');
       }
       bool magicMatches = true;
+      bool magicMatchesCtrV1 = true;
       bool magicMatchesCtrV2 = true;
       for (int i = 0; i < kMediaMagicV1.length; i++) {
         if (magicBuffer[i] != kMediaMagicV1[i]) {
           magicMatches = false;
         }
+        if (magicBuffer[i] != kMediaMagicCtrV1[i]) {
+          magicMatchesCtrV1 = false;
+        }
         if (magicBuffer[i] != kMediaMagicCtrV2[i]) {
           magicMatchesCtrV2 = false;
         }
       }
-      if (!magicMatches && !magicMatchesCtrV2) {
+      if (!magicMatches && !magicMatchesCtrV1 && !magicMatchesCtrV2) {
         throw const UnsupportedMediaFormatException('Unsupported media format header');
       }
 
@@ -207,7 +297,9 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
 
       final destRaf = await dest.open(mode: FileMode.write);
       try {
-        if (magicMatchesCtrV2) {
+        // c1 (CTR, system key) and c2 (CTR, master key) share the identical
+        // 24-byte header and CTR body; only the caller-supplied key differs.
+        if (magicMatchesCtrV1 || magicMatchesCtrV2) {
           await _decryptStreamCtrV2(key, iv, raf, destRaf, progressPort);
         } else {
         final cipher = CBCBlockCipher(AESEngine());
@@ -324,11 +416,10 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
   }
 }
 
-/// Decrypts the c2 payload (AES-CTR under the master DEK) from [raf], which
-/// must already be positioned past the 8-byte magic and the 16-byte IV, into
-/// [destRaf]. Byte-for-byte mirror of the inline production c2 branch in
-/// VaultCrypto.decryptStreamSystem (magicType == 3), including the partial
-/// final-block handling.
+/// Runs the shared AES-CTR body over [raf] into [destRaf]. This is the single
+/// CTR implementation for c1 (system key) and c2 (master DEK) decrypts and for
+/// the c2 encrypt write: CTR is symmetric, so one keystream-XOR body serves
+/// all three, including the partial final-block handling.
 Future<void> _decryptStreamCtrV2(
   Uint8List key,
   Uint8List iv,
@@ -370,6 +461,23 @@ Future<void> _decryptStreamCtrV2(
     }
     await destRaf.writeFrom(outBuffer, 0, bytesRead);
   }
+}
+
+/// Encrypts plaintext from [raf] (positioned at the start of the payload) into
+/// [destRaf] as AES-CTR under [key] starting from counter block [iv], writing
+/// progress to [progressPort] when provided.
+///
+/// CTR is symmetric — the same keystream XOR both encrypts and decrypts — so
+/// this is the encrypt-side path over the identical body used for c1/c2
+/// decrypts, and it must stay byte-for-byte identical to it.
+Future<void> _encryptStreamCtrV2(
+  Uint8List key,
+  Uint8List iv,
+  RandomAccessFile raf,
+  RandomAccessFile destRaf,
+  SendPort? progressPort,
+) {
+  return _decryptStreamCtrV2(key, iv, raf, destRaf, progressPort);
 }
 
 /// Increments a 16-byte big-endian CTR counter block.
@@ -478,11 +586,114 @@ Future<void> cryptoIsolateEncryptFile({
   }
 }
 
+/// Spawns a background isolate to encrypt [srcPath] to [destPath] as c2
+/// (AES-CTR under [key], 24-byte c2 header written by the worker).
+///
+/// A private copy of [key] is sent to the worker, which zeroes that copy on
+/// exit, so the caller's buffer is never touched.
+Future<void> cryptoIsolateEncryptFileCtr({
+  required Uint8List key,
+  required Uint8List iv,
+  required String srcPath,
+  required String destPath,
+  SendPort? progressPort,
+}) async {
+  final keyForWorker = Uint8List.fromList(key);
+  final replyPort = ReceivePort();
+  final exitPort = ReceivePort();
+  final errorPort = ReceivePort();
+
+  StreamSubscription<dynamic>? replySub;
+  StreamSubscription<dynamic>? errorSub;
+  StreamSubscription<dynamic>? exitSub;
+  Isolate? isolate;
+
+  try {
+    final params = CryptoIsolateEncryptCtrParams(
+      key: keyForWorker,
+      iv: iv,
+      srcPath: srcPath,
+      destPath: destPath,
+      progressPort: progressPort,
+      replyPort: replyPort.sendPort,
+    );
+
+    isolate = await Isolate.spawn(
+      isolateEncryptCtrWorker,
+      params,
+      onExit: exitPort.sendPort,
+      onError: errorPort.sendPort,
+      errorsAreFatal: true,
+    );
+
+    final completer = Completer<dynamic>();
+
+    replySub = replyPort.listen((message) {
+      if (!completer.isCompleted) {
+        completer.complete(message);
+      }
+    });
+
+    errorSub = errorPort.listen((errorData) {
+      if (!completer.isCompleted) {
+        String msg = 'Crypto isolate worker failed with unhandled error';
+        if (errorData is List && errorData.isNotEmpty) {
+          msg = errorData[0].toString();
+        } else if (errorData != null) {
+          msg = errorData.toString();
+        }
+        completer.completeError(Exception(msg));
+      }
+    });
+
+    exitSub = exitPort.listen((_) {
+      if (!completer.isCompleted) {
+        completer.completeError(Exception('Crypto isolate worker exited prematurely without returning a result'));
+      }
+    });
+
+    final response = await completer.future;
+    if (response is Map && response['errorKind'] != null) {
+      final kind = response['errorKind'] as String;
+      final message = response['message'] as String? ?? 'Crypto isolate operation failed';
+      switch (kind) {
+        case 'corrupted':
+          throw CorruptedMediaFileException(message);
+        case 'unsupportedFormat':
+          throw UnsupportedMediaFormatException(message);
+        case 'io':
+          throw FileSystemException(message);
+        case 'unknown':
+        default:
+          throw Exception(message);
+      }
+    }
+  } finally {
+    keyForWorker.fillRange(0, keyForWorker.length, 0);
+    try {
+      await replySub?.cancel();
+    } catch (_) {}
+    try {
+      await errorSub?.cancel();
+    } catch (_) {}
+    try {
+      await exitSub?.cancel();
+    } catch (_) {}
+    replyPort.close();
+    errorPort.close();
+    exitPort.close();
+    if (isolate != null) {
+      isolate.kill(priority: Isolate.beforeNextEvent);
+    }
+  }
+}
+
 /// Spawns a background isolate to decrypt [srcPath] to [destPath].
 ///
-/// Supports the v1 (MVKEYv1\0, AES-CBC) and c2 (MVKEYc2\0, AES-CTR) formats;
-/// legacy headerless blobs and c1 blobs are rejected as unsupported. Must not
-/// be used for playback until the classifier is ported.
+/// Supports the v1 (MVKEYv1\0, AES-CBC), c1 (MVKEYc1\0, AES-CTR under the
+/// system key) and c2 (MVKEYc2\0, AES-CTR under the master DEK) formats;
+/// legacy headerless blobs are rejected as unsupported. Must not be used for
+/// playback until the classifier is ported.
 Future<void> cryptoIsolateDecryptFile({
   required Uint8List key,
   required String srcPath,

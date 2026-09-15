@@ -1,5 +1,6 @@
 // test/vault/crypto/crypto_isolate_test.dart
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
 import 'dart:math';
@@ -9,9 +10,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/crypto/crypto_isolate.dart';
 import 'package:mimic/vault/crypto/keystore_service.dart';
+import 'package:mimic/vault/crypto/media_format.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/crypto/vault_kdf.dart';
 import 'package:path/path.dart' as p;
+import 'package:pointycastle/export.dart';
 
 class FakePlatformService implements PlatformService {
   final Map<String, String> _store = {};
@@ -648,6 +651,160 @@ void main() {
           reason: 'No destination file should be created by the locked-vault guard');
       expect(decC2.existsSync(), isFalse,
           reason: 'No destination file should be created by the locked-vault guard');
+    });
+
+    test('T-WIRE-CTR-ENC: encryptStreamSystemCtr writes a c2 blob through the isolate that round-trips and seeks', () async {
+      // Crosses several 64 KB chunk boundaries and ends mid-block.
+      const size = 2 * 1024 * 1024 + 29;
+      final pattern = Uint8List(size);
+      for (int i = 0; i < size; i++) {
+        pattern[i] = (i * 31 + 7) & 0xFF;
+      }
+
+      final src = createTempFile('wire_ctrenc_src.bin', pattern);
+      final enc = createTempFile('wire_ctrenc_enc.bin');
+      await vaultCrypto.encryptStreamSystemCtr(src, enc);
+
+      // Header layout: c2 magic + IV + payload, nothing else.
+      final encBytes = enc.readAsBytesSync();
+      expect(encBytes.length, 24 + size,
+          reason: 'c2 blob must be exactly magic(8) + IV(16) + payload');
+      expect(encBytes.sublist(0, 8), equals(kMediaMagicCtrV2),
+          reason: 'c2 stream encryption must start with the MVKEYc2 magic');
+
+      // Full-file round trip through decryptStreamSystem.
+      final dec = createTempFile('wire_ctrenc_dec.bin');
+      await vaultCrypto.decryptStreamSystem(enc, dec);
+      expect(dec.readAsBytesSync(), equals(pattern),
+          reason: 'Isolate-written c2 blob must round-trip byte-for-byte');
+
+      // Seek path: a mid-file, unaligned range must return exactly the
+      // matching slice of the original pattern.
+      final range = await vaultCrypto.decryptRangeSystem(File(enc.path), 1000, 5000);
+      expect(range, equals(pattern.sublist(1000, 6000)),
+          reason: 'decryptRangeSystem must seek correctly into an isolate-written c2 blob');
+    });
+
+    test('T-KEYSURVIVES-CTR: the live master key still works after a CTR encryption', () async {
+      final first = generateRandomBytes(64 * 1024 + 13);
+      final srcA = createTempFile('ks_ctr_src_a.bin', first);
+      final encA = createTempFile('ks_ctr_enc_a.bin');
+      final decA = createTempFile('ks_ctr_dec_a.bin');
+      await vaultCrypto.encryptStreamSystemCtr(srcA, encA);
+      await vaultCrypto.decryptStreamSystem(encA, decA);
+      expect(decA.readAsBytesSync(), equals(first));
+
+      // Second call proves the worker zeroed its COPY of the key, not the
+      // live DEK held by VaultCrypto.
+      final second = generateRandomBytes(32 * 1024 + 5);
+      final srcB = createTempFile('ks_ctr_src_b.bin', second);
+      final encB = createTempFile('ks_ctr_enc_b.bin');
+      final decB = createTempFile('ks_ctr_dec_b.bin');
+      await vaultCrypto.encryptStreamSystemCtr(srcB, encB);
+      await vaultCrypto.decryptStreamSystem(encB, decB);
+      expect(decB.readAsBytesSync(), equals(second),
+          reason: 'Second CTR encryption must succeed, proving the live DEK survived the worker key-zeroing');
+    });
+
+    test('T-LOCKED-CTR-ENC: encryptStreamSystemCtr on a locked vault fails before any isolate work and leaves no file', () async {
+      vaultCrypto.lock();
+
+      final src = createTempFile('locked_ctr_src.bin', [9, 8, 7, 6]);
+      final enc = File(p.join(tempDir.path, 'locked_ctr_enc.bin'));
+
+      await expectLater(
+        vaultCrypto.encryptStreamSystemCtr(src, enc),
+        throwsA(isA<Exception>().having((e) => e.toString(), 'message', contains('Vault is locked'))),
+        reason: 'Locked vault must throw before spawning the isolate',
+      );
+
+      expect(enc.existsSync(), isFalse,
+          reason: 'No destination file should be left behind on locked-vault failure');
+    });
+
+    test('T-CTR-ENC-DETERMINISTIC: the same key and IV produce byte-identical c2 output across two spawns', () async {
+      final plaintext = generateRandomBytes(3 * 64 * 1024 + 11);
+      final src = createTempFile('det_ctr_src.bin', plaintext);
+      final outA = createTempFile('det_ctr_a.bin');
+      final outB = createTempFile('det_ctr_b.bin');
+
+      await cryptoIsolateEncryptFileCtr(key: testKey, iv: testIv, srcPath: src.path, destPath: outA.path);
+      await cryptoIsolateEncryptFileCtr(key: testKey, iv: testIv, srcPath: src.path, destPath: outB.path);
+
+      expect(outB.readAsBytesSync(), equals(outA.readAsBytesSync()),
+          reason: 'The IV must be transported into the worker, not regenerated: identical key+IV in, identical bytes out');
+    });
+
+    test('T-CTR-ENC-ERROR: a failing CTR encrypt rethrows instead of hanging and leaves no partial output', () async {
+      final missing = File(p.join(tempDir.path, 'does_not_exist.bin'));
+      final out = createTempFile('err_ctr_out.bin');
+
+      await expectLater(
+        cryptoIsolateEncryptFileCtr(key: testKey, iv: testIv, srcPath: missing.path, destPath: out.path),
+        throwsA(isA<Exception>()),
+        reason: 'Worker failure must surface on the caller side',
+      );
+      expect(out.existsSync(), isFalse,
+          reason: 'The worker must delete the partial destination on failure');
+    });
+
+    test('T-WIRE-C1: a manually built c1 blob decrypts through the delegated isolate path byte-identically, locked or not', () async {
+      final rawStoredKey = await platformService.secureRead('system_key');
+      final Uint8List systemKey;
+      if (rawStoredKey != null) {
+        systemKey = base64Decode(rawStoredKey);
+      } else {
+        systemKey = generateRandomBytes(32);
+        await platformService.secureWrite('system_key', base64Encode(systemKey));
+        await platformService.secureWrite('system_key_provisioned', 'true');
+      }
+
+      final plaintext = generateRandomBytes(128 * 1024 + 23);
+      final iv = generateRandomBytes(16);
+      final aes = AESEngine()..init(true, KeyParameter(systemKey));
+      final counter = Uint8List.fromList(iv);
+      final ksBlock = Uint8List(16);
+
+      final ciphertext = Uint8List(plaintext.length);
+      int offset = 0;
+      while (offset + 16 <= plaintext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        for (int i = 0; i < 16; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+        for (int i = 15; i >= 0; i--) {
+          counter[i] = (counter[i] + 1) & 0xFF;
+          if (counter[i] != 0) break;
+        }
+        offset += 16;
+      }
+      if (offset < plaintext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        final rem = plaintext.length - offset;
+        for (int i = 0; i < rem; i++) {
+          ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+        }
+      }
+
+      final c1Blob = Uint8List(8 + 16 + ciphertext.length);
+      c1Blob.setRange(0, 8, kMediaMagicCtrV1);
+      c1Blob.setRange(8, 24, iv);
+      c1Blob.setRange(24, c1Blob.length, ciphertext);
+      final c1File = createTempFile('wire_c1_blob.bin', c1Blob);
+
+      // Unlocked first: the delegated c1 path must be byte-identical.
+      final dec = createTempFile('wire_c1_dec.bin');
+      await vaultCrypto.decryptStreamSystem(c1File, dec);
+      expect(dec.readAsBytesSync(), equals(plaintext),
+          reason: 'Delegated c1 decryption must be byte-identical to the inline expectation');
+
+      // Then locked: _getSystemKey() is readable while locked, and the c1
+      // branch has never had a lock check — preserved behavior (see C10).
+      vaultCrypto.lock();
+      final decLocked = createTempFile('wire_c1_dec_locked.bin');
+      await vaultCrypto.decryptStreamSystem(c1File, decLocked);
+      expect(decLocked.readAsBytesSync(), equals(plaintext),
+          reason: 'c1 decryption while locked must keep working exactly as before');
     });
   });
 }

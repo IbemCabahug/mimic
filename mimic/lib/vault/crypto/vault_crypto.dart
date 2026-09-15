@@ -930,45 +930,17 @@ class VaultCrypto extends ChangeNotifier {
           destPath: dest.path,
         );
       } else if (magicType == 2) {
+        // c1 (CTR, system key) decrypts in the background isolate too (H15):
+        // the header layout is identical to c2, only the key differs; the
+        // worker re-sniffs the magic and routes to the shared CTR body.
+        // Behavior note: _getSystemKey() is readable while locked — that
+        // pre-existing property is preserved unchanged here (see C10).
         final systemKey = await _getSystemKey();
-        final iv = Uint8List(16);
-        final ivRead = await raf.readInto(iv);
-        if (ivRead < 16) throw const CorruptedMediaFileException();
-
-        final destRaf = await dest.open(mode: FileMode.write);
-        try {
-          final aes = AESEngine()..init(true, KeyParameter(systemKey));
-          final counter = Uint8List.fromList(iv);
-          final ksBlock = Uint8List(16);
-
-          final buffer = Uint8List(64 * 1024);
-          final outBuffer = Uint8List(64 * 1024);
-          var bytesRead = 0;
-
-          while ((bytesRead = await raf.readInto(buffer)) > 0) {
-            int offset = 0;
-            while (offset + 16 <= bytesRead) {
-              aes.processBlock(counter, 0, ksBlock, 0);
-              for (int i = 0; i < 16; i++) {
-                outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
-              }
-              _ctrIncrement(counter);
-              offset += 16;
-            }
-            if (offset < bytesRead) {
-              aes.processBlock(counter, 0, ksBlock, 0);
-              final remaining = bytesRead - offset;
-              for (int i = 0; i < remaining; i++) {
-                outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
-              }
-              _ctrIncrement(counter);
-            }
-            await destRaf.writeFrom(outBuffer, 0, bytesRead);
-          }
-        } finally {
-          await destRaf.flush();
-          await destRaf.close();
-        }
+        await cryptoIsolateDecryptFile(
+          key: systemKey,
+          srcPath: src.path,
+          destPath: dest.path,
+        );
       } else if (magicType == 3) {
         if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
         await cryptoIsolateDecryptFile(
@@ -1300,48 +1272,16 @@ class VaultCrypto extends ChangeNotifier {
   Future<void> encryptStreamSystemCtr(File src, File dest) async {
     if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
     final iv = _generateSecureRandomBytes(16);
-    final raf = await dest.open(mode: FileMode.write);
-    try {
-      await raf.writeFrom(_mediaMagicCtrV2);
-      await raf.writeFrom(iv);
-
-      final aes = AESEngine()..init(true, KeyParameter(_derivedKey!));
-      final counter = Uint8List.fromList(iv);
-      final ksBlock = Uint8List(16);
-
-      final srcRaf = await src.open(mode: FileMode.read);
-      try {
-        final buffer = Uint8List(64 * 1024);
-        final outBuffer = Uint8List(64 * 1024);
-        var bytesRead = 0;
-
-        while ((bytesRead = await srcRaf.readInto(buffer)) > 0) {
-          int offset = 0;
-          while (offset + 16 <= bytesRead) {
-            aes.processBlock(counter, 0, ksBlock, 0);
-            for (int i = 0; i < 16; i++) {
-              outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
-            }
-            _ctrIncrement(counter);
-            offset += 16;
-          }
-          if (offset < bytesRead) {
-            aes.processBlock(counter, 0, ksBlock, 0);
-            final remaining = bytesRead - offset;
-            for (int i = 0; i < remaining; i++) {
-              outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
-            }
-            _ctrIncrement(counter);
-          }
-          await raf.writeFrom(outBuffer, 0, bytesRead);
-        }
-      } finally {
-        await srcRaf.close();
-      }
-    } finally {
-      await raf.flush();
-      await raf.close();
-    }
+    // The c2 write runs in a background isolate (H15): a whole-file CTR pass
+    // on the UI isolate froze playback for the entire conversion. The worker
+    // writes the c2 header (magic + IV) itself, byte-for-byte as the inline
+    // implementation did. The key is copied because the worker zeroes its copy.
+    await cryptoIsolateEncryptFileCtr(
+      key: Uint8List.fromList(_derivedKey!),
+      iv: iv,
+      srcPath: src.path,
+      destPath: dest.path,
+    );
   }
 
   Future<Uint8List> decryptRangeSystem(File src, int offset, int length) async {
