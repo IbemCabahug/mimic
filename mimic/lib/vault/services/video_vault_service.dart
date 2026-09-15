@@ -52,6 +52,70 @@ class VideoMeta {
       );
 }
 
+/// Why a video conversion attempt did not end with a streamable blob.
+enum VideoMigrationFailure {
+  /// Nothing is wrong: the blob was already c2, or the conversion succeeded.
+  none,
+  /// The decrypted plaintext did not look like a video container we write, so
+  /// the destructive re-encrypt was refused and the original was left alone.
+  refusedNotAContainer,
+  /// The vault locked while the conversion was running, so the keys were gone
+  /// and the attempt was abandoned. The original blob is untouched.
+  vaultLocked,
+  /// The blob could not be read or written.
+  io,
+  /// Anything else. [VideoMigrationOutcome.detail] names the runtime type.
+  unknown,
+}
+
+/// How far a conversion attempt got before it stopped.
+enum VideoMigrationStage {
+  precheck,
+  header,
+  decrypt,
+  containerGate,
+  reencrypt,
+  rename,
+  cleanup,
+}
+
+/// The honest result of one conversion attempt, built on every exit path so that
+/// a failure can never be silent again (register items H16 and M35).
+class VideoMigrationOutcome {
+  final String videoId;
+
+  /// One of 'already-c2', 'v1', 'c1', 'legacy' or 'missing'.
+  final String sourceKind;
+
+  /// True when the blob is streamable now: it was already c2, or it became c2.
+  final bool converted;
+
+  final VideoMigrationFailure failure;
+
+  /// The step that was running when the attempt stopped.
+  final VideoMigrationStage? failedAt;
+
+  /// Exception runtime type plus a path-free, length-bounded message. Never
+  /// contains key material, and never contains a file path.
+  final String? detail;
+
+  /// Bytes of plaintext produced by the decrypt step, before the re-encrypt.
+  final int plaintextBytes;
+
+  final int durationMs;
+
+  const VideoMigrationOutcome({
+    required this.videoId,
+    required this.sourceKind,
+    required this.converted,
+    required this.failure,
+    this.failedAt,
+    this.detail,
+    this.plaintextBytes = 0,
+    this.durationMs = 0,
+  });
+}
+
 class VideoVaultService {
   final PlatformService _platformService;
   final VaultCrypto _crypto;
@@ -64,6 +128,17 @@ class VideoVaultService {
 
   @visibleForTesting
   int get openCount => _openCount;
+
+  VideoMigrationOutcome? _lastMigrationOutcome;
+  final Map<String, VideoMigrationOutcome> _migrationOutcomes = {};
+
+  /// The most recent conversion attempt, whatever its outcome. In-memory
+  /// diagnostic state for the current session; never persisted.
+  VideoMigrationOutcome? get lastMigrationOutcome => _lastMigrationOutcome;
+
+  /// The most recent conversion attempt for one video, or null when no attempt
+  /// has been made in this session.
+  VideoMigrationOutcome? migrationOutcomeFor(String id) => _migrationOutcomes[id];
 
   VideoVaultService(this._platformService, this._crypto);
 
@@ -180,13 +255,51 @@ class VideoVaultService {
   /// Lazily migrates a video blob from CBC (MVKEYv1), legacy, or c1 (system key) to CTR under master key (MVKEYc2)
   /// for future seekable streaming. Conversions from c1 and legacy sources are gated by a plaintext container
   /// sanity check; if the device-local key was regenerated, conversion is skipped leaving the original untouched.
-  Future<void> ensureVideoStreamable(String id) async {
-    final blobFile = await _platformService.resolveVaultFile(id);
-    if (!blobFile.existsSync()) return;
+  ///
+  /// The whole conversion runs inside an auto-lock protected-operation claim, so
+  /// the 1-minute background rule cannot lock the vault and delete these temp
+  /// files while they are being written (M35). Every exit path returns a
+  /// [VideoMigrationOutcome], so a failure is reported instead of swallowed (H16).
+  Future<VideoMigrationOutcome> ensureVideoStreamable(String id) async {
+    final startedAt = DateTime.now();
+    var stage = VideoMigrationStage.precheck;
+    var sourceKind = 'legacy';
+    var plaintextBytes = 0;
 
-    String sourceKind = 'legacy';
+    VideoMigrationOutcome record({
+      required bool converted,
+      required VideoMigrationFailure failure,
+      VideoMigrationStage? failedAt,
+      String? detail,
+    }) {
+      final outcome = VideoMigrationOutcome(
+        videoId: id,
+        sourceKind: sourceKind,
+        converted: converted,
+        failure: failure,
+        failedAt: failedAt,
+        detail: detail,
+        plaintextBytes: plaintextBytes,
+        durationMs: DateTime.now().difference(startedAt).inMilliseconds,
+      );
+      _lastMigrationOutcome = outcome;
+      _migrationOutcomes[id] = outcome;
+      return outcome;
+    }
+
+    final blobFile = await _platformService.resolveVaultFile(id);
+    if (!blobFile.existsSync()) {
+      sourceKind = 'missing';
+      return record(
+        converted: false,
+        failure: VideoMigrationFailure.io,
+        failedAt: stage,
+        detail: 'Blob file does not exist',
+      );
+    }
 
     // Read the first 8 bytes to check the magic header
+    stage = VideoMigrationStage.header;
     final raf = await blobFile.open(mode: FileMode.read);
     try {
       final magic = Uint8List(8);
@@ -200,7 +313,11 @@ class VideoVaultService {
           if (magic[i] != kMediaMagicCtrV1[i]) isCtrV1 = false;
           if (magic[i] != kMediaMagicV1[i]) isV1 = false;
         }
-        if (isCtrV2) return; // Already c2 (CTR under master key) — nothing to do
+        if (isCtrV2) {
+          // Already c2 (CTR under master key) — nothing to do
+          sourceKind = 'already-c2';
+          return record(converted: true, failure: VideoMigrationFailure.none);
+        }
         if (isCtrV1) {
           sourceKind = 'c1';
         } else if (isV1) {
@@ -217,12 +334,20 @@ class VideoVaultService {
     final plainTemp = File(p.join(tempDir.path, '${id}_migrate_plain_$ts'));
     final ctrTemp = File(p.join(tempDir.path, '${id}_migrate_ctr_$ts'));
 
+    // M35: hold the protected-operation claim for the entire conversion. Without
+    // it, a one-minute trip to the background locks the vault, which clears the
+    // keys and lets wipeTransientPlaintext delete exactly these two temp files
+    // mid-write. The claim is released in the finally below, on every path.
+    AutoLock().beginProtectedOperation();
     try {
       // Step 1: decrypt existing blob to plaintext temp file
+      stage = VideoMigrationStage.decrypt;
       await _crypto.decryptStreamSystem(blobFile, plainTemp);
+      plaintextBytes = await plainTemp.length();
 
       // Step 1b: Gate c1 and legacy conversions on plaintext video container sanity check
       if (sourceKind == 'c1' || sourceKind == 'legacy') {
+        stage = VideoMigrationStage.containerGate;
         final headRaf = await plainTemp.open(mode: FileMode.read);
         final head = Uint8List(12);
         final headRead = await headRaf.readInto(head);
@@ -230,53 +355,63 @@ class VideoVaultService {
 
         if (headRead < 12 || !looksLikeVideoContainer(head)) {
           debugPrint('ensureVideoStreamable($id) skipped: plaintext did not look like a video');
-          await AutoLock.secureDeleteFile(plainTemp);
-          try { if (await ctrTemp.exists()) await ctrTemp.delete(); } catch (_) {}
-          return;
+          return record(
+            converted: false,
+            failure: VideoMigrationFailure.refusedNotAContainer,
+            failedAt: stage,
+            detail: 'Plaintext did not match a known video container signature',
+          );
         }
       }
 
       // Step 2: re-encrypt plaintext as c2 (CTR under master key) to a second temp file
+      stage = VideoMigrationStage.reencrypt;
       await _crypto.encryptStreamSystemCtr(plainTemp, ctrTemp);
 
       // Step 3: atomic rename of ctrTemp OVER the original blob
+      stage = VideoMigrationStage.rename;
       await ctrTemp.rename(blobFile.path);
 
-      // Step 4: clean up plaintext temp
+      return record(converted: true, failure: VideoMigrationFailure.none);
+    } catch (e) {
+      // The original blob is never touched on a failure path; report why.
+      return record(
+        converted: false,
+        failure: _classifyMigrationFailure(e),
+        failedAt: stage,
+        detail: _describeMigrationFailure(e),
+      );
+    } finally {
+      // Whatever happened: the transient plaintext must not survive, and no
+      // half-written ciphertext temp may be left behind.
       await AutoLock.secureDeleteFile(plainTemp);
-    } catch (_) {
-      // Best-effort: clean up temps, leave original blob untouched
-      await AutoLock.secureDeleteFile(plainTemp);
-      try { if (await ctrTemp.exists()) await ctrTemp.delete(); } catch (_) {}
+      try {
+        if (await ctrTemp.exists()) await ctrTemp.delete();
+      } catch (_) {}
+      AutoLock().endProtectedOperation();
     }
   }
 
-  Future<File?> getVideoToTempFile(String id) async {
-    final srcBlob = await _platformService.resolveVaultFile(id);
-    if (!srcBlob.existsSync()) return null;
+  /// Names a conversion failure. A lock is detected from the vault's own state
+  /// rather than from an exception message, because the message is not a
+  /// contract.
+  VideoMigrationFailure _classifyMigrationFailure(Object error) {
+    if (error is FileSystemException) return VideoMigrationFailure.io;
+    if (!_crypto.isUnlocked) return VideoMigrationFailure.vaultLocked;
+    return VideoMigrationFailure.unknown;
+  }
 
-    // Best-effort lazy migration to CTR; failure never blocks playback
-    try {
-      await ensureVideoStreamable(id);
-    } catch (_) {}
-
-    final tempDir = await getTemporaryDirectory();
-    final playbackDir = Directory(p.join(tempDir.path, 'vault_playback'));
-    if (!playbackDir.existsSync()) {
-      playbackDir.createSync(recursive: true);
-    }
-    
-    final tempFile = File(p.join(playbackDir.path, '${id}_play.mp4'));
-    
-    try {
-      await _crypto.decryptStreamSystem(srcBlob, tempFile);
-      return tempFile;
-    } catch (e) {
-      if (tempFile.existsSync()) {
-        tempFile.deleteSync();
-      }
-      return null;
-    }
+  /// Describes a conversion failure without leaking where the vault lives.
+  /// Several platform exception messages embed an absolute path, so any token
+  /// containing a path separator is replaced.
+  String _describeMigrationFailure(Object error) {
+    final collapsed = error.toString().replaceAll(RegExp(r'\s+'), ' ').trim();
+    final withoutPaths = collapsed.replaceAll(RegExp(r'\S*[/\\]\S*'), '<path>');
+    final bounded = withoutPaths.length > 160
+        ? '${withoutPaths.substring(0, 160)}...'
+        : withoutPaths;
+    final typeName = error.runtimeType.toString();
+    return bounded.startsWith(typeName) ? bounded : '$typeName: $bounded';
   }
 
   Future<void> deleteVideo(String id) async {

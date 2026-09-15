@@ -1,4 +1,5 @@
 import 'package:mimic/vault/crypto/keystore_service.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -9,6 +10,7 @@ import 'package:pointycastle/export.dart';
 import 'package:mimic/vault/services/video_vault_service.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/crypto/media_format.dart';
+import 'package:mimic/vault/security/auto_lock.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -21,6 +23,92 @@ class ThrowingEncryptVaultCrypto extends VaultCrypto {
   Future<void> encryptStreamSystemCtr(File src, File dest) async {
     throw Exception('Simulated encryption failure during video migration');
   }
+}
+
+/// Blocks inside the c2 write so a test can observe the auto-lock
+/// protected-operation claim while a conversion is genuinely in flight.
+class BlockingEncryptVaultCrypto extends VaultCrypto {
+  BlockingEncryptVaultCrypto(super.platformService, super.keystoreService);
+
+  final Completer<void> entered = Completer<void>();
+  final Completer<void> gate = Completer<void>();
+
+  @override
+  Future<void> encryptStreamSystemCtr(File src, File dest) async {
+    if (!entered.isCompleted) {
+      entered.complete();
+    }
+    await gate.future;
+    return super.encryptStreamSystemCtr(src, dest);
+  }
+}
+
+/// Throws a platform-style IO error whose message embeds an absolute path, to
+/// prove the recorded detail never leaks where the vault lives.
+class PathLeakingVaultCrypto extends VaultCrypto {
+  PathLeakingVaultCrypto(super.platformService, super.keystoreService);
+
+  @override
+  Future<void> encryptStreamSystemCtr(File src, File dest) async {
+    throw FileSystemException(
+      'Cannot open file',
+      '${dest.path}_do_not_leak_marker',
+    );
+  }
+}
+
+/// Writes a c1 blob (AES-CTR under the device-local system key) at [blobFile],
+/// reproducing the format the pre-c2 code produced, so the rescue path and its
+/// container gate can be tested from a known starting point.
+Future<void> writeC1Blob({
+  required Uint8List plaintext,
+  required File blobFile,
+  required Map<String, String> secureStorage,
+  required Random random,
+}) async {
+  final rawKey = secureStorage['system_key'];
+  final Uint8List sysKey;
+  if (rawKey != null) {
+    sysKey = base64Decode(rawKey);
+  } else {
+    sysKey = Uint8List.fromList(List.generate(32, (_) => random.nextInt(256)));
+    secureStorage['system_key'] = base64Encode(sysKey);
+    secureStorage['system_key_provisioned'] = 'true';
+  }
+
+  final iv = Uint8List.fromList(List.generate(16, (_) => random.nextInt(256)));
+  final aes = AESEngine()..init(true, KeyParameter(sysKey));
+  final counter = Uint8List.fromList(iv);
+  final ksBlock = Uint8List(16);
+
+  final ciphertext = Uint8List(plaintext.length);
+  int offset = 0;
+  while (offset + 16 <= plaintext.length) {
+    aes.processBlock(counter, 0, ksBlock, 0);
+    for (int i = 0; i < 16; i++) {
+      ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+    }
+    for (int i = 15; i >= 0; i--) {
+      counter[i] = (counter[i] + 1) & 0xFF;
+      if (counter[i] != 0) break;
+    }
+    offset += 16;
+  }
+  if (offset < plaintext.length) {
+    aes.processBlock(counter, 0, ksBlock, 0);
+    final rem = plaintext.length - offset;
+    for (int i = 0; i < rem; i++) {
+      ciphertext[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+    }
+  }
+
+  final c1Blob = Uint8List(8 + 16 + ciphertext.length);
+  c1Blob.setRange(0, 8, kMediaMagicCtrV1);
+  c1Blob.setRange(8, 24, iv);
+  c1Blob.setRange(24, c1Blob.length, ciphertext);
+
+  await blobFile.parent.create(recursive: true);
+  await blobFile.writeAsBytes(c1Blob);
 }
 
 void main() {
@@ -140,46 +228,6 @@ void main() {
       // Cleanup
       await srcFile.delete();
       await videoVaultService.deleteVideo(id);
-    });
-
-    test('getVideoToTempFile decrypts stream to a temp file safely', () async {
-      final platformService = AndroidPlatformService();
-      final crypto = VaultCrypto(platformService, FakeKeystoreService());
-      await crypto.initialize('1234');
-      final videoVaultService = VideoVaultService(platformService, crypto);
-
-      // 1. Create ~2MB temp plaintext file
-      final srcFile = File('${tempDir.path}/test_video_src2.mp4');
-      final random = Random.secure();
-      final bytes = Uint8List(2 * 1024 * 1024);
-      for (var i = 0; i < bytes.length; i++) {
-        bytes[i] = random.nextInt(256);
-      }
-      await srcFile.writeAsBytes(bytes);
-
-      // 2. Save
-      final id = await videoVaultService.saveVideoFromFile(
-        srcFile,
-        'video/mp4',
-        120,
-      );
-
-      // 3. call NEW getVideoToTempFile(id)
-      final tempOut = await videoVaultService.getVideoToTempFile(id);
-      expect(tempOut, isNotNull);
-
-      // 4. Read bytes and assert EQUAL
-      final outBytes = await tempOut!.readAsBytes();
-      expect(outBytes, equals(bytes));
-
-      // 5. assert getVideoToTempFile returns null (no throw) for missing blob
-      final missingTempOut = await videoVaultService.getVideoToTempFile('non-existent-id');
-      expect(missingTempOut, isNull);
-
-      // Cleanup
-      await srcFile.delete();
-      await videoVaultService.deleteVideo(id);
-      if (tempOut.existsSync()) tempOut.deleteSync();
     });
 
     test('ensureVideoStreamable: CBC blob migrates to CTR', () async {
@@ -825,8 +873,8 @@ void main() {
 
       // Also verify that a document blob (if placed at vault_files/) is NOT
       // touched by the video service — the method checks resolveVaultFile
-      // which points to the same vault_files/ dir, but only video IDs are
-      // passed to it by getVideoToTempFile.
+      // which points to the same vault_files/ dir, but it is only ever called
+      // with video IDs by MediaStreamServer.urlFor.
       final fakeDocId = 'fake-doc-id';
       final fakeDocBlob = await platformService.resolveVaultFile(fakeDocId);
 
@@ -840,8 +888,9 @@ void main() {
 
       // ensureVideoStreamable on this ID WILL migrate it (it's just a blob),
       // but the point is: DocumentVaultService never calls ensureVideoStreamable.
-      // The scope guard is architectural: only VideoVaultService.getVideoToTempFile
-      // calls ensureVideoStreamable. Documents and photos never invoke it.
+      // The scope guard is architectural: its only production caller is
+      // MediaStreamServer.urlFor, which is reached from the video player, so
+      // documents and photos never invoke it.
       // We verify this by confirming ensureVideoStreamable is NOT present on
       // any other service class (it's defined only on VideoVaultService).
       expect(videoVaultService, isA<VideoVaultService>());
@@ -1058,6 +1107,250 @@ void main() {
       final videos = await videoVaultService.getAllVideos();
       expect(videos, isEmpty);
       expect(videoVaultService.openCount, equals(2));
+    });
+
+    test('T11 — a conversion holds the auto-lock protected-operation claim while it runs', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = BlockingEncryptVaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      final srcFile = File('${tempDir.path}/t11_src.mp4');
+      final plaintext = Uint8List(8192);
+      final random = Random.secure();
+      for (var i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+      await srcFile.writeAsBytes(plaintext);
+
+      final id = await videoVaultService.saveVideoFromFile(srcFile, 'video/mp4', 5);
+
+      expect(AutoLock().isProtectedOperationInFlight, isFalse,
+          reason: 'nothing may be claimed before a conversion starts');
+
+      final pending = videoVaultService.ensureVideoStreamable(id);
+      await crypto.entered.future;
+
+      // We are now inside the c2 write, with both temp files on disk.
+      expect(AutoLock().isProtectedOperationInFlight, isTrue,
+          reason: 'M35: the claim must be held while the temps are being written');
+
+      crypto.gate.complete();
+      final outcome = await pending;
+
+      expect(outcome.converted, isTrue);
+      expect(outcome.failure, VideoMigrationFailure.none);
+      expect(AutoLock().isProtectedOperationInFlight, isFalse,
+          reason: 'the claim must be released on the way out');
+
+      await srcFile.delete();
+    });
+
+    test('T12 — a v1 blob converts and the outcome says so, then reports already-c2', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      final srcFile = File('${tempDir.path}/t12_src.mp4');
+      final plaintext = Uint8List(16384);
+      final random = Random.secure();
+      for (var i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+      await srcFile.writeAsBytes(plaintext);
+
+      final id = await videoVaultService.saveVideoFromFile(srcFile, 'video/mp4', 5);
+      final blobFile = await platformService.resolveVaultFile(id);
+
+      expect((await blobFile.readAsBytes()).sublist(0, 8), equals(kMediaMagicV1),
+          reason: 'a fresh import is still written as CBC v1');
+
+      final outcome = await videoVaultService.ensureVideoStreamable(id);
+
+      expect(outcome.converted, isTrue);
+      expect(outcome.failure, VideoMigrationFailure.none);
+      expect(outcome.sourceKind, 'v1');
+      expect(outcome.failedAt, isNull);
+      expect(outcome.plaintextBytes, equals(plaintext.length));
+      expect(outcome.detail, isNull);
+      expect((await blobFile.readAsBytes()).sublist(0, 8), equals(kMediaMagicCtrV2));
+
+      // Second call: nothing to do, and it must say so instead of staying silent.
+      final second = await videoVaultService.ensureVideoStreamable(id);
+      expect(second.converted, isTrue);
+      expect(second.failure, VideoMigrationFailure.none);
+      expect(second.sourceKind, 'already-c2');
+
+      // The service remembers the latest attempt, per video and overall.
+      expect(videoVaultService.migrationOutcomeFor(id)?.sourceKind, 'already-c2');
+      expect(videoVaultService.lastMigrationOutcome?.videoId, id);
+      expect(videoVaultService.migrationOutcomeFor('never-attempted'), isNull);
+
+      await srcFile.delete();
+    });
+
+    test('T13 — a c1 blob whose plaintext is not a container is refused, and the original survives', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      final random = Random.secure();
+      // 0xAB in every byte matches none of the container signatures.
+      final plaintext = Uint8List(4096);
+      plaintext.fillRange(0, plaintext.length, 0xAB);
+
+      const id = 't13-c1-not-a-container';
+      final blobFile = await platformService.resolveVaultFile(id);
+      await writeC1Blob(
+        plaintext: plaintext,
+        blobFile: blobFile,
+        secureStorage: secureStorageData,
+        random: random,
+      );
+
+      final before = await blobFile.readAsBytes();
+      expect(before.sublist(0, 8), equals(kMediaMagicCtrV1));
+
+      final outcome = await videoVaultService.ensureVideoStreamable(id);
+
+      expect(outcome.converted, isFalse);
+      expect(outcome.failure, VideoMigrationFailure.refusedNotAContainer);
+      expect(outcome.failedAt, VideoMigrationStage.containerGate);
+      expect(outcome.sourceKind, 'c1');
+      expect(await blobFile.readAsBytes(), equals(before),
+          reason: 'a refused conversion must leave the original byte-identical');
+      expect(AutoLock().isProtectedOperationInFlight, isFalse);
+
+      final leftovers = tempDir
+          .listSync()
+          .where((e) =>
+              e.path.contains('_migrate_plain_') ||
+              e.path.contains('_migrate_ctr_'))
+          .toList();
+      expect(leftovers, isEmpty, reason: 'no conversion temp may survive');
+    });
+
+    test('T14 — a failure inside the re-encrypt step is reported, not swallowed', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = ThrowingEncryptVaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      final srcFile = File('${tempDir.path}/t14_src.mp4');
+      final plaintext = Uint8List(8192);
+      final random = Random.secure();
+      for (var i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+      await srcFile.writeAsBytes(plaintext);
+
+      final id = await videoVaultService.saveVideoFromFile(srcFile, 'video/mp4', 5);
+      final blobFile = await platformService.resolveVaultFile(id);
+      final before = await blobFile.readAsBytes();
+
+      final outcome = await videoVaultService.ensureVideoStreamable(id);
+
+      expect(outcome.converted, isFalse);
+      expect(outcome.failure, VideoMigrationFailure.unknown);
+      expect(outcome.failedAt, VideoMigrationStage.reencrypt);
+      expect(outcome.detail, contains('Simulated encryption failure'));
+      expect(await blobFile.readAsBytes(), equals(before),
+          reason: 'the original must be untouched when the conversion fails');
+      expect(AutoLock().isProtectedOperationInFlight, isFalse);
+
+      final leftovers = tempDir
+          .listSync()
+          .where((e) =>
+              e.path.contains('_migrate_plain_') ||
+              e.path.contains('_migrate_ctr_'))
+          .toList();
+      expect(leftovers, isEmpty, reason: 'no conversion temp may survive');
+
+      // The failure is retrievable, which is exactly what makes it non-silent.
+      expect(videoVaultService.migrationOutcomeFor(id)?.failure,
+          VideoMigrationFailure.unknown);
+      expect(videoVaultService.lastMigrationOutcome?.videoId, id);
+
+      await srcFile.delete();
+    });
+
+    test('T15 — a failure detail never leaks a filesystem path', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = PathLeakingVaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      final srcFile = File('${tempDir.path}/t15_src.mp4');
+      final plaintext = Uint8List(4096);
+      final random = Random.secure();
+      for (var i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+      await srcFile.writeAsBytes(plaintext);
+
+      final id = await videoVaultService.saveVideoFromFile(srcFile, 'video/mp4', 5);
+
+      final outcome = await videoVaultService.ensureVideoStreamable(id);
+
+      expect(outcome.failure, VideoMigrationFailure.io);
+      expect(outcome.failedAt, VideoMigrationStage.reencrypt);
+      expect(outcome.detail, isNotNull);
+      expect(outcome.detail, contains('<path>'),
+          reason: 'the path token is replaced rather than printed');
+      expect(outcome.detail, isNot(contains(tempDir.path)));
+      expect(outcome.detail, isNot(contains('_do_not_leak_marker')));
+      expect(outcome.detail, isNot(contains('_migrate_')));
+
+      await srcFile.delete();
+    });
+
+    test('T16 — a vault lock during the conversion is reported as vaultLocked', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = BlockingEncryptVaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      final srcFile = File('${tempDir.path}/t16_src.mp4');
+      final plaintext = Uint8List(8192);
+      final random = Random.secure();
+      for (var i = 0; i < plaintext.length; i++) {
+        plaintext[i] = random.nextInt(256);
+      }
+      await srcFile.writeAsBytes(plaintext);
+
+      final id = await videoVaultService.saveVideoFromFile(srcFile, 'video/mp4', 5);
+      final blobFile = await platformService.resolveVaultFile(id);
+      final before = await blobFile.readAsBytes();
+
+      final pending = videoVaultService.ensureVideoStreamable(id);
+      await crypto.entered.future;
+
+      // The lock lands mid-conversion, as a manual lock or the 30-minute
+      // ceiling would do it.
+      crypto.clearKey();
+      crypto.gate.complete();
+
+      final outcome = await pending;
+
+      expect(outcome.converted, isFalse);
+      expect(outcome.failure, VideoMigrationFailure.vaultLocked);
+      expect(outcome.failedAt, VideoMigrationStage.reencrypt);
+      expect(await blobFile.readAsBytes(), equals(before),
+          reason: 'an interrupted conversion must leave the original intact');
+      expect((await blobFile.readAsBytes()).sublist(0, 8), equals(kMediaMagicV1));
+      expect(AutoLock().isProtectedOperationInFlight, isFalse);
+
+      final leftovers = tempDir
+          .listSync()
+          .where((e) =>
+              e.path.contains('_migrate_plain_') ||
+              e.path.contains('_migrate_ctr_'))
+          .toList();
+      expect(leftovers, isEmpty, reason: 'no conversion temp may survive');
+
+      await srcFile.delete();
     });
   });
 }
