@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../services/video_thumbnail_service.dart';
 import '../services/video_vault_service.dart';
 import '../security/auto_lock.dart';
 import '../crypto/vault_crypto.dart';
@@ -25,6 +26,14 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
   void initState() {
     super.initState();
     _loadVideos();
+    // F23: the register constraint makes the lock the cache's kill switch. When
+    // the vault locks (keys wiped), every in-memory frame dies with the session;
+    // the next unlock regenerates whatever the grid is showing.
+    ref.listenManual(vaultCryptoProvider, (VaultCrypto? prev, VaultCrypto next) {
+      if (prev != null && prev.isUnlocked && !next.isUnlocked) {
+        ref.read(videoThumbnailCacheProvider.notifier).wipe();
+      }
+    });
   }
 
   Future<void> _loadVideos() async {
@@ -35,6 +44,12 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
         _videos = videos;
         _isLoading = false;
       });
+    }
+    // F23: queue thumbnails in list order; a tile that scrolls into view later
+    // re-requests itself with priority inside the item builder.
+    final thumbnails = ref.read(videoThumbnailServiceProvider);
+    for (final video in videos) {
+      thumbnails.request(video.id);
     }
   }
 
@@ -331,6 +346,7 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
   @override
   Widget build(BuildContext context) {
     final crypto = ref.watch(vaultCryptoProvider);
+    final thumbnails = ref.watch(videoThumbnailCacheProvider);
     if (!crypto.isUnlocked) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
@@ -395,6 +411,14 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
                   itemCount: _videos.length,
                   itemBuilder: (context, index) {
                     final video = _videos[index];
+                    final frame = thumbnails[video.id];
+                    if (frame == null) {
+                      // F23: this tile is visible but has no frame yet — jump
+                      // the queue so what the owner is looking at fills first.
+                      ref
+                          .read(videoThumbnailServiceProvider)
+                          .request(video.id, priority: true);
+                    }
                     return GestureDetector(
                       onTap: () => _playVideo(video),
                       onLongPress: () => _showOptions(video),
@@ -404,59 +428,93 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: VaultColors.textTertiary.withValues(alpha: 0.1)),
                         ),
-                        child: Stack(
-                          children: [
-                            const Center(
-                              child: Icon(
-                                Icons.play_circle_fill,
-                                size: 50,
-                                color: VaultColors.accent,
-                              ),
-                            ),
-                            Positioned(
-                              bottom: 8,
-                              left: 8,
-                              right: 8,
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    video.originalName ?? 'Video ${index + 1}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: VaultColors.textPrimary,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      fontFamily: 'Inter',
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              if (frame != null)
+                                Image.memory(
+                                  frame,
+                                  fit: BoxFit.cover,
+                                  gaplessPlayback: true,
+                                  errorBuilder: (_, _, _) => const Center(
+                                    child: Icon(
+                                      Icons.play_circle_fill,
+                                      size: 50,
+                                      color: VaultColors.accent,
                                     ),
                                   ),
-                                  const SizedBox(height: 2),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Text(
-                                        _formatDuration(video.durationS),
-                                        style: const TextStyle(
-                                          color: VaultColors.textSecondary,
-                                          fontSize: 10,
-                                          fontFamily: 'Inter',
-                                        ),
-                                      ),
-                                      Text(
-                                        '${(video.size / (1024 * 1024)).toStringAsFixed(1)} MB',
-                                        style: const TextStyle(
-                                          color: VaultColors.textSecondary,
-                                          fontSize: 10,
-                                          fontFamily: 'Inter',
-                                        ),
-                                      ),
-                                    ],
+                                )
+                              else
+                                const Center(
+                                  child: Icon(
+                                    Icons.play_circle_fill,
+                                    size: 50,
+                                    color: VaultColors.accent,
                                   ),
-                                ],
+                                ),
+                              if (frame != null)
+                                Positioned.fill(
+                                  child: DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        stops: const [0.45, 1.0],
+                                        colors: [
+                                          Colors.transparent,
+                                          Colors.black.withValues(alpha: 0.55),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              Positioned(
+                                bottom: 8,
+                                left: 8,
+                                right: 8,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      video.originalName ?? 'Video ${index + 1}',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(
+                                        color: VaultColors.textPrimary,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        fontFamily: 'Inter',
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                      children: [
+                                        Text(
+                                          _formatDuration(video.durationS),
+                                          style: const TextStyle(
+                                            color: VaultColors.textPrimary,
+                                            fontSize: 10,
+                                            fontFamily: 'Inter',
+                                          ),
+                                        ),
+                                        Text(
+                                          '${(video.size / (1024 * 1024)).toStringAsFixed(1)} MB',
+                                          style: const TextStyle(
+                                            color: VaultColors.textPrimary,
+                                            fontSize: 10,
+                                            fontFamily: 'Inter',
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
                       ),
                     );
