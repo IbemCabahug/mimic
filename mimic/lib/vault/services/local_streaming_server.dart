@@ -22,8 +22,26 @@ class LocalStreamingServer {
   String? _token;
   int? _port;
 
+  /// Set by [stop] before anything is awaited, so an in-flight [_streamRange]
+  /// sees it on its next sub-chunk. This is H15: the bytes a popped player
+  /// abandoned must not keep being decrypted on the UI isolate.
+  ///
+  /// Before this flag the loop had NO cancellation check at all (pre-3G-1C code
+  /// at HEAD: `while (remaining > 0) { ... response.add(chunk); }`) and `stop()`
+  /// only closed the socket, so nothing in the code could stop a range that was
+  /// already being served — it ran to the end of the requested range. Measured
+  /// against that pre-fix code on 2026-09-16: with the loop at decrypt call 11
+  /// of 32, `stop()` returned in 15 ms and the loop still reached 32; with the
+  /// client gone at call 12 it also still reached 32 (worksheet section 13).
+  bool _cancelled = false;
+
   static const int _ctrHeaderSize = 24; // 8 magic + 16 IV
-  static const int _subChunkSize = 1024 * 1024; // 1 MB
+  // M13 residual: per-range decrypt runs inline on the UI isolate, so one
+  // range holds the event loop for its whole AES pass. 256 KB is 4x less
+  // uninterrupted work per chunk than the 1 MB it replaced, at the same
+  // measured throughput (~27 MB/s at both sizes, desktop, 2026-09-16); memory
+  // stays flat because only one chunk is live.
+  static const int _subChunkSize = 256 * 1024; // 256 KB
 
   LocalStreamingServer({
     required this.resolveVaultFile,
@@ -37,8 +55,15 @@ class LocalStreamingServer {
   String? get token => _token;
 
   /// Starts the server on loopback, port 0 (OS-assigned). Idempotent.
+  ///
+  /// A restart after [stop] clears the abort flag. The flag belongs to the
+  /// session that was stopped, and leaving it set would make the new session
+  /// answer every range with a 206 and an empty body — the H15 guard would
+  /// then be indistinguishable from a broken server.
   Future<void> start() async {
     if (_server != null) return;
+
+    _cancelled = false;
 
     // Generate a cryptographically secure session token (>=32 bytes)
     final random = Random.secure();
@@ -53,8 +78,14 @@ class LocalStreamingServer {
     _server!.listen(_handleRequest, onError: (_) {});
   }
 
-  /// Stops the server and clears the session token.
+  /// Stops the server, clears the session token, and aborts any in-flight range
+  /// decrypt. The abort flag is set synchronously, before the first await, so a
+  /// loop that is already mid-range cannot miss it (H15).
+  ///
+  /// A later play builds a NEW server instance with the flag clear, so aborting
+  /// one session never affects the next.
   Future<void> stop() async {
+    _cancelled = true;
     await _server?.close(force: true);
     _server = null;
     _token = null;
@@ -229,15 +260,33 @@ class LocalStreamingServer {
   }
 
   /// Streams decrypted bytes to the response in bounded sub-chunks to keep
-  /// memory flat. Never allocates the whole range at once.
+  /// memory flat. Never allocates the whole range at once. Each await yields
+  /// to the UI event loop (M13), so playback start competes less with the
+  /// interface thread even though the AES itself stays inline by decision.
+  ///
+  /// H15: this loop exits as soon as the session is cancelled or the client
+  /// stops accepting bytes. A player asks for an OPEN-ENDED range, so without
+  /// those two exits a popped player leaves the whole remainder of the file
+  /// decrypting inline on the UI isolate.
   Future<void> _streamRange(
       File file, HttpResponse response, int start, int totalLength) async {
     int remaining = totalLength;
     int currentOffset = start;
     while (remaining > 0) {
+      if (_cancelled) return; // stop() landed: the reader is gone
       final chunkSize = remaining < _subChunkSize ? remaining : _subChunkSize;
       final chunk = await decryptRange(file, currentOffset, chunkSize);
-      response.add(chunk);
+      if (_cancelled) return; // stop() landed during that decrypt
+      try {
+        response.add(chunk);
+        // Flush the socket chunk before decrypting the next one: the player can
+        // start on the first bytes while the rest still decrypts.
+        await response.flush();
+      } catch (_) {
+        // The client went away (player popped) or the response is closed.
+        // Decrypting further would burn the UI isolate for nobody.
+        return;
+      }
       currentOffset += chunkSize;
       remaining -= chunkSize;
     }

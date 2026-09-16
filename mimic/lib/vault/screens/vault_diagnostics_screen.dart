@@ -14,6 +14,7 @@ import '../services/file_vault_service.dart';
 import '../services/media_format_report.dart';
 import '../services/video_vault_service.dart';
 import '../widgets/vault_scaffold.dart';
+import 'player_failure_text.dart';
 
 class VaultDiagnosticsScreen extends ConsumerStatefulWidget {
   const VaultDiagnosticsScreen({super.key});
@@ -372,6 +373,36 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
                         fontWeight: FontWeight.w600,
                       ),
                     ),
+            ),
+            const SizedBox(height: 24),
+            Builder(
+              builder: (context) {
+                // Read once per build, not watched: the report screen opens
+                // after a play attempt, and the value is evidence of the last
+                // attempt, not a live stream.
+                final lastOutcome =
+                    ProviderScope.containerOf(context, listen: false)
+                        .read(videoVaultServiceProvider)
+                        .lastMigrationOutcome;
+                return Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 16.0, vertical: 8.0),
+                  decoration: BoxDecoration(
+                    color: VaultColors.surface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                        color: VaultColors.textTertiary.withValues(alpha: 0.3)),
+                  ),
+                  child: Column(
+                    children: [
+                      _buildMetricRow(
+                        'Last conversion',
+                        describeMigrationOutcome(lastOutcome),
+                      ),
+                    ],
+                  ),
+                );
+              },
             ),
             const SizedBox(height: 24),
             Container(
