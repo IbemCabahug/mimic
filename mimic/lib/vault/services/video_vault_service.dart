@@ -252,6 +252,27 @@ class VideoVaultService {
     return decrypted;
   }
 
+  /// F23: true when the blob is already c2 (CTR under the master key). The
+  /// thumbnail service asks this BEFORE opening a stream, because
+  /// `ensureVideoStreamable` would migrate a legacy blob as a side effect, and
+  /// drawing a tile must never kick off a full decrypt/re-encrypt.
+  Future<bool> isCtrV2Blob(String id) async {
+    final file = await _platformService.resolveVaultFile(id);
+    if (!file.existsSync()) return false;
+    final raf = await file.open(mode: FileMode.read);
+    try {
+      final magic = Uint8List(8);
+      final bytesRead = await raf.readInto(magic);
+      if (bytesRead != 8) return false;
+      for (int i = 0; i < 8; i++) {
+        if (magic[i] != kMediaMagicCtrV2[i]) return false;
+      }
+      return true;
+    } finally {
+      await raf.close();
+    }
+  }
+
   /// Lazily migrates a video blob from CBC (MVKEYv1), legacy, or c1 (system key) to CTR under master key (MVKEYc2)
   /// for future seekable streaming. Conversions from c1 and legacy sources are gated by a plaintext container
   /// sanity check; if the device-local key was regenerated, conversion is skipped leaving the original untouched.
