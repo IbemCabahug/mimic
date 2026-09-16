@@ -7,6 +7,7 @@ import '../security/vault_error_ui.dart';
 import '../crypto/vault_crypto.dart';
 import '../services/media_stream_server.dart';
 import '../security/auto_lock.dart';
+import 'player_failure_text.dart';
 
 class VideoPlayerScreen extends StatefulWidget {
   final String videoId;
@@ -21,6 +22,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   VideoPlayerController? _videoPlayerController;
   ChewieController? _chewieController;
   bool _hasError = false;
+  String? _errorMessage;
   bool _disposed = false;
 
   @override
@@ -32,12 +34,37 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   Future<void> _initializePlayer() async {
     try {
-      final url = await MediaStreamServer.instance.urlFor(widget.videoId);
+      // H16/F4: the conversion's typed fate must reach this screen instead of
+      // looking like an endless spinner. streamableUrlFor is the only caller
+      // of ensureVideoStreamable, so this is where the outcome arrives.
+      final (url, outcome) =
+          await MediaStreamServer.instance.streamableUrlFor(widget.videoId);
       if (!mounted || _disposed) return;
+      // Log-only by the path-free rule (video_vault_service.dart:407-415): the
+      // detail can carry a path fragment and is never rendered.
+      if (outcome.detail != null) {
+        debugPrint('video ${widget.videoId} conversion: ${outcome.detail}');
+      }
       final controller = VideoPlayerController.networkUrl(url);
       await controller.initialize();
       if (!mounted || _disposed) {
         await controller.dispose();
+        return;
+      }
+      // A refused or aborted conversion becomes plain words, not a spinner
+      // that never ends. A player that DID initialize plays on purpose:
+      // playerReady swallows even a failure outcome (test U6), because an
+      // already-c2 blob can be servable while the outcome still says io.
+      final failure = playerFailureFor(
+        outcome,
+        playerReady: controller.value.isInitialized,
+      );
+      if (failure != PlayerOpenFailure.none) {
+        await controller.dispose();
+        setState(() {
+          _hasError = true;
+          _errorMessage = playerFailureMessage(failure, outcome.detail);
+        });
         return;
       }
       final chewie = ChewieController(
@@ -90,8 +117,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   void dispose() {
     AutoLock().resume();
     _disposed = true;
-    _chewieController?.dispose();
+    // L22 (device 2026-09-15: audio 1-2 s after Back): pause FIRST so no
+    // audio frame is emitted after the route is popped, then release the
+    // Chewie wrapper before the player it drives, then stop the media
+    // server. dispose() is synchronous, so the order is the fix — there is
+    // nothing to await.
     _videoPlayerController?.pause();
+    _chewieController?.dispose();
     _videoPlayerController?.dispose();
     unawaited(MediaStreamServer.instance.stop());
     super.dispose();
@@ -110,10 +142,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         ),
       ),
       body: _hasError
-          ? const Center(
-              child: Text(
-                'Error playing video.',
-                style: TextStyle(color: Colors.white, fontSize: 16),
+          ? Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24.0),
+                child: Text(
+                  _errorMessage ?? 'Error playing video.',
+                  style: const TextStyle(color: Colors.white, fontSize: 16),
+                  textAlign: TextAlign.center,
+                ),
               ),
             )
           : _chewieController != null
@@ -122,8 +158,23 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                     controller: _chewieController!,
                   ),
                 )
+              // F4: a first play that is converting must say so. The text is
+              // static on purpose — there is no progress API to poll, and the
+              // 3G-0 baseline proved the wait ends (H8), so no spinner-only
+              // dead air and no fake percentage.
               : const Center(
-                  child: CircularProgressIndicator(color: Color(0xFF7F77DD)),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(color: Color(0xFF7F77DD)),
+                      SizedBox(height: 16),
+                      Text(
+                        'Preparing video… first plays convert it to a seekable format, which can take a while for long videos.',
+                        style: TextStyle(color: Colors.white70, fontSize: 13),
+                        textAlign: TextAlign.center,
+                      ),
+                    ],
+                  ),
                 ),
     );
   }

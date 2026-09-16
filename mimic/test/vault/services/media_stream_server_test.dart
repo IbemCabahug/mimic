@@ -372,5 +372,30 @@ void main() {
       expect(body, equals(plaintext),
           reason: 'c2 must remain servable byte-for-byte after restricting the accepted magic to c2-only');
     });
+
+    test('i. 3G-1C — streamableUrlFor returns the same URL as urlFor, plus the typed outcome', () async {
+      final srcFile = File(p.join(tempDir.path, 'src_outcome.bin'));
+      await srcFile.writeAsBytes(plaintext);
+      const c2Id = 'test-video-outcome';
+      final c2BlobFile = await platformService.resolveVaultFile(c2Id);
+      await crypto.encryptStreamSystemCtr(srcFile, c2BlobFile);
+      await srcFile.delete();
+
+      MediaStreamServer.instance.init(
+        videoVaultService: videoVaultService,
+        resolveVaultFile: platformService.resolveVaultFile,
+        decryptRange: crypto.decryptRangeSystem,
+      );
+
+      final (urlWithOutcome, outcome) =
+          await MediaStreamServer.instance.streamableUrlFor(c2Id);
+      final plainUrl = await MediaStreamServer.instance.urlFor(c2Id);
+      expect(urlWithOutcome.toString(), equals(plainUrl.toString()),
+          reason: 'the outcome-carrying path must serve the identical URL');
+      expect(outcome.failure, VideoMigrationFailure.none);
+      expect(outcome.sourceKind, 'already-c2');
+      expect(outcome.converted, isTrue);
+      expect(videoVaultService.migrationOutcomeFor(c2Id)?.videoId, c2Id);
+    });
   });
 }

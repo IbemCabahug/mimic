@@ -29,12 +29,21 @@ class MediaStreamServer {
   /// Returns the streamable loopback URL for the given video ID.
   /// Starts the server lazily if not already running.
   Future<Uri> urlFor(String id) async {
+    final (uri, _) = await streamableUrlFor(id);
+    return uri;
+  }
+
+  /// Same as [urlFor], but also surfaces the typed conversion outcome from
+  /// `ensureVideoStreamable` (register items H16/F4: a refusal or an abort
+  /// must reach the caller instead of looking like an endless spinner).
+  /// Added in 3G-1C; [urlFor] is kept byte-compatible for existing callers.
+  Future<(Uri, VideoMigrationOutcome)> streamableUrlFor(String id) async {
     if (_videoVaultService == null || _resolveVaultFile == null || _decryptRange == null) {
       throw StateError('MediaStreamServer is not initialized. Call init() first.');
     }
 
     // First ensure the video is streamable (migrated to CTR if needed)
-    await _videoVaultService!.ensureVideoStreamable(id);
+    final outcome = await _videoVaultService!.ensureVideoStreamable(id);
 
     if (_server == null) {
       _server = LocalStreamingServer(
@@ -44,8 +53,11 @@ class MediaStreamServer {
       await _server!.start();
     }
 
-    return Uri.parse(
-      'http://127.0.0.1:${_server!.port}/media/$id?token=${_server!.token}',
+    return (
+      Uri.parse(
+        'http://127.0.0.1:${_server!.port}/media/$id?token=${_server!.token}',
+      ),
+      outcome,
     );
   }
 
