@@ -555,7 +555,7 @@ class VideoVaultService {
         where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error})> pickAndEncryptVideo(BuildContext context) async {
+  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptVideo(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed}) async {
     final List<AssetEntity>? assets = await AssetPicker.pickAssets(
       context,
       pickerConfig: const AssetPickerConfig(
@@ -563,35 +563,79 @@ class VideoVaultService {
       ),
     );
     if (assets == null || assets.isEmpty) {
-      return (successfulIds: <String>[], totalAttempted: 0, stoppedEarly: false, failedFileName: null, error: null);
+      return (successfulIds: <String>[], totalAttempted: 0, stoppedEarly: false, failedFileName: null, error: null, originalsKept: false);
     }
+
+    // The picker just reported the batch size, so the live import card can list
+    // the whole queue ("Importing 1/5 ..." with the rest 'Queued') before the
+    // first file even starts encrypting.
+    try {
+      onPicked?.call(assets.length);
+    } catch (_) {}
 
     final savedIds = <String>[];
     bool stoppedEarly = false;
     String? failedFileName;
     Object? failureError;
 
-    for (final asset in assets) {
+    for (var i = 0; i < assets.length; i++) {
+      final asset = assets[i];
       try {
+        // Live import card: announce each file BEFORE its encrypt pass, so a
+        // 2:34 video shows "Encrypting 1/1 ..." instead of a dead screen.
+        try {
+          onFileStart?.call(i, i + 1, asset.title ?? 'video');
+        } catch (_) {}
         final file = await asset.originFile;
-        if (file == null) continue;
+        if (file == null) {
+          // No readable source: this row is DONE, and it is done
+          // unsuccessfully. It is reported by its own index so the live card
+          // keeps every label attached to the right file — the caller cannot
+          // derive this from the successfulIds count, because a skipped file
+          // shifts that count away from the row order.
+          try {
+            onFileFailed?.call(i, 'File unavailable');
+          } catch (_) {}
+          continue;
+        }
         final name = asset.title;
         final mime = await asset.mimeTypeAsync ?? 'video/mp4';
         final durationS = asset.duration;
         final id = await saveVideoFromFile(file, mime, durationS, originalName: name);
         savedIds.add(id);
+        try {
+          onFileSaved?.call(i);
+        } catch (_) {}
       } catch (e) {
         stoppedEarly = true;
         failedFileName = asset.title ?? 'video';
         failureError = e;
+        try {
+          // Deliberately a fixed string, never `e`: a failure detail must not
+          // leak a filesystem path to the screen (see the T15 test).
+          onFileFailed?.call(i, 'Import failed');
+        } catch (_) {}
         debugPrint('pickAndEncryptVideo failed on $failedFileName: $e');
         break;
       }
     }
 
+    // Originals stay on the device unless the OS confirms every delete: the
+    // user can deny the system dialog, the platform can refuse, or the whole
+    // delete phase is skipped when a file failed earlier. The card reports
+    // that truth per row instead of always claiming 'Saved'.
+    bool originalsKept = true;
     if (savedIds.length == assets.length) {
+      // The OS delete-confirmation dialog carries no progress of its own, so
+      // the card names this wait explicitly. One call covers the dialog AND
+      // the delete pass the OS runs after "Allow" — there is no observable
+      // boundary between the two, so one honest label covers both.
+      try {
+        onWaitingDeleteConfirm?.call();
+      } catch (_) {}
       try {
         final deletedIds = await PhotoManager.editor.deleteWithIds(assets.map((a) => a.id).toList());
+        if (deletedIds.length >= assets.length) originalsKept = false;
         if (deletedIds.length < assets.length && context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Original videos kept on device.')),
@@ -613,6 +657,7 @@ class VideoVaultService {
       stoppedEarly: stoppedEarly,
       failedFileName: failedFileName,
       error: failureError,
+      originalsKept: originalsKept,
     );
   }
 
@@ -650,9 +695,16 @@ class VideoVaultService {
         size INTEGER,
         durationS INTEGER,
         createdAt TEXT,
-        originalName TEXT
+        originalName TEXT,
+        folder TEXT DEFAULT ''
       )
     ''');
+    // Folder feature: pre-folder installs may have the table without the
+    // column (IF NOT EXISTS above is a no-op then); PRAGMA-migrate it.
+    final columns = await _db!.rawQuery('PRAGMA table_info($_tableName)');
+    if (!columns.any((column) => column['name'] == 'folder')) {
+      await _db!.execute("ALTER TABLE $_tableName ADD COLUMN folder TEXT DEFAULT ''");
+    }
     await _db!.delete(_tableName);
     for (final video in decodedVideos) {
       final map = Map<String, dynamic>.from(video);

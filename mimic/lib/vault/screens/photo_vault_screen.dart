@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
 
@@ -10,6 +11,8 @@ import '../security/auto_lock.dart';
 import '../crypto/vault_crypto.dart';
 import '../services/file_vault_service.dart';
 import '../widgets/vault_scaffold.dart';
+import '../widgets/import_activity_button.dart';
+import '../services/import_progress.dart';
 import '../../core/theme/app_theme.dart';
 import 'photo_viewer_screen.dart';
 
@@ -26,6 +29,16 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   // Folder feature (mirrors DocumentVaultScreen): null = All, '' = Unfiled,
   // otherwise the folder name. Filter-only.
   String? _selectedFolder;
+  // Multi-select: photo ids currently ticked. Empty set = selection mode off.
+  final Set<String> _selection = {};
+  // Live import card (mirrors Videos): per-photo Queued -> Encrypting N/M ->
+  // delete-confirm wait -> Saved, so bulk imports never look dead — and a
+  // single big photo cannot look like a frozen screen either.
+  final ImportSession _importSession = ImportSession();
+  // Keeps a settled card on screen ~4s so the outcome is seen, then clears it.
+  // Cancellable: dispose() cancels it and the next import cancels it, so a
+  // stale timer can never wipe a new session's rows.
+  Timer? _lingerTimer;
 
   final LinkedHashMap<String, Uint8List> _bytesCache = LinkedHashMap();
   int _bytesCacheSize = 0;
@@ -71,8 +84,13 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
 
   @override
   void dispose() {
+    // The linger timer outlives the import flow by design, so it MUST be
+    // cancelled here: otherwise it survives the screen and can fire against a
+    // disposed session (and flutter_test flags it as a pending timer).
+    _lingerTimer?.cancel();
     _bytesCache.clear();
     _bytesCacheSize = 0;
+    _importSession.dispose();
     super.dispose();
   }
 
@@ -158,8 +176,50 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
 
     if (!mounted) return;
     AutoLock().beginProtectedOperation();
+    var sessionActive = true;
     try {
-      final result = await ref.read(fileVaultServiceProvider).pickAndEncryptImage(context);
+      _lingerTimer?.cancel();
+      _importSession.begin(const []);
+      // Rows are addressed by the SERVICE's asset index, collected here as the
+      // callback fires — never by counting result.successfulIds. A partial
+      // failure makes those two orders differ, which would label the failed
+      // file 'Saved' and the successful one 'Failed'.
+      final savedRows = <int>[];
+      final failedRows = <int, String>{};
+      final result = await ref.read(fileVaultServiceProvider).pickAndEncryptImage(
+        context,
+        // The picker just reported the batch size: list the whole queue now.
+        onPicked: (total) => _importSession.setTotal(total),
+        onFileStart: (index, pos, name) {
+          _importSession.ensureSlot(index, name);
+          _importSession.markEncrypting(index, pos);
+        },
+        onFileSaved: (index) => savedRows.add(index),
+        onFileFailed: (index, detail) => failedRows[index] = detail,
+        onWaitingDeleteConfirm: () => _importSession.markWaitingDeleteConfirm(),
+      );
+      sessionActive = false;
+      // Outcome rows: per-photo Saved / Saved-original-kept. originalsKept ==
+      // true means the source was left on the device (dialog denied, platform
+      // refusal, or the delete phase never ran).
+      for (final i in savedRows) {
+        if (result.originalsKept) {
+          _importSession.markSavedOriginalKept(i);
+        } else {
+          _importSession.markSaved(i);
+        }
+      }
+      failedRows.forEach((i, detail) => _importSession.markFailed(i, detail));
+      // Files the service never reached (the batch stopped on a failure) are
+      // still Queued or Encrypting. A row left in either state would keep
+      // isWorking true forever and the card would never clear.
+      for (var i = 0; i < _importSession.total; i++) {
+        final status = _importSession.files[i].status;
+        if (status == ImportFileStatus.queued ||
+            status == ImportFileStatus.encrypting) {
+          _importSession.markFailed(i, 'Not imported');
+        }
+      }
       if (result.successfulIds.isNotEmpty) {
         await _loadPhotos();
       }
@@ -174,14 +234,25 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
           SnackBar(content: Text(msg)),
         );
       }
+      // Let the outcome rows linger so the user sees them, then clear. The
+      // timer is cancellable: dispose() stops it, and a new import cancels it
+      // so a stale timer can never wipe the next session's rows mid-flight.
+      if (mounted && _importSession.isActive && !_importSession.isWorking) {
+        _lingerTimer?.cancel();
+        _lingerTimer = Timer(const Duration(seconds: 4), () {
+          if (mounted && !_importSession.isWorking) _importSession.clear();
+        });
+      }
     } catch (e) {
       if (mounted) {
         final msg = _formatImportError(0, 0, null, e);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(msg)),
         );
+        _importSession.clear();
       }
     } finally {
+      if (sessionActive && mounted) _importSession.clear();
       AutoLock().endProtectedOperation();
     }
   }
@@ -441,7 +512,10 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     );
   }
 
-  Future<void> _showMoveToFolder(PhotoMeta photo) async {
+  /// Shared folder picker. Every label carries an EXPLICIT dark color: the
+  /// dialog background is white, but ListTile/TextField text otherwise
+  /// inherits the app's dark-theme font (white), turning invisible.
+  Future<String?> _pickFolder() async {
     final existingFolders = _photos
         .map((p) => p.folder)
         .where((f) => f.isNotEmpty)
@@ -449,7 +523,7 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
         .toList()
       ..sort();
     final newFolderController = TextEditingController();
-    final chosen = await showDialog<String>(
+    return showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Colors.white,
@@ -469,14 +543,18 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                   leading: const Icon(Icons.folder_off_outlined,
                       color: VaultColors.textSecondary),
                   title: const Text('Unfiled',
-                      style: TextStyle(fontFamily: 'Inter')),
+                      style: TextStyle(
+                          fontFamily: 'Inter',
+                          color: VaultColors.textPrimary)),
                   onTap: () => Navigator.of(context).pop(''),
                 ),
                 ...existingFolders.map((f) => ListTile(
                       leading: const Icon(Icons.folder_outlined,
                           color: VaultColors.accent),
-                      title:
-                          Text(f, style: const TextStyle(fontFamily: 'Inter')),
+                      title: Text(f,
+                          style: const TextStyle(
+                              fontFamily: 'Inter',
+                              color: VaultColors.textPrimary)),
                       onTap: () => Navigator.of(context).pop(f),
                     )),
                 const Divider(),
@@ -485,7 +563,8 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                   decoration: const InputDecoration(
                       hintText: 'New folder name',
                       hintStyle: TextStyle(fontFamily: 'Inter')),
-                  style: const TextStyle(fontFamily: 'Inter'),
+                  style: const TextStyle(
+                      fontFamily: 'Inter', color: VaultColors.textPrimary),
                 ),
               ],
             ),
@@ -508,11 +587,80 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
         ],
       ),
     );
+  }
+
+  Future<void> _showMoveToFolder(PhotoMeta photo) async {
+    final chosen = await _pickFolder();
     if (chosen != null && mounted) {
       await ref.read(fileVaultServiceProvider).movePhoto(photo.id, chosen);
       await _loadPhotos();
     }
   }
+
+  // ── Multi-select batch operations ────────────────────────────────────
+  Future<void> _moveSelection() async {
+    final chosen = await _pickFolder();
+    if (chosen == null || !mounted) return;
+    final service = ref.read(fileVaultServiceProvider);
+    final ids = Set<String>.from(_selection);
+    for (final id in ids) {
+      await service.movePhoto(id, chosen);
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Moved ${ids.length} photo(s) to '
+            '${chosen.isEmpty ? 'Unfiled' : chosen}')));
+    _clearSelection();
+    await _loadPhotos();
+  }
+
+  Future<void> _deleteSelection() async {
+    final count = _selection.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Delete $count photo(s)?',
+            style: const TextStyle(
+                color: VaultColors.textPrimary,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'Inter')),
+        content: const Text(
+            'This permanently removes the selected photos from the vault.',
+            style: TextStyle(
+                color: VaultColors.textSecondary, fontFamily: 'Inter')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel',
+                  style: TextStyle(
+                      color: VaultColors.textTertiary, fontFamily: 'Inter'))),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Delete',
+                  style: TextStyle(
+                      color: VaultColors.error, fontFamily: 'Inter'))),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final service = ref.read(fileVaultServiceProvider);
+    for (final id in Set<String>.from(_selection)) {
+      await service.deletePhoto(id);
+    }
+    HapticFeedback.mediumImpact();
+    _clearSelection();
+    await _loadPhotos();
+  }
+
+  void _toggleSelection(String id) {
+    setState(() {
+      if (!_selection.remove(id)) _selection.add(id);
+    });
+  }
+
+  void _clearSelection() => setState(_selection.clear);
 
   void _openViewer(int initialIndex) {
     // Folder feature: the viewer pages through the FILTERED list the grid
@@ -607,51 +755,122 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
 
     return VaultScaffold(
       title: 'Photos',
-      floatingActionButton: AnimatedFAB(
-        child: FloatingActionButton(
-          onPressed: _showImportOptions,
-          backgroundColor: VaultColors.accent,
-          child: const Icon(Icons.add, color: Colors.white),
-        ),
-      ),
+      actions: _selection.isNotEmpty
+          ? [
+              IconButton(
+                icon: const Icon(Icons.close),
+                tooltip: 'Clear selection',
+                onPressed: _clearSelection,
+              ),
+            ]
+          : null,
+      floatingActionButton: _selection.isNotEmpty
+          ? FloatingActionButton.extended(
+              backgroundColor: VaultColors.accent,
+              onPressed: null, // visual only; real actions live in the bar below
+              label: Text('${_selection.length} selected',
+                  style: const TextStyle(color: Colors.white)),
+            )
+          : Column(
+              // Import status pill + the + FAB form one cluster bottom-right
+              // (mirrors VideoVaultScreen; replaces the old above-grid card).
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                ImportActivityButton(
+                  key: const ValueKey('import_activity_button'),
+                  session: _importSession,
+                  onTap: () => showImportDetailsSheet(context, _importSession),
+                ),
+                const SizedBox(height: 12),
+                AnimatedFAB(
+                  child: FloatingActionButton(
+                    onPressed: _showImportOptions,
+                    backgroundColor: VaultColors.accent,
+                    child: const Icon(Icons.add, color: Colors.white),
+                  ),
+                ),
+              ],
+            ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: VaultColors.accent))
           : _photos.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.photo_outlined,
-                        size: 80,
-                        color: VaultColors.accent.withValues(alpha: 0.2),
-                      ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'No photos yet',
-                        style: TextStyle(
-                          fontSize: 18,
-                          color: VaultColors.textTertiary,
-                          fontFamily: 'Inter',
-                          fontWeight: FontWeight.w500,
+              ? Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Expanded(
+                      child: Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(
+                              Icons.photo_outlined,
+                              size: 80,
+                              color: VaultColors.accent.withValues(alpha: 0.2),
+                            ),
+                            const SizedBox(height: 16),
+                            const Text(
+                              'No photos yet',
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: VaultColors.textTertiary,
+                                fontFamily: 'Inter',
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Tap + to import your first photo',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: VaultColors.textTertiary.withValues(alpha: 0.7),
+                                fontFamily: 'Inter',
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Tap + to import your first photo',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: VaultColors.textTertiary.withValues(alpha: 0.7),
-                          fontFamily: 'Inter',
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 )
               : Column(
                   children: [
-                    const SizedBox(height: 8),
                     _buildFolderChips(),
+                    if (_selection.isNotEmpty)
+                      Material(
+                        color: VaultColors.surface,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 16, vertical: 4),
+                          child: Row(
+                            children: [
+                              Text('${_selection.length} selected',
+                                  style: const TextStyle(
+                                      fontFamily: 'Inter',
+                                      color: VaultColors.textSecondary)),
+                              const Spacer(),
+                              TextButton.icon(
+                                onPressed: _moveSelection,
+                                icon: const Icon(Icons.drive_file_move_outlined,
+                                    size: 20, color: VaultColors.accent),
+                                label: const Text('Move',
+                                    style: TextStyle(
+                                        fontFamily: 'Inter',
+                                        color: VaultColors.accent)),
+                              ),
+                              TextButton.icon(
+                                onPressed: _deleteSelection,
+                                icon: const Icon(Icons.delete,
+                                    size: 20, color: VaultColors.error),
+                                label: const Text('Delete',
+                                    style: TextStyle(
+                                        fontFamily: 'Inter',
+                                        color: VaultColors.error)),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     Expanded(
                       child: _visiblePhotos().isEmpty
                           ? const Center(
@@ -676,14 +895,41 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                               itemBuilder: (context, index) {
                                 final photo = _visiblePhotos()[index];
                                 final thumbPx = (MediaQuery.of(context).size.width / 3 * MediaQuery.of(context).devicePixelRatio).round().clamp(150, 600);
+                                final selected = _selection.contains(photo.id);
                                 return GestureDetector(
-                                  onTap: () => _openViewer(index),
-                                  onLongPress: () => _showOptions(photo),
-                                  child: _PhotoThumbnail(
-                                    key: ValueKey(photo.id),
-                                    photoId: photo.id,
-                                    thumbPx: thumbPx,
-                                    loadBytes: _loadPhotoBytes,
+                                  onTap: () {
+                                    if (_selection.isNotEmpty) {
+                                      _toggleSelection(photo.id);
+                                    } else {
+                                      _openViewer(index);
+                                    }
+                                  },
+                                  onLongPress: () {
+                                    if (_selection.isEmpty) {
+                                      _toggleSelection(photo.id);
+                                    } else {
+                                      _showOptions(photo);
+                                    }
+                                  },
+                                  child: Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      _PhotoThumbnail(
+                                        key: ValueKey(photo.id),
+                                        photoId: photo.id,
+                                        thumbPx: thumbPx,
+                                        loadBytes: _loadPhotoBytes,
+                                      ),
+                                      if (selected)
+                                        Container(
+                                          color: VaultColors.accent
+                                              .withValues(alpha: 0.35),
+                                        ),
+                                      // No badge circle: selected state is
+                                      // the tint above (photos) / border +
+                                      // tint (videos). Long-press enters
+                                      // selection; tap toggles.
+                                    ],
                                   ),
                                 );
                               },

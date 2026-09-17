@@ -122,12 +122,12 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
               children: [
                 ListTile(
                   leading: const Icon(Icons.folder_off_outlined, color: VaultColors.textSecondary),
-                  title: const Text('Unfiled', style: TextStyle(fontFamily: 'Inter')),
+                  title: const Text('Unfiled', style: TextStyle(fontFamily: 'Inter', color: VaultColors.textPrimary)),
                   onTap: () => Navigator.of(context).pop(''),
                 ),
                 ...existingFolders.map((f) => ListTile(
                       leading: const Icon(Icons.folder_outlined, color: VaultColors.accent),
-                      title: Text(f, style: const TextStyle(fontFamily: 'Inter')),
+                      title: Text(f, style: const TextStyle(fontFamily: 'Inter', color: VaultColors.textPrimary)),
                       onTap: () => Navigator.of(context).pop(f),
                     )),
                 const Divider(),
@@ -136,7 +136,7 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                   decoration: const InputDecoration(
                       hintText: 'New folder name',
                       hintStyle: TextStyle(fontFamily: 'Inter')),
-                  style: const TextStyle(fontFamily: 'Inter'),
+                  style: const TextStyle(fontFamily: 'Inter', color: VaultColors.textPrimary),
                 ),
               ],
             ),
@@ -199,21 +199,137 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
     }
   }
 
+  /// Asks the user whether the ORIGINAL document should be removed after a
+  /// successful import. Opt-in per import (never automatic): deleting a source
+  /// file outside the vault is destructive, and provider support varies — the
+  /// outcome message must be honest about that.
+  Future<bool> _askRemoveOriginal() async {
+    var remove = false;
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          backgroundColor: Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text(
+            'Remove original after import?',
+            style: TextStyle(
+                color: VaultColors.textPrimary,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'Inter'),
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Mimic saves an encrypted copy in the vault. The original file '
+                'stays where it is unless you ask to remove it here.',
+                style: TextStyle(
+                    color: VaultColors.textSecondary, fontFamily: 'Inter'),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Removal goes through your device\'s file manager and may not '
+                'be possible for every file (e.g. some cloud or read-only '
+                'locations). If it cannot be removed, the original is kept '
+                'and Mimic will say so.',
+                style: TextStyle(
+                    fontSize: 12,
+                    color: VaultColors.textTertiary,
+                    fontFamily: 'Inter'),
+              ),
+              const SizedBox(height: 8),
+              CheckboxListTile(
+                value: remove,
+                onChanged: (v) => setDialogState(() => remove = v ?? false),
+                activeColor: VaultColors.accent,
+                controlAffinity: ListTileControlAffinity.leading,
+                contentPadding: EdgeInsets.zero,
+                title: const Text(
+                  'Also remove the original',
+                  style: TextStyle(
+                      color: VaultColors.textPrimary, fontFamily: 'Inter'),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel',
+                  style: TextStyle(
+                      color: VaultColors.textTertiary, fontFamily: 'Inter')),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Import',
+                  style: TextStyle(
+                      color: VaultColors.accent, fontFamily: 'Inter')),
+            ),
+          ],
+        ),
+      ),
+    );
+    return remove;
+  }
+
   Future<void> _importDocument() async {
+    // The removal question comes BEFORE the picker: once the system sheet is
+    // dismissed we already hold the file, and asking about deletion after the
+    // vault copy exists reads like a nagging second prompt.
+    var removeOriginal = false;
+    if (mounted) {
+      removeOriginal = await _askRemoveOriginal();
+    }
     AutoLock().beginProtectedOperation();
     try {
-      // H7: the system picker supplies a read-only copy — Android grants no
-      // authority to delete the original, so a readable copy stays where it
-      // was. Tell the user after EVERY import where it is; deletion (which
-      // the docs explicitly rule out) is a manual step in their file manager.
-      final result = await ref.read(documentVaultServiceProvider).importDocument();
+      // The truth about document imports, verified against file_picker 10.3.10
+      // (see importDocument): the picker copies the file into OUR cache dir and
+      // hands back that copy's path, so the vault save never touches the user's
+      // real file. With the opt-in above, the ORIGINAL is then removed through
+      // SAF (DocumentsContract), and the outcome below reports exactly what
+      // happened — removed, kept by choice, or kept because the source would
+      // not allow it. Nothing is described as secure erasure: device-level
+      // deletion plus any cloud copies are outside Mimic's reach.
+      final service = ref.read(documentVaultServiceProvider);
+      final result = removeOriginal
+          ? await service.importDocumentAndRemoveOriginal()
+          : await service.importDocument().then((r) => (
+                id: r.id,
+                tempCopyRemoved: r.tempCopyRemoved,
+                originalRemoved: false,
+                originalNote: null as String?,
+              ));
       await _loadDocuments();
       if (mounted) {
-        final where = result.sourcePath ?? 'its original location';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(
-              'Saved to vault. Original still exists at $where — delete it manually.',
+            content: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(result.originalRemoved
+                    ? 'Saved to vault · Original removed'
+                    : 'Saved to vault'),
+                const SizedBox(height: 2),
+                if (result.originalNote != null)
+                  Text(result.originalNote!,
+                      style: const TextStyle(fontSize: 12)),
+                if (!result.originalRemoved && result.originalNote == null)
+                  const Text(
+                    'The file you picked is still in your own storage. Remove '
+                    'it there if you want it gone.',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                if (result.tempCopyRemoved) ...[
+                  const SizedBox(height: 2),
+                  const Text(
+                    'Mimic removed its own temporary copy.',
+                    style: TextStyle(fontSize: 12),
+                  ),
+                ],
+              ],
             ),
             duration: const Duration(seconds: 8),
           ),

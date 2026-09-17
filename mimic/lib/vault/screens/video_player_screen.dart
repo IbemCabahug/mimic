@@ -1,6 +1,7 @@
 // lib/vault/screens/video_player_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
 import '../security/vault_error_ui.dart';
@@ -24,6 +25,8 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   bool _hasError = false;
   String? _errorMessage;
   bool _disposed = false;
+  VoidCallback? _chewieFullscreenListener;
+  bool _wasFullscreen = false;
 
   @override
   void initState() {
@@ -67,10 +70,35 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         });
         return;
       }
+      // Fullscreen rebuild robustness: the video aspect ratio is snapshotted
+      // from the initialized player and pinned on the Chewie controller, so
+      // the fullscreen route (a new route + relayout on a larger surface)
+      // reuses the same sizing instead of re-measuring mid-rotation. The
+      // controller is created ONCE per play — _initializePlayer never runs
+      // again for a fullscreen toggle — and the listener below only calls
+      // setState on the isFullScreen EDGE, so continuous playback frames
+      // never rebuild this widget.
+      final size = controller.value.size;
+      final double aspect = (size.width > 0 && size.height > 0)
+          ? size.width / size.height
+          : 16 / 9;
       final chewie = ChewieController(
         videoPlayerController: controller,
         autoPlay: true,
         looping: false,
+        aspectRatio: aspect,
+        allowFullScreen: true,
+        fullScreenByDefault: false,
+        deviceOrientationsOnEnterFullScreen: const [
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ],
+        deviceOrientationsAfterFullScreen: const [
+          DeviceOrientation.portraitUp,
+          DeviceOrientation.portraitDown,
+          DeviceOrientation.landscapeLeft,
+          DeviceOrientation.landscapeRight,
+        ],
         materialProgressColors: ChewieProgressColors(
           playedColor: const Color(0xFF7F77DD),
           handleColor: const Color(0xFF7F77DD),
@@ -94,6 +122,16 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         await controller.dispose();
         return;
       }
+      _wasFullscreen = chewie.isFullScreen;
+      _chewieFullscreenListener = () {
+        if (_disposed || !mounted) return;
+        final now = chewie.isFullScreen;
+        if (now == _wasFullscreen) return;
+        _wasFullscreen = now;
+        // Rebuild once per edge so the inline/fullscreen chrome swaps.
+        setState(() {});
+      };
+      chewie.addListener(_chewieFullscreenListener!);
       setState(() {
         _videoPlayerController = controller;
         _chewieController = chewie;
@@ -123,6 +161,13 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     // server. dispose() is synchronous, so the order is the fix — there is
     // nothing to await.
     _videoPlayerController?.pause();
+    final fullscreenListener = _chewieFullscreenListener;
+    if (fullscreenListener != null) {
+      try {
+        _chewieController?.removeListener(fullscreenListener);
+      } catch (_) {}
+      _chewieFullscreenListener = null;
+    }
     _chewieController?.dispose();
     _videoPlayerController?.dispose();
     unawaited(MediaStreamServer.instance.stop());
