@@ -1,5 +1,6 @@
 import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mimic/core/services/platform_service.dart';
@@ -168,9 +169,11 @@ void main() {
     });
 
     test('saveDocumentFromFile leaves the original source file untouched (H7)', () async {
-      // H7: the system picker hands us a read-only copy — the fix is NOT
-      // deletion (not permitted) but honesty. This test pins the service
-      // half: saveDocumentFromFile must NEVER delete or modify its src.
+      // H7: the system file picker grants no authority to delete, so the fix
+      // is NOT deletion — deleting a path we do not own could destroy data
+      // outside the vault — but honesty. This test pins the service half:
+      // saveDocumentFromFile must NEVER delete or modify its src, whichever
+      // path it is handed.
       final platformService = AndroidPlatformService();
       final crypto = VaultCrypto(platformService, FakeKeystoreService());
       await crypto.initialize('123456');
@@ -188,5 +191,196 @@ void main() {
       expect(await srcFile.readAsBytes(), equals(bytes),
           reason: 'import must not modify the original');
     });
+
+    test('importDocument removes the picker\'s own plaintext temp copy after a successful import',
+        () async {
+      // H7 follow-up. The pinned plugin (file_picker 10.3.10) copies the picked
+      // document into OUR cache dir and returns THAT path, so the path the
+      // service is handed is a plaintext duplicate we own — unlike the user's
+      // original, which stays put. Leaving it behind would strand a readable
+      // copy of a document the user just chose to protect.
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('123456');
+      final documentService = DocumentVaultService(platformService, crypto);
+
+      final pickedCopy = File(p.join(tempDir.path, 'file_picker', '9876', 'picked.pdf'));
+      await pickedCopy.create(recursive: true);
+      final bytes = List<int>.generate(4096, (i) => i % 256);
+      await pickedCopy.writeAsBytes(bytes);
+
+      FilePicker.platform = _FakeFilePicker(pickedCopy.path);
+      addTearDown(() => FilePicker.platform = FilePickerIO());
+
+      final result = await documentService.importDocument();
+
+      expect(result.tempCopyRemoved, isTrue,
+          reason: 'a copy inside our own cache dir is ours to delete');
+      expect(pickedCopy.existsSync(), isFalse,
+          reason: 'a plaintext duplicate inside our cache must not be left behind');
+      // Deletion happens only AFTER the encrypted write succeeded, so the
+      // document must be readable from the vault.
+      expect(await documentService.getDocumentBytes(result.id), equals(bytes));
+    });
+
+    test('importDocument never deletes a picked path outside the app temp dir', () async {
+      // The guard that makes the worst case "we left a file alone" instead of
+      // "we deleted the user's file": if a future plugin version hands back a
+      // real external path, it must survive the import untouched.
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('123456');
+      final documentService = DocumentVaultService(platformService, crypto);
+
+      final outsideDir = Directory.systemTemp.createTempSync('mimic_user_docs');
+      addTearDown(() {
+        try {
+          outsideDir.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      final outsider = File(p.join(outsideDir.path, 'user_document.pdf'));
+      final bytes = List<int>.generate(2048, (i) => i % 256);
+      await outsider.writeAsBytes(bytes);
+
+      FilePicker.platform = _FakeFilePicker(outsider.path);
+      addTearDown(() => FilePicker.platform = FilePickerIO());
+
+      final result = await documentService.importDocument();
+
+      expect(result.tempCopyRemoved, isFalse,
+          reason: 'the guard must refuse any path it does not own');
+      expect(outsider.existsSync(), isTrue,
+          reason: 'a path outside our temp dir must survive an import');
+      expect(await outsider.readAsBytes(), equals(bytes),
+          reason: 'and it must be byte-identical afterwards');
+    });
+
+    test('importDocumentAndRemoveOriginal deletes the original through the '
+        'SAF hook and reports removal', () async {
+      // The opt-in flow: the original's content URI (PlatformFile.identifier)
+      // goes to the native deleteDocument channel; a provider that supports
+      // FLAG_SUPPORTS_DELETE answers true and the result says "removed".
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('123456');
+      final documentService = DocumentVaultService(platformService, crypto);
+
+      final pickedCopy = File(p.join(tempDir.path, 'file_picker', '9901', 'picked.pdf'));
+      await pickedCopy.create(recursive: true);
+      final bytes = List<int>.generate(4096, (i) => i % 256);
+      await pickedCopy.writeAsBytes(bytes);
+
+      final requestedUris = <String>[];
+      documentService.deleteOriginalHook = (uri) async {
+        requestedUris.add(uri);
+        return true;
+      };
+
+      FilePicker.platform =
+          _FakeFilePicker(pickedCopy.path, identifier: 'content://downloads/document/42');
+      addTearDown(() => FilePicker.platform = FilePickerIO());
+
+      final result = await documentService.importDocumentAndRemoveOriginal();
+
+      expect(requestedUris, equals(['content://downloads/document/42']),
+          reason: 'exactly the original URI is handed to SAF, never the copy path');
+      expect(result.originalRemoved, isTrue);
+      expect(result.originalNote, isNull);
+      // The vault copy is unaffected either way.
+      expect(await documentService.getDocumentBytes(result.id), equals(bytes));
+      expect(pickedCopy.existsSync(), isFalse,
+          reason: 'the plugin temp copy is still cleaned up');
+    });
+
+    test('importDocumentAndRemoveOriginal keeps the original when the provider '
+        'refuses, and says so', () async {
+      // Read-only providers, cloud docs and expired grants all surface as
+      // false — the flow must keep the original and NOT pretend otherwise.
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('123456');
+      final documentService = DocumentVaultService(platformService, crypto);
+
+      final pickedCopy = File(p.join(tempDir.path, 'file_picker', '9902', 'picked.pdf'));
+      await pickedCopy.create(recursive: true);
+      final bytes = List<int>.generate(2048, (i) => i % 256);
+      await pickedCopy.writeAsBytes(bytes);
+
+      documentService.deleteOriginalHook = (_) async => false;
+
+      FilePicker.platform =
+          _FakeFilePicker(pickedCopy.path, identifier: 'content://com.example/read_only/doc');
+      addTearDown(() => FilePicker.platform = FilePickerIO());
+
+      final result = await documentService.importDocumentAndRemoveOriginal();
+
+      expect(result.originalRemoved, isFalse,
+          reason: 'a refusal must not be reported as a removal');
+      expect(result.originalNote, isNotNull,
+          reason: 'the outcome must explain that the original was kept');
+      expect(await documentService.getDocumentBytes(result.id), equals(bytes),
+          reason: 'the vault copy exists regardless');
+    });
+
+    test('importDocumentAndRemoveOriginal with no identifier reports the '
+        'original was not removed', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('123456');
+      final documentService = DocumentVaultService(platformService, crypto);
+
+      final pickedCopy = File(p.join(tempDir.path, 'file_picker', '9903', 'picked.pdf'));
+      await pickedCopy.create(recursive: true);
+      final bytes = List<int>.generate(1024, (i) => i % 256);
+      await pickedCopy.writeAsBytes(bytes);
+
+      var hookCalled = false;
+      documentService.deleteOriginalHook = (_) async {
+        hookCalled = true;
+        return true;
+      };
+
+      FilePicker.platform = _FakeFilePicker(pickedCopy.path, identifier: null);
+      addTearDown(() => FilePicker.platform = FilePickerIO());
+
+      final result = await documentService.importDocumentAndRemoveOriginal();
+
+      expect(hookCalled, isFalse,
+          reason: 'without a URI there is nothing SAF can address');
+      expect(result.originalRemoved, isFalse);
+      expect(result.originalNote, isNotNull);
+      expect(await documentService.getDocumentBytes(result.id), equals(bytes));
+    });
   });
+}
+
+/// Minimal file_picker double. `importDocument` needs only `pickFiles`, and the
+/// path it returns is what the pinned plugin returns in reality: a copy the
+/// plugin wrote into the app's own cache directory.
+class _FakeFilePicker extends FilePicker {
+  final String path;
+  /// The original's content URI, as Android populates `PlatformFile.identifier`
+  /// (verified in the pinned plugin's FileInfo builder). Null on other doubles.
+  final String? identifier;
+  _FakeFilePicker(this.path, {this.identifier});
+
+  @override
+  Future<FilePickerResult?> pickFiles({
+    String? dialogTitle,
+    String? initialDirectory,
+    FileType type = FileType.any,
+    List<String>? allowedExtensions,
+    Function(FilePickerStatus)? onFileLoading,
+    @Deprecated('unused in this double') bool allowCompression = false,
+    int compressionQuality = 0,
+    bool allowMultiple = false,
+    bool withData = false,
+    bool withReadStream = false,
+    bool lockParentWindow = false,
+    bool readSequential = false,
+  }) async =>
+      FilePickerResult([
+        PlatformFile(
+            name: 'picked.pdf', path: path, size: 4096, identifier: identifier),
+      ]);
 }

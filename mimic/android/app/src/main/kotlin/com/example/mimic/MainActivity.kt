@@ -56,6 +56,41 @@ class MainActivity : FlutterFragmentActivity() {
             }
         }
 
+        // H7 follow-up (2026-09-17): delete the ORIGINAL document the user
+        // picked, via SAF. file_picker's ACTION_OPEN_DOCUMENT grants temporary
+        // write access to the returned content:// URI, and deletion works only
+        // when the provider supports FLAG_SUPPORTS_DELETE — anything else must
+        // answer false (kept), never throw into Dart. Runs on a worker thread:
+        // DocumentsContract calls hit the provider binder and must not block
+        // the platform thread.
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "mimic/documents").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "deleteDocument" -> {
+                    val uriStr = call.argument<String>("uri")
+                    if (uriStr == null) {
+                        result.error("INVALID_ARG", "uri required", null)
+                        return@setMethodCallHandler
+                    }
+                    Thread {
+                        var ok = false
+                        try {
+                            val uri = android.net.Uri.parse(uriStr)
+                            if (android.provider.DocumentsContract.isDocumentUri(this, uri)) {
+                                ok = android.provider.DocumentsContract.deleteDocument(contentResolver, uri)
+                            }
+                        } catch (e: Exception) {
+                            // SecurityException (grant expired / no delete flag),
+                            // UnsupportedOperationException, provider failure —
+                            // all mean the same thing: the original is kept.
+                            ok = false
+                        }
+                        runOnUiThread { result.success(ok) }
+                    }.start()
+                }
+                else -> result.notImplemented()
+            }
+        }
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "setIconVisible" -> {

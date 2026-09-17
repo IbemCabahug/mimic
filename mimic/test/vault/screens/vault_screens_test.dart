@@ -14,7 +14,8 @@ import 'package:mimic/vault/crypto/keystore_service.dart';
 // - AutoLockWrapper is present and connected
 // - Screen respects vaultTheme (light background, VaultColors tokens)
 // - No decrypted file data is written to disk
-import 'dart:convert';
+
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -260,18 +261,26 @@ class FakeFileVaultService extends FileVaultService {
   }
 
   @override
-  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error})> pickAndEncryptImage(BuildContext context) async {
+  // onFileFailed is accepted but never fired here: this double models a batch
+  // that fully succeeds, which is the card path these tests assert.
+  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptImage(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed}) async {
     onPickAndEncryptImage?.call();
     if (shouldThrowOnPick) {
       throw Exception('Import failure simulation');
     }
+    // Drive the live import card the same way the real service does, so the
+    // widget test covers the Queued -> Encrypting -> Saved card path.
+    onPicked?.call(1);
+    onFileStart?.call(0, 1, 'fake.jpg');
     final id = await savePhoto(kTransparentImage, 'image/jpeg');
+    onFileSaved?.call(0);
     return (
       successfulIds: [id],
       totalAttempted: 1,
       stoppedEarly: false,
       failedFileName: null,
       error: null,
+      originalsKept: false,
     );
   }
 
@@ -326,14 +335,22 @@ class FakeVideoVaultService extends VideoVaultService {
   }
 
   @override
-  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error})> pickAndEncryptVideo(BuildContext context) async {
+  // onFileFailed is accepted but never fired here: this double models a batch
+  // that fully succeeds, which is the card path these tests assert.
+  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptVideo(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed}) async {
+    // Drive the live import card the same way the real service does, so the
+    // widget test covers the Queued -> Encrypting -> Saved card path.
+    onPicked?.call(1);
+    onFileStart?.call(0, 1, 'fake.mp4');
     final id = await saveVideo(kTransparentImage, 'video/mp4', 10);
+    onFileSaved?.call(0);
     return (
       successfulIds: [id],
       totalAttempted: 1,
       stoppedEarly: false,
       failedFileName: null,
       error: null,
+      originalsKept: false,
     );
   }
 
@@ -351,7 +368,7 @@ class FakeDocumentVaultService extends DocumentVaultService {
   FakeDocumentVaultService(super.platformService, super.crypto);
 
   @override
-  Future<({String id, String? sourcePath})> importDocument() async {
+  Future<({String id, bool tempCopyRemoved})> importDocument() async {
     throw Exception('No file selected');
   }
 
@@ -655,6 +672,22 @@ void main() {
         // Make sure raw unencrypted bytes are not written
         expect(content, isNot(equals(kTransparentImage)));
       }
+
+      // ── Import status (F4 rework) ────────────────────────────────────────
+      // The compact pill replaces the old above-grid card: same truthful
+      // counts, no grid space stolen. The pill stays visible with a settled
+      // summary; per-file rows moved into the detail sheet, which the test
+      // opens to assert the same row facts as before.
+      expect(find.text('Import finished (1/1)'), findsOneWidget,
+          reason: 'a settled batch must report completion on the pill');
+      await tester.tap(find.byKey(const ValueKey('import_activity_button')));
+      await tester.pumpAndSettle();
+      expect(find.text('Import finished'), findsWidgets,
+          reason: 'the sheet header must confirm the settled batch');
+      expect(find.text('fake.jpg'), findsOneWidget,
+          reason: 'the sheet must name the file that was imported');
+      expect(find.text('Saved'), findsOneWidget,
+          reason: 'the row must report the outcome, not just that it started');
     });
 
     testWidgets('import suspends auto-lock for its duration', (WidgetTester tester) async {

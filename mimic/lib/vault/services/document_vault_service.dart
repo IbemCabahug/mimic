@@ -2,6 +2,7 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
@@ -82,12 +83,34 @@ class DocumentVaultService {
       final raw = await _platformService.secureRead(_storageKey);
       if (raw == null || raw.isEmpty) return [];
       final List<dynamic> decoded = jsonDecode(raw);
-      return decoded
+      return _dedupById(decoded
           .map((e) => DocumentMeta.fromMap(Map<String, dynamic>.from(e)))
-          .toList();
+          .toList());
     }
-    // Mobile: try to read from preferences if available (fallback for consistency)
+    // Mobile: secure storage is the source of truth (it always receives the
+    // write alongside prefs). Prefs is only a FALLBACK for when secure
+    // storage returns nothing — reading prefs first let the two stores
+    // diverge, resurfacing stale entries (ghost/duplicate documents) after
+    // imports, moves or restores.
+    final secureRaw = await _platformService.secureRead(_storageKey);
+    if (secureRaw != null && secureRaw.isNotEmpty) {
+      try {
+        final List<dynamic> decoded = jsonDecode(secureRaw);
+        return _dedupById(decoded
+            .map((e) => DocumentMeta.fromMap(Map<String, dynamic>.from(e)))
+            .toList());
+      } catch (_) {
+        // fall through to prefs
+      }
+    }
     return _loadFromPrefs();
+  }
+
+  /// Defensive: duplicate ids in the meta list render one document twice.
+  /// Keep the first occurrence of each id.
+  static List<DocumentMeta> _dedupById(List<DocumentMeta> docs) {
+    final seen = <String>{};
+    return docs.where((d) => seen.add(d.id)).toList();
   }
 
   Future<List<DocumentMeta>> _loadFromPrefs() async {
@@ -119,7 +142,87 @@ class DocumentVaultService {
     await prefs.setString(_storageKey, encoded);
   }
 
-  Future<({String id, String? sourcePath})> importDocument() async {
+  Future<({String id, bool tempCopyRemoved})> importDocument() async {
+    final result = await _pickDocument();
+    final id = await saveDocumentFromFile(result.srcFile, result.extension, originalName: result.fileName);
+    // VERIFIED against file_picker 10.3.10 (this app's pinned version):
+    // FileUtils.openFileStream copies the picked content:// URI into
+    // context.cacheDir/file_picker/<timestamp>/<name> and returns THAT path, and
+    // it is the only path builder for picked files. So `file.path` is never the
+    // user's real document and never a download path - it is our own temporary
+    // copy, plaintext, sitting in the app's private cache. The user's original
+    // in Downloads/Documents is untouched by the picker, and Mimic has no
+    // authority over it, so it stays and the screen must say so.
+    //
+    // Our own copy is a different matter: it is inside our cache, so we do have
+    // authority over it, and leaving it behind would strand a readable duplicate
+    // of a document the user just chose to protect. Remove it - but only AFTER
+    // the encrypted write succeeded, so a failed import never destroys the only
+    // copy, and only when it really is inside our temp dir.
+    final tempCopyRemoved = await _deletePickedTempCopy(result.pickedPath);
+    return (id: id, tempCopyRemoved: tempCopyRemoved);
+  }
+
+  /// H7 follow-up (2026-09-17): optional deletion of the ORIGINAL document the
+  /// user picked, via Android SAF. The pinned file_picker hands back the
+  /// original's content:// URI in `PlatformFile.identifier` (verified: the
+  /// FileInfo builder emits Pair("identifier", uri.toString())), and
+  /// ACTION_OPEN_DOCUMENT grants temporary read/write access to that URI.
+  /// Deleting goes through DocumentsContract.deleteDocument, which only works
+  /// when the provider supports FLAG_SUPPORTS_DELETE — anything else (read-only
+  /// provider, cloud doc, expired grant) must surface as "kept", never crash.
+  ///
+  /// The user opts in explicitly per import; this is NEVER automatic. Returns
+  /// false (with a reason) when the original could not be removed; the vault
+  /// copy is unaffected either way because this runs after the save.
+  Future<({String id, bool tempCopyRemoved, bool originalRemoved, String? originalNote})>
+      importDocumentAndRemoveOriginal() async {
+    final result = await _pickDocument();
+    final id = await saveDocumentFromFile(result.srcFile, result.extension,
+        originalName: result.fileName);
+    final tempCopyRemoved = await _deletePickedTempCopy(result.pickedPath);
+
+    var originalRemoved = false;
+    String? originalNote;
+    final uri = result.identifier;
+    if (uri == null || uri.isEmpty) {
+      originalNote = 'Original location unknown — not removed.';
+    } else {
+      final deleted = await _deleteOriginalHook(uri);
+      if (deleted) {
+        originalRemoved = true;
+      } else {
+        originalNote =
+            'Could not remove the original (source may not allow it). It was kept.';
+      }
+    }
+    return (
+      id: id,
+      tempCopyRemoved: tempCopyRemoved,
+      originalRemoved: originalRemoved,
+      originalNote: originalNote,
+    );
+  }
+
+  Future<bool> _deleteOriginalHook(String uri) =>
+      _deleteOriginalOverride?.call(uri) ??
+      const MethodChannel('mimic/documents')
+          .invokeMethod<bool>('deleteDocument', {'uri': uri})
+          .then((v) => v ?? false)
+          .catchError((_) => false);
+
+  Future<bool> Function(String uri)? _deleteOriginalOverride;
+  @visibleForTesting
+  set deleteOriginalHook(Future<bool> Function(String uri)? hook) =>
+      _deleteOriginalOverride = hook;
+
+  /// Shared picker step for both import paths. Returns the temp copy path the
+  /// plugin wrote (which is what we encrypt), plus the original's content URI
+  /// when the platform provided one (used only for the opt-in original
+  /// removal, never for anything automatic).
+  Future<
+      ({File srcFile, String fileName, String extension, String pickedPath, String? identifier})>
+      _pickDocument() async {
     final result = await FilePicker.platform.pickFiles(
       withData: false,
       allowedExtensions: ['txt', 'pdf', 'docx', 'xlsx'],
@@ -135,15 +238,32 @@ class DocumentVaultService {
       throw Exception('Couldn\'t read that file. Please try again or use a different file manager.');
     }
 
-    final srcFile = File(file.path!);
-    final fileName = file.name;
-    final extension = fileName.split('.').last.toLowerCase();
+    return (
+      srcFile: File(file.path!),
+      fileName: file.name,
+      extension: file.name.split('.').last.toLowerCase(),
+      pickedPath: file.path!,
+      identifier: file.identifier,
+    );
+  }
 
-    final id = await saveDocumentFromFile(srcFile, extension, originalName: fileName);
-    // H7: the system picker hands us a read-only copy — the plaintext
-    // original stays where it was. The screen warns after import; the path
-    // travels in this record so the message can name it.
-    return (id: id, sourcePath: file.path);
+  /// Deletes the plaintext copy file_picker wrote into the app's own temp dir
+  /// after a successful import. Returns false when the path is NOT inside our
+  /// temp dir: that never happens with the pinned file_picker, but if a future
+  /// version starts handing back a real external path, this guard makes the
+  /// worst case "we left a file alone" instead of "we deleted the user's file".
+  Future<bool> _deletePickedTempCopy(String path) async {
+    try {
+      final tempRoot = p.normalize(p.absolute((await getTemporaryDirectory()).path));
+      final picked = p.normalize(p.absolute(path));
+      if (!p.isWithin(tempRoot, picked)) return false;
+      final copy = File(picked);
+      if (await copy.exists()) await copy.delete();
+      return true;
+    } catch (e) {
+      debugPrint('Failed to remove the picked-document temp copy: $e');
+      return false;
+    }
   }
 
   Future<String> saveDocumentFromFile(File src, String mimeType, {String? originalName}) async {
