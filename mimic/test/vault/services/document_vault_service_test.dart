@@ -166,5 +166,27 @@ void main() {
       final tempFile = await documentService.getDocumentToTempFile('non_existent_id');
       expect(tempFile, isNull);
     });
+
+    test('saveDocumentFromFile leaves the original source file untouched (H7)', () async {
+      // H7: the system picker hands us a read-only copy — the fix is NOT
+      // deletion (not permitted) but honesty. This test pins the service
+      // half: saveDocumentFromFile must NEVER delete or modify its src.
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('123456');
+      final documentService = DocumentVaultService(platformService, crypto);
+
+      final srcFile = File(p.join(tempDir.path, 'h7_doc.pdf'));
+      final bytes = List<int>.generate(4096, (i) => i % 256);
+      await srcFile.writeAsBytes(bytes);
+
+      await documentService.saveDocumentFromFile(srcFile, 'pdf',
+          originalName: 'h7_doc.pdf');
+
+      expect(srcFile.existsSync(), isTrue,
+          reason: 'import must not delete the original');
+      expect(await srcFile.readAsBytes(), equals(bytes),
+          reason: 'import must not modify the original');
+    });
   });
 }

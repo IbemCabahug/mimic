@@ -119,7 +119,7 @@ class DocumentVaultService {
     await prefs.setString(_storageKey, encoded);
   }
 
-  Future<String> importDocument() async {
+  Future<({String id, String? sourcePath})> importDocument() async {
     final result = await FilePicker.platform.pickFiles(
       withData: false,
       allowedExtensions: ['txt', 'pdf', 'docx', 'xlsx'],
@@ -139,7 +139,11 @@ class DocumentVaultService {
     final fileName = file.name;
     final extension = fileName.split('.').last.toLowerCase();
 
-    return saveDocumentFromFile(srcFile, extension, originalName: fileName);
+    final id = await saveDocumentFromFile(srcFile, extension, originalName: fileName);
+    // H7: the system picker hands us a read-only copy — the plaintext
+    // original stays where it was. The screen warns after import; the path
+    // travels in this record so the message can name it.
+    return (id: id, sourcePath: file.path);
   }
 
   Future<String> saveDocumentFromFile(File src, String mimeType, {String? originalName}) async {

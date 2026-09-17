@@ -202,8 +202,23 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
   Future<void> _importDocument() async {
     AutoLock().beginProtectedOperation();
     try {
-      await ref.read(documentVaultServiceProvider).importDocument();
+      // H7: the system picker supplies a read-only copy — Android grants no
+      // authority to delete the original, so a readable copy stays where it
+      // was. Tell the user after EVERY import where it is; deletion (which
+      // the docs explicitly rule out) is a manual step in their file manager.
+      final result = await ref.read(documentVaultServiceProvider).importDocument();
       await _loadDocuments();
+      if (mounted) {
+        final where = result.sourcePath ?? 'its original location';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Saved to vault. Original still exists at $where — delete it manually.',
+            ),
+            duration: const Duration(seconds: 8),
+          ),
+        );
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

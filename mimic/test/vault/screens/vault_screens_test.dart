@@ -351,7 +351,7 @@ class FakeDocumentVaultService extends DocumentVaultService {
   FakeDocumentVaultService(super.platformService, super.crypto);
 
   @override
-  Future<String> importDocument() async {
+  Future<({String id, String? sourcePath})> importDocument() async {
     throw Exception('No file selected');
   }
 
