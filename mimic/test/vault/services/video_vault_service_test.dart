@@ -188,6 +188,48 @@ void main() {
   });
 
   group('VideoVaultService', () {
+    test('moveVideo relabels folder and legacy maps read as Unfiled', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final videoVaultService = VideoVaultService(platformService, crypto);
+
+      final srcFile = File('${tempDir.path}/folder_src.mp4');
+      await srcFile.writeAsBytes(Uint8List.fromList([1, 2, 3, 4]));
+      final id = await videoVaultService.saveVideoFromFile(
+        srcFile, 'video/mp4', 5,
+        originalName: 'b.mp4',
+      );
+      var videos = await videoVaultService.getAllVideos();
+      expect(videos.singleWhere((v) => v.id == id).folder, '');
+
+      await videoVaultService.moveVideo(id, 'Trips');
+      videos = await videoVaultService.getAllVideos();
+      expect(videos.singleWhere((v) => v.id == id).folder, 'Trips');
+
+      // Blob untouched: still decrypts to the same bytes.
+      expect(await videoVaultService.getVideo(id),
+          equals(Uint8List.fromList([1, 2, 3, 4])));
+
+      await videoVaultService.moveVideo(id, '');
+      videos = await videoVaultService.getAllVideos();
+      expect(videos.singleWhere((v) => v.id == id).folder, '');
+
+      // Legacy: a map without the folder key must not throw.
+      final legacy = VideoMeta.fromMap({
+        'id': 'legacy',
+        'mimeType': 'video/mp4',
+        'size': 4,
+        'durationS': 5,
+        'createdAt': DateTime.now().toIso8601String(),
+        'originalName': 'old.mp4',
+      });
+      expect(legacy.folder, '');
+
+      await srcFile.delete();
+      await videoVaultService.deleteVideo(id);
+    });
+
     test('saveVideoFromFile encrypts and saves video metadata correctly', () async {
       final platformService = AndroidPlatformService();
       final crypto = VaultCrypto(platformService, FakeKeystoreService());

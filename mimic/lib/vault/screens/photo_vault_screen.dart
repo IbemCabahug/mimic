@@ -23,6 +23,9 @@ class PhotoVaultScreen extends ConsumerStatefulWidget {
 class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   List<PhotoMeta> _photos = [];
   bool _isLoading = true;
+  // Folder feature (mirrors DocumentVaultScreen): null = All, '' = Unfiled,
+  // otherwise the folder name. Filter-only.
+  String? _selectedFolder;
 
   final LinkedHashMap<String, Uint8List> _bytesCache = LinkedHashMap();
   int _bytesCacheSize = 0;
@@ -265,6 +268,26 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                   width: 40,
                   height: 40,
                   decoration: BoxDecoration(
+                    color: VaultColors.accent.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.drive_file_move_outlined, color: VaultColors.accent),
+                ),
+                title: const Text('Move to Folder', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _showMoveToFolder(photo);
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            Material(
+              color: Colors.transparent,
+              child: ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
                     color: VaultColors.error.withValues(alpha: 0.1),
                     shape: BoxShape.circle,
                   ),
@@ -363,11 +386,143 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     }
   }
 
+  /// Folder feature: visible-list filter + chips + move dialog.
+  /// Mirrors DocumentVaultScreen; filter-only, blobs never move.
+  List<PhotoMeta> _visiblePhotos() {
+    if (_selectedFolder == null) return _photos;
+    return _photos.where((p) => p.folder == _selectedFolder).toList();
+  }
+
+  Widget _folderChip(String label, bool selected, VoidCallback onTap) {
+    return ChoiceChip(
+      label: Text(label,
+          style: TextStyle(
+              fontFamily: 'Inter',
+              color: selected ? Colors.white : VaultColors.textSecondary)),
+      selected: selected,
+      onSelected: (_) => onTap(),
+      backgroundColor: VaultColors.surface,
+      selectedColor: VaultColors.accent,
+      showCheckmark: false,
+    );
+  }
+
+  Widget _buildFolderChips() {
+    final folders = _photos
+        .map((p) => p.folder)
+        .where((f) => f.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    final hasUnfiled = _photos.any((p) => p.folder.isEmpty);
+    final chips = <Widget>[
+      _folderChip('All', _selectedFolder == null,
+          () => setState(() => _selectedFolder = null)),
+    ];
+    if (hasUnfiled) {
+      chips.add(_folderChip('Unfiled', _selectedFolder == '',
+          () => setState(() => _selectedFolder = '')));
+    }
+    for (final f in folders) {
+      chips.add(_folderChip(f, _selectedFolder == f,
+          () => setState(() => _selectedFolder = f)));
+    }
+    if (chips.length == 1) return const SizedBox.shrink();
+    return SizedBox(
+      height: 44,
+      child: ListView(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16),
+        children: chips
+            .map((c) => Padding(
+                padding: const EdgeInsets.only(right: 8), child: c))
+            .toList(),
+      ),
+    );
+  }
+
+  Future<void> _showMoveToFolder(PhotoMeta photo) async {
+    final existingFolders = _photos
+        .map((p) => p.folder)
+        .where((f) => f.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+    final newFolderController = TextEditingController();
+    final chosen = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Move to folder',
+            style: TextStyle(
+                color: VaultColors.textPrimary,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'Inter')),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.folder_off_outlined,
+                      color: VaultColors.textSecondary),
+                  title: const Text('Unfiled',
+                      style: TextStyle(fontFamily: 'Inter')),
+                  onTap: () => Navigator.of(context).pop(''),
+                ),
+                ...existingFolders.map((f) => ListTile(
+                      leading: const Icon(Icons.folder_outlined,
+                          color: VaultColors.accent),
+                      title:
+                          Text(f, style: const TextStyle(fontFamily: 'Inter')),
+                      onTap: () => Navigator.of(context).pop(f),
+                    )),
+                const Divider(),
+                TextField(
+                  controller: newFolderController,
+                  decoration: const InputDecoration(
+                      hintText: 'New folder name',
+                      hintStyle: TextStyle(fontFamily: 'Inter')),
+                  style: const TextStyle(fontFamily: 'Inter'),
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(null),
+            child: const Text('Cancel',
+                style: TextStyle(color: VaultColors.textTertiary)),
+          ),
+          TextButton(
+            onPressed: () {
+              final name = newFolderController.text.trim();
+              if (name.isNotEmpty) Navigator.of(context).pop(name);
+            },
+            child: const Text('Create & Move',
+                style: TextStyle(color: VaultColors.accent)),
+          ),
+        ],
+      ),
+    );
+    if (chosen != null && mounted) {
+      await ref.read(fileVaultServiceProvider).movePhoto(photo.id, chosen);
+      await _loadPhotos();
+    }
+  }
+
   void _openViewer(int initialIndex) {
+    // Folder feature: the viewer pages through the FILTERED list the grid
+    // shows, so pass the visible list and map its index back to _photos for
+    // delete (delete removes by id, so the filter is unaffected).
+    final visible = _visiblePhotos();
     Navigator.of(context).push(
       MaterialPageRoute(
         builder: (context) => PhotoViewerScreen(
-          photos: _photos,
+          photos: visible,
           initialIndex: initialIndex,
           loadBytes: _loadPhotoBytes,
           onDelete: (id) async {
@@ -493,28 +648,48 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                     ],
                   ),
                 )
-              : GridView.builder(
-                  padding: const EdgeInsets.all(2),
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 3,
-                    crossAxisSpacing: 2,
-                    mainAxisSpacing: 2,
-                  ),
-                  itemCount: _photos.length,
-                  itemBuilder: (context, index) {
-                    final photo = _photos[index];
-                    final thumbPx = (MediaQuery.of(context).size.width / 3 * MediaQuery.of(context).devicePixelRatio).round().clamp(150, 600);
-                    return GestureDetector(
-                      onTap: () => _openViewer(index),
-                      onLongPress: () => _showOptions(photo),
-                      child: _PhotoThumbnail(
-                        key: ValueKey(photo.id),
-                        photoId: photo.id,
-                        thumbPx: thumbPx,
-                        loadBytes: _loadPhotoBytes,
-                      ),
-                    );
-                  },
+              : Column(
+                  children: [
+                    const SizedBox(height: 8),
+                    _buildFolderChips(),
+                    Expanded(
+                      child: _visiblePhotos().isEmpty
+                          ? const Center(
+                              child: Text(
+                                'No photos in this folder',
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  color: VaultColors.textTertiary,
+                                  fontFamily: 'Inter',
+                                ),
+                              ),
+                            )
+                          : GridView.builder(
+                              padding: const EdgeInsets.all(2),
+                              gridDelegate:
+                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 3,
+                                crossAxisSpacing: 2,
+                                mainAxisSpacing: 2,
+                              ),
+                              itemCount: _visiblePhotos().length,
+                              itemBuilder: (context, index) {
+                                final photo = _visiblePhotos()[index];
+                                final thumbPx = (MediaQuery.of(context).size.width / 3 * MediaQuery.of(context).devicePixelRatio).round().clamp(150, 600);
+                                return GestureDetector(
+                                  onTap: () => _openViewer(index),
+                                  onLongPress: () => _showOptions(photo),
+                                  child: _PhotoThumbnail(
+                                    key: ValueKey(photo.id),
+                                    photoId: photo.id,
+                                    thumbPx: thumbPx,
+                                    loadBytes: _loadPhotoBytes,
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
                 ),
     );
   }

@@ -225,6 +225,40 @@ void main() {
       expect(deleteWithIdsCalled, isTrue);
     });
 
+    test('movePhoto relabels folder and legacy maps read as Unfiled', () async {
+      final platformService = AndroidPlatformService();
+      final crypto = VaultCrypto(platformService, FakeKeystoreService());
+      await crypto.initialize('1234');
+      final fileVaultService = FileVaultService(platformService, crypto);
+
+      final id = await fileVaultService.savePhoto(
+          Uint8List.fromList([1, 2, 3]), 'image/jpeg',
+          originalName: 'a.jpg');
+      var photos = await fileVaultService.getAllPhotos();
+      expect(photos.singleWhere((p) => p.id == id).folder, '');
+
+      await fileVaultService.movePhoto(id, 'Trips');
+      photos = await fileVaultService.getAllPhotos();
+      expect(photos.singleWhere((p) => p.id == id).folder, 'Trips');
+
+      // Blob untouched: still decrypts to the same bytes.
+      expect(await fileVaultService.getPhoto(id), equals([1, 2, 3]));
+
+      await fileVaultService.movePhoto(id, '');
+      photos = await fileVaultService.getAllPhotos();
+      expect(photos.singleWhere((p) => p.id == id).folder, '');
+
+      // Legacy: a map without the folder key must not throw.
+      final legacy = PhotoMeta.fromMap({
+        'id': 'legacy',
+        'mimeType': 'image/jpeg',
+        'size': 3,
+        'createdAt': DateTime.now().toIso8601String(),
+        'originalName': 'old.jpg',
+      });
+      expect(legacy.folder, '');
+    });
+
     test('concurrent getAllPhotos calls open the database exactly once', () async {
       final platformService = AndroidPlatformService();
       final crypto = VaultCrypto(platformService, FakeKeystoreService());

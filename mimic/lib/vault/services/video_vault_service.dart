@@ -23,6 +23,9 @@ class VideoMeta {
   final int durationS;
   final DateTime createdAt;
   final String? originalName;
+  // Folder feature (mirrors DocumentMeta.folder): '' = Unfiled. Filter-only —
+  // the encrypted blob never moves; only this label changes.
+  final String folder;
 
   VideoMeta({
     required this.id,
@@ -31,6 +34,7 @@ class VideoMeta {
     required this.durationS,
     required this.createdAt,
     this.originalName,
+    this.folder = '',
   });
 
   Map<String, dynamic> toMap() => {
@@ -40,6 +44,7 @@ class VideoMeta {
         'durationS': durationS,
         'createdAt': createdAt.toIso8601String(),
         'originalName': originalName,
+        'folder': folder,
       };
 
   factory VideoMeta.fromMap(Map<String, dynamic> map) => VideoMeta(
@@ -49,7 +54,30 @@ class VideoMeta {
         durationS: map['durationS'] as int,
         createdAt: DateTime.parse(map['createdAt'] as String),
         originalName: map['originalName'] as String?,
+        // Pre-folder rows (and v2 backup payloads) carry no key — ?? '' keeps
+        // them readable as Unfiled instead of throwing.
+        folder: map['folder'] as String? ?? '',
       );
+
+  /// Copies this metadata with the given fields replaced.
+  VideoMeta copyWith({
+    String? mimeType,
+    int? size,
+    int? durationS,
+    DateTime? createdAt,
+    String? originalName,
+    String? folder,
+  }) {
+    return VideoMeta(
+      id: id,
+      mimeType: mimeType ?? this.mimeType,
+      size: size ?? this.size,
+      durationS: durationS ?? this.durationS,
+      createdAt: createdAt ?? this.createdAt,
+      originalName: originalName ?? this.originalName,
+      folder: folder ?? this.folder,
+    );
+  }
 }
 
 /// Why a video conversion attempt did not end with a streamable blob.
@@ -162,9 +190,26 @@ class VideoVaultService {
               size INTEGER,
               durationS INTEGER,
               createdAt TEXT,
-              originalName TEXT
+              originalName TEXT,
+              folder TEXT DEFAULT ''
             )
           ''');
+        },
+        onOpen: (db) async {
+          // Folder feature: pre-folder installs lack the column; photos
+          // already migrate originalName this way, so videos follow suit.
+          try {
+            final List<Map<String, dynamic>> columns =
+                await db.rawQuery('PRAGMA table_info($_tableName)');
+            final hasFolder =
+                columns.any((column) => column['name'] == 'folder');
+            if (!hasFolder) {
+              await db.execute(
+                  'ALTER TABLE $_tableName ADD COLUMN folder TEXT DEFAULT \'\'');
+            }
+          } catch (e) {
+            debugPrint('Error updating video schema: $e');
+          }
         },
       );
     }();
@@ -484,6 +529,30 @@ class VideoVaultService {
 
     await _ensureDb();
     await _db!.delete(_tableName, where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// Folder feature: relabels one video's folder ('' = Unfiled). Filter-only —
+  /// the encrypted blob is untouched; only the metadata row is rewritten.
+  /// Mirrors DocumentVaultService.moveDocument.
+  Future<void> moveVideo(String id, String folder) async {
+    if (kIsWeb) {
+      final existing = await getAllVideos();
+      final index = existing.indexWhere((m) => m.id == id);
+      if (index == -1) return;
+      existing[index] = existing[index].copyWith(folder: folder);
+      await _platformService.secureWrite(
+        'vault_videos_meta',
+        jsonEncode(existing.map((m) => m.toMap()).toList()),
+      );
+      return;
+    }
+    await _ensureDb();
+    final maps = await _db!.query(_tableName, where: 'id = ?', whereArgs: [id]);
+    if (maps.isEmpty) return;
+    final updated =
+        VideoMeta.fromMap(maps.single).copyWith(folder: folder);
+    await _db!.update(_tableName, updated.toMap(),
+        where: 'id = ?', whereArgs: [id]);
   }
 
   Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error})> pickAndEncryptVideo(BuildContext context) async {
