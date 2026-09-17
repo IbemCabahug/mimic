@@ -16,6 +16,7 @@ import 'keystore_service.dart';
 import 'media_format.dart';
 import 'vault_exceptions.dart';
 import 'crypto_isolate.dart';
+import 'range_decrypt_isolate.dart';
 
 export 'vault_exceptions.dart';
 
@@ -67,6 +68,10 @@ class VaultCrypto extends ChangeNotifier {
   bool _needsHardwareMigration = false;
   bool _hasRecoveryPhrase = false;
   int _lockEpoch = 0;
+
+  /// M13 follow-up: long-lived range-decrypt worker (one Isolate.spawn per
+  /// unlock). Started lazily on the first range request; disposed on lock.
+  RangeDecryptWorker? _rangeWorker;
 
   static final Map<String, String> _webKeyStore = {};
 
@@ -298,6 +303,11 @@ class VaultCrypto extends ChangeNotifier {
   void lock() {
     _isUnlocked = false;
     _lockEpoch++;
+    final rangeWorker = _rangeWorker;
+    _rangeWorker = null;
+    if (rangeWorker != null) {
+      rangeWorker.dispose();
+    }
     final keyToZero = _derivedKey;
     final kekToZero = _temporaryKek;
     _derivedKey = null;
@@ -1284,7 +1294,52 @@ class VaultCrypto extends ChangeNotifier {
     );
   }
 
+  /// Serves one seekable CTR range. Prefers the long-lived worker isolate so
+  /// the 256 KB AES pass never blocks the UI thread (M13 follow-up); falls
+  /// back to the original inline implementation for non-CTR blobs (v1-CBC,
+  /// legacy) or when the worker is unavailable, so behavior is unchanged.
   Future<Uint8List> decryptRangeSystem(File src, int offset, int length) async {
+    if (_isUnlocked && _derivedKey != null) {
+      try {
+        var worker = _rangeWorker;
+        if (worker == null) {
+          Uint8List? sysKey;
+          try {
+            sysKey = await _getSystemKey();
+          } catch (_) {
+            sysKey = null;
+          }
+          final fresh = RangeDecryptWorker();
+          await fresh.start(
+            masterKey: Uint8List.fromList(_derivedKey!),
+            systemKey: sysKey == null ? null : Uint8List.fromList(sysKey),
+          );
+          if (sysKey != null) sysKey.fillRange(0, sysKey.length, 0);
+          if (!_isUnlocked || _derivedKey == null) {
+            await fresh.dispose();
+          } else {
+            _rangeWorker = fresh;
+            worker = fresh;
+          }
+        }
+        if (worker != null && worker.isAlive) {
+          try {
+            return await worker.decrypt(path: src.path, offset: offset, length: length);
+          } on UnsupportedMediaFormatException {
+            // v1-CBC / legacy: fall through to the inline path below.
+          }
+        }
+      } catch (_) {
+        // Worker spawn/timeout failure: fall through to inline (old behavior).
+      }
+    }
+    return _decryptRangeInline(src, offset, length);
+  }
+
+  /// Original inline range decrypt (pre-M13-follow-up behavior). Kept as the
+  /// fallback for formats the worker does not serve and for locked/worker-down
+  /// states. Byte-for-byte identical to the old `decryptRangeSystem`.
+  Future<Uint8List> _decryptRangeInline(File src, int offset, int length) async {
     int magicType = 0;
     final raf = await src.open(mode: FileMode.read);
     try {
