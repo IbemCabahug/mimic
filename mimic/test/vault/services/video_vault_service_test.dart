@@ -57,6 +57,16 @@ class PathLeakingVaultCrypto extends VaultCrypto {
   }
 }
 
+/// Forces deleteVideo to fail so the duplicate-reporting branch of
+/// restoreVideoToGallery runs against a vault copy that genuinely survives.
+class _NoDeleteVideoVaultService extends VideoVaultService {
+  _NoDeleteVideoVaultService(super.platformService, super.crypto);
+
+  @override
+  Future<void> deleteVideo(String id) async =>
+      throw Exception('simulated vault delete failure');
+}
+
 /// Writes a c1 blob (AES-CTR under the device-local system key) at [blobFile],
 /// reproducing the format the pre-c2 code produced, so the rescue path and its
 /// container gate can be tested from a known starting point.
@@ -1393,6 +1403,246 @@ void main() {
       expect(leftovers, isEmpty, reason: 'no conversion temp may survive');
 
       await srcFile.delete();
+    });
+
+    group('restoreVideoToGallery honesty contract', () {
+      // The gallery write goes through photo_manager's 'saveVideo' channel
+      // method; the success map carries the keys convertMapToAsset requires,
+      // and a refusal is a throw because the pinned plugin's saveVideo
+      // returns a non-nullable Future<AssetEntity>.
+      void mockSaveVideo({required bool succeeds}) {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+          const MethodChannel('com.fluttercandies/photo_manager'),
+          (MethodCall call) async {
+            if (call.method == 'saveVideo') {
+              if (!succeeds) {
+                throw PlatformException(code: 'photo_manager', message: 'denied');
+              }
+              return <String, dynamic>{'id': '2', 'type': 2, 'width': 2, 'height': 2};
+            }
+            return null;
+          },
+        );
+        addTearDown(() => TestDefaultBinaryMessengerBinding
+            .instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+                const MethodChannel('com.fluttercandies/photo_manager'), null));
+      }
+
+      test('a confirmed gallery save removes the vault copy and wipes the temp plaintext', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('1234');
+        final service = VideoVaultService(platformService, crypto);
+        final bytes = Uint8List.fromList(List.generate(4096, (i) => i % 256));
+        final id =
+            await service.saveVideo(bytes, 'video/mp4', 3, originalName: 'clip.mp4');
+        mockSaveVideo(succeeds: true);
+
+        await service.restoreVideoToGallery(id);
+
+        expect(await service.getVideo(id), isNull,
+            reason: 'the vault copy is deleted only after the save succeeded');
+        final leftovers = tempDir
+            .listSync(recursive: true)
+            .where((f) => f.path.endsWith('clip.mp4'))
+            .toList();
+        expect(leftovers, isEmpty,
+            reason: 'the transient gallery-upload plaintext must not survive');
+      });
+
+      test('a cancel before the restore aborts it: vault copy kept, gallery write never starts, temp wiped', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('1234');
+        final service = VideoVaultService(platformService, crypto);
+        final bytes = Uint8List.fromList(List.generate(4096, (i) => i % 256));
+        final id = await service.saveVideo(bytes, 'video/mp4', 3,
+            originalName: 'cancelentry.mp4');
+        var saveCalls = 0;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+          const MethodChannel('com.fluttercandies/photo_manager'),
+          (MethodCall call) async {
+            if (call.method == 'saveVideo') saveCalls++;
+            return <String, dynamic>{'id': '2', 'type': 2, 'width': 2, 'height': 2};
+          },
+        );
+        addTearDown(() => TestDefaultBinaryMessengerBinding
+            .instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+                const MethodChannel('com.fluttercandies/photo_manager'), null));
+
+        await expectLater(
+          service.restoreVideoToGallery(id, isCancelled: () => true),
+          throwsA(isA<OperationCancelledException>()),
+        );
+        expect(saveCalls, 0,
+            reason: 'a cancelled restore must never start the gallery write');
+        expect(await service.getVideo(id), equals(bytes),
+            reason: 'a cancelled restore must never delete the vault copy');
+        final leftovers = tempDir
+            .listSync(recursive: true)
+            .where((f) => f.path.endsWith('cancelentry.mp4'))
+            .toList();
+        expect(leftovers, isEmpty,
+            reason: 'the temp plaintext is secure-deleted in finally even on cancel');
+      });
+
+      test('a cancel that lands during the decrypt still stops before the gallery write', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('1234');
+        final service = VideoVaultService(platformService, crypto);
+        final bytes = Uint8List.fromList(List.generate(4096, (i) => i % 256));
+        final id = await service.saveVideo(bytes, 'video/mp4', 3,
+            originalName: 'cancelmid.mp4');
+        var saveCalls = 0;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+          const MethodChannel('com.fluttercandies/photo_manager'),
+          (MethodCall call) async {
+            if (call.method == 'saveVideo') saveCalls++;
+            return <String, dynamic>{'id': '2', 'type': 2, 'width': 2, 'height': 2};
+          },
+        );
+        addTearDown(() => TestDefaultBinaryMessengerBinding
+            .instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+                const MethodChannel('com.fluttercandies/photo_manager'), null));
+
+        // The flag flips after the entry check but before the gallery write:
+        // call 1 = the entry check, call 2 = the post-decrypt check. The
+        // 4 KB decrypt cannot outlive the 100 ms worker abort poll, so no
+        // worker poll interleaves extra calls on either path.
+        var calls = 0;
+        await expectLater(
+          service.restoreVideoToGallery(id, isCancelled: () => ++calls >= 2),
+          throwsA(isA<OperationCancelledException>()),
+        );
+        expect(saveCalls, 0,
+            reason:
+                'cancel during the decrypt must stop the restore before the gallery sees the file');
+        expect(await service.getVideo(id), equals(bytes),
+            reason: 'the vault copy stays on a cancelled restore');
+        final leftovers = tempDir
+            .listSync(recursive: true)
+            .where((f) => f.path.endsWith('cancelmid.mp4'))
+            .toList();
+        expect(leftovers, isEmpty,
+            reason: 'the decrypted temp plaintext must not survive a cancel');
+      });
+
+      test('a gallery refusal keeps the vault copy and the temp plaintext is still wiped', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('1234');
+        final service = VideoVaultService(platformService, crypto);
+        final bytes = Uint8List.fromList(List.generate(4096, (i) => i % 256));
+        final id = await service.saveVideo(bytes, 'video/mp4', 3,
+            originalName: 'refused.mp4');
+        mockSaveVideo(succeeds: false);
+
+        await expectLater(
+          service.restoreVideoToGallery(id),
+          throwsA(predicate((Object e) =>
+              e.toString().contains('The gallery did not accept the video'))),
+        );
+        expect(await service.getVideo(id), equals(bytes),
+            reason: 'a refused save must never delete the vault copy');
+        final leftovers = tempDir
+            .listSync(recursive: true)
+            .where((f) => f.path.endsWith('refused.mp4'))
+            .toList();
+        expect(leftovers, isEmpty,
+            reason: 'the temp plaintext is secure-deleted in finally on every path');
+      });
+
+      test('a vault delete failing after a successful save reports the duplicate', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('1234');
+        final service = _NoDeleteVideoVaultService(platformService, crypto);
+        final bytes = Uint8List.fromList(List.generate(4096, (i) => i % 256));
+        final id = await service.saveVideo(bytes, 'video/mp4', 3,
+            originalName: 'stuck.mp4');
+        mockSaveVideo(succeeds: true);
+
+        await expectLater(
+          service.restoreVideoToGallery(id),
+          throwsA(predicate((Object e) =>
+              e.toString().contains('vault copy could not be deleted'))),
+        );
+        expect(await service.getVideo(id), isNotNull,
+            reason:
+                'the message says both copies exist, so the vault copy must still be there');
+        final leftovers = tempDir
+            .listSync(recursive: true)
+            .where((f) => f.path.endsWith('stuck.mp4'))
+            .toList();
+        expect(leftovers, isEmpty,
+            reason: 'the temp plaintext is wiped even on the duplicate path');
+      });
+
+      test('restore streams a real percent before the unmeasurable save phase', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('1234');
+        final service = VideoVaultService(platformService, crypto);
+        // 3 MB: enough decrypt work that the fast test poll interval catches
+        // the temp file growing between ticks (a small blob can finish before
+        // the first tick, which would make the percent-less run honest too —
+        // but this test wants the determinate phase on the record).
+        final bytes = Uint8List.fromList(List.generate(3 * 1024 * 1024, (i) => i % 256));
+        final id =
+            await service.saveVideo(bytes, 'video/mp4', 3, originalName: 'big.mp4');
+        mockSaveVideo(succeeds: true);
+
+        final values = <double?>[];
+        await service.restoreVideoToGallery(
+          id,
+          onProgress: values.add,
+          progressPollInterval: const Duration(milliseconds: 2),
+        );
+
+        expect(values, isNotEmpty);
+        // The first callback is the upfront 0%: progress reporting exists
+        // even before the first poll tick lands.
+        expect(values.first, 0.0);
+        // The determinate phase comes strictly BEFORE the unmeasurable one.
+        final nullIndex = values.indexOf(null);
+        expect(nullIndex, greaterThan(0),
+            reason: 'the gallery-write phase (null percent) must be reported '
+                'after the decrypt percent, not before it');
+        final percents = values.sublist(0, nullIndex).whereType<double>().toList();
+        expect(percents, isNotEmpty);
+        expect(percents.every((p) => p >= 0.0 && p <= 0.99), isTrue,
+            reason: 'the decrypt percent never claims the save phase it '
+                'cannot measure');
+        // And the outcome is the real contract: vault copy gone.
+        expect(await service.getVideo(id), isNull);
+      });
+
+      test('a video whose blob is gone reports the missing copy', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('1234');
+        final service = VideoVaultService(platformService, crypto);
+        final id = await service.saveVideo(
+            Uint8List.fromList(List.generate(4096, (i) => i % 256)),
+            'video/mp4',
+            3,
+            originalName: 'gone.mp4');
+        // Remove ONLY the blob; the metadata row survives.
+        await platformService.deleteFile(id);
+
+        await expectLater(
+          service.restoreVideoToGallery(id),
+          throwsA(predicate(
+              (Object e) => e.toString().contains('Video file not found in vault'))),
+        );
+      });
     });
   });
 }

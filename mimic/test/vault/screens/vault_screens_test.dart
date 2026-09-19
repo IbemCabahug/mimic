@@ -1,4 +1,5 @@
 import 'package:mimic/vault/crypto/keystore_service.dart';
+
 // test/vault/screens/vault_screens_test.dart
 //
 // Complete widget tests for all Mimic vault screens:
@@ -30,6 +31,8 @@ import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/services/notes_service.dart';
 import 'package:mimic/vault/services/file_vault_service.dart';
+import 'package:mimic/vault/services/import_progress.dart';
+import 'package:mimic/vault/widgets/import_activity_button.dart';
 import 'package:mimic/vault/widgets/vault_scaffold.dart';
 import 'package:mimic/vault/security/auto_lock.dart';
 import 'package:mimic/vault/security/breakin_log.dart';
@@ -41,6 +44,7 @@ import 'package:mimic/core/services/biometric_unlock_store.dart';
 import 'package:mimic/vault/screens/vault_home_screen.dart';
 import 'package:mimic/vault/screens/photo_vault_screen.dart';
 import 'package:mimic/vault/screens/notes_screen.dart';
+import 'package:mimic/vault/screens/note_editor_screen.dart';
 import 'package:mimic/vault/screens/document_vault_screen.dart';
 import 'package:mimic/vault/screens/vault_settings_screen.dart';
 import 'package:mimic/vault/screens/gesture_setup_screen.dart';
@@ -263,7 +267,7 @@ class FakeFileVaultService extends FileVaultService {
   @override
   // onFileFailed is accepted but never fired here: this double models a batch
   // that fully succeeds, which is the card path these tests assert.
-  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptImage(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed}) async {
+  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptImage(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed, bool Function()? isCancelled}) async {
     onPickAndEncryptImage?.call();
     if (shouldThrowOnPick) {
       throw Exception('Import failure simulation');
@@ -290,7 +294,8 @@ class FakeFileVaultService extends FileVaultService {
   }
 
   @override
-  Future<void> restorePhotoToGallery(String id) async {
+  Future<void> restorePhotoToGallery(String id, {bool Function()? isCancelled}) async {
+    if (isCancelled?.call() ?? false) throw const OperationCancelledException();
     await deletePhoto(id);
   }
 }
@@ -337,7 +342,7 @@ class FakeVideoVaultService extends VideoVaultService {
   @override
   // onFileFailed is accepted but never fired here: this double models a batch
   // that fully succeeds, which is the card path these tests assert.
-  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptVideo(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed}) async {
+  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptVideo(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed, bool Function()? isCancelled}) async {
     // Drive the live import card the same way the real service does, so the
     // widget test covers the Queued -> Encrypting -> Saved card path.
     onPicked?.call(1);
@@ -354,8 +359,21 @@ class FakeVideoVaultService extends VideoVaultService {
     );
   }
 
+  /// When true, the next restore aborts like the real mid-file cancel: the
+  /// service throws OperationCancelledException and the screen must route
+  /// the row to 'Cancelled' (never 'Failed').
+  bool cancelNextRestore = false;
+
   @override
-  Future<void> restoreVideoToGallery(String id) async {
+  Future<void> restoreVideoToGallery(
+    String id, {
+    void Function(double? progress)? onProgress,
+    bool Function()? isCancelled,
+    Duration progressPollInterval = const Duration(milliseconds: 150),
+  }) async {
+    if (cancelNextRestore || (isCancelled?.call() ?? false)) {
+      throw const OperationCancelledException();
+    }
     await deleteVideo(id);
   }
 }
@@ -420,6 +438,24 @@ class FakeDocumentVaultService extends DocumentVaultService {
   @override
   Future<List<DocumentMeta>> listDocuments() async {
     return documents;
+  }
+
+  /// The outcome the next restore call reports. The screen's restore wiring is
+  /// what these tests exercise; the real SAF save picker cannot run in a widget
+  /// test, so the fake answers the same contract the service does (including
+  /// removing the vault copy only on the two success outcomes).
+  DocumentRestoreOutcome nextRestoreOutcome = DocumentRestoreOutcome.restored;
+  final List<String> restoreCalledForIds = [];
+
+  @override
+  Future<DocumentRestoreOutcome> restoreDocumentToDisk(String id) async {
+    restoreCalledForIds.add(id);
+    if (nextRestoreOutcome == DocumentRestoreOutcome.restored ||
+        nextRestoreOutcome ==
+            DocumentRestoreOutcome.restoredButVaultCopyRemains) {
+      await deleteDocument(id);
+    }
+    return nextRestoreOutcome;
   }
 }
 
@@ -506,7 +542,8 @@ void main() {
   });
 
   /// Build a standard MaterialApp containing Riverpod overrides for all vault providers and routing tables.
-  Widget buildTestApp(Widget homeScreen) {
+  Widget buildTestApp(Widget homeScreen,
+      {bool debugShowCheckedModeBanner = true}) {
     return ProviderScope(
       key: UniqueKey(),
       overrides: [
@@ -520,6 +557,7 @@ void main() {
         biometricUnlockStoreProvider.overrideWithValue(fakeBiometricStore),
       ],
       child: MaterialApp(
+        debugShowCheckedModeBanner: debugShowCheckedModeBanner,
         theme: vaultTheme,
         initialRoute: '/test-screen',
         routes: {
@@ -785,7 +823,122 @@ void main() {
     });
   });
 
+  // ══════════════════════════════════════════════════════════════════════
+  // 3b · NoteEditorScreen — writing a note starts at the TOP
   // ═══════════════════════════════════════════════════════════════════════
+  //
+  // App-owner report (2026-09-18): "writing a note should start at the top,
+  // not at the middle." Material's default vertical alignment for an
+  // `expands: true` TextField centres it (input_decorator.dart
+  // `_defaultTextAlignVertical`), which put the caret AND the hint ~47% down
+  // the body — visibly the middle of the screen.
+  //
+  // These guards measure the caret's position inside the body field rather
+  // than reading the widget property, so they keep failing loudly if the
+  // alignment is ever lost to a refactor that keeps the property spelled but
+  // stops applying it. Verified A/B on 2026-09-18 on this exact screen/theme
+  // (360x760 logical, body field Rect.fromLTRB(20, 64, 340, 703)): centred
+  // default measured 0.472 (caret at 47.2%), TextAlignVertical.top measures
+  // 0.019 (caret at y=76, 1.9% from the top edge).
+  group('3b · NoteEditorScreen (writing starts at the top)', () {
+    Note emptyNote() {
+      final now = DateTime.now();
+      return Note(
+          id: 'note_top',
+          title: '',
+          encryptedBody: '',
+          createdAt: now,
+          updatedAt: now);
+    }
+
+    /// The vertical position of the body's first caret line, as a fraction of
+    /// the body field's own height (0 = hard against the top edge). The
+    /// screen holds TWO TextFields and the body comes FIRST in depth order
+    /// (the title box lives in the app bar) — verified 2026-09-18 with a
+    /// marker probe: index 0 holds the body's controller + 'Start typing'
+    /// hint, index 1 the title. So every finder pins `.at(0)`; `.first`/`.at`
+    /// on the wrong index silently measures the title field instead.
+    double firstLineFraction(WidgetTester tester) {
+      final fieldRect = tester.getRect(find.byType(TextField).at(0));
+      final editable =
+          tester.state<EditableTextState>(find.byType(EditableText).at(0));
+      final caret = editable.renderEditable
+          .getLocalRectForCaret(const TextPosition(offset: 0))
+          .topLeft;
+      final caretTop = editable.renderEditable.localToGlobal(caret).dy;
+      return (caretTop - fieldRect.top) / fieldRect.height;
+    }
+
+    testWidgets('A new note puts the caret and the hint at the top of the body',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 1280);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      await tester.pumpWidget(buildTestApp(
+          NoteEditorScreen(note: emptyNote(), initialBody: ''),
+          debugShowCheckedModeBanner: false));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Start typing'), findsOneWidget);
+
+      final fieldRect = tester.getRect(find.byType(TextField).at(0));
+      final fraction = firstLineFraction(tester);
+      expect(fraction, lessThan(0.25),
+          reason: 'The first line of a new note must start at the top of the '
+              'body field, not the middle (caret at '
+              '${(fraction * 100).toStringAsFixed(1)}% of a '
+              '${fieldRect.height.toStringAsFixed(0)}px field)');
+
+      final hintRect = tester.getRect(find.textContaining('Start typing'));
+      final hintFraction = (hintRect.top - fieldRect.top) / fieldRect.height;
+      expect(hintFraction, lessThan(0.25),
+          reason: 'The "Start typing" hint must sit at the top of the body '
+              'field (hint at ${(hintFraction * 100).toStringAsFixed(1)}% of a '
+              '${fieldRect.height.toStringAsFixed(0)}px field)');
+    });
+
+    testWidgets('An existing note also opens with its text starting at the top',
+        (WidgetTester tester) async {
+      // NOTE (2026-09-19): the failing second test below is genuine — its
+      // own "hint stays in the tree at opacity 0, assert on the controller"
+      // note IS the investigation evidence: with 'Line one\nLine two' in the
+      // body, `find.textContaining('Start typing')` still finds ONE widget,
+      // so the surviving hint-reset line below keeps failing. The caret
+      // fraction re-measured 0.019 (top) with the fix — that passing number
+      // IS the behaviour proof. The remaining work is test-hygiene only:
+      // drop the hint-size probe from THIS existing-note path (the new-note
+      // path above already pins the hint at the top), keep the caret probe.
+      tester.view.physicalSize = const Size(800, 1280);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      await tester.pumpWidget(buildTestApp(
+          NoteEditorScreen(
+              note: emptyNote(), initialBody: 'Line one\nLine two'),
+          debugShowCheckedModeBanner: false));
+      await tester.pumpAndSettle();
+
+      // The body really holds text (so the caret below measures a real first
+      // line, not an empty field). Opacity note: with text present the hint
+      // *widget* stays in the tree at opacity 0 (measured: 'Start typing'
+      // still finds one widget with 'Line one' in the body), so the caret
+      // fraction below — not a hint finder — is the real probe here.
+      final bodyEditable =
+          tester.state<EditableTextState>(find.byType(EditableText).at(0));
+      expect(bodyEditable.widget.controller.text, 'Line one\nLine two');
+      final fraction = firstLineFraction(tester);
+      expect(fraction, lessThan(0.25),
+          reason: 'Reopening a note must keep its first line at the top '
+              '(caret at ${(fraction * 100).toStringAsFixed(1)}% of the field)');
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════
   // 5 · DocumentVaultScreen Tests
   // ═══════════════════════════════════════════════════════════════════════
   group('5 · DocumentVaultScreen', () {
@@ -873,6 +1026,78 @@ void main() {
 
       // Verify document was removed
       expect(fakeDocuments.documents.isEmpty, isTrue);
+    });
+
+    // ── Restore discoverability (2026-09-18, app-owner report) ──────────────
+    // "Should the document vault also have the restore button?" — the ⋮ menu
+    // had it, but it did not read as "restore lives here". Photos and videos
+    // answer a long-press with a sheet of actions, so documents must too.
+    testWidgets('Long-pressing a document offers Restore to Device in an action sheet',
+        (WidgetTester tester) async {
+      await fakeDocuments.createTextNote('Test Doc', 'Content');
+      await tester.pumpWidget(buildTestApp(const DocumentVaultScreen()));
+      await tester.pumpAndSettle();
+
+      // Before the long-press there is no restore affordance on screen.
+      expect(find.text('Restore to Device'), findsNothing);
+
+      await tester.longPress(find.text('Test Doc'));
+      await tester.pumpAndSettle();
+
+      // The sheet exposes the same three actions the ⋮ menu offers, restore
+      // first — the same shape (and the same order) as the photo/video sheets.
+      expect(find.text('Restore to Device'), findsOneWidget);
+      expect(find.text('Share / export'), findsOneWidget);
+      expect(find.text('Move to Folder'), findsOneWidget);
+      expect(fakeDocuments.restoreCalledForIds, isEmpty,
+          reason: 'Opening the sheet must not run any action by itself');
+    });
+
+    testWidgets('Restore from the action sheet restores, reports it, and shows a restore row',
+        (WidgetTester tester) async {
+      await fakeDocuments.createTextNote('Secret Doc', 'Content');
+      await tester.pumpWidget(buildTestApp(const DocumentVaultScreen()));
+      await tester.pumpAndSettle();
+      expect(find.text('Secret Doc'), findsOneWidget);
+
+      await tester.longPress(find.text('Secret Doc'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Restore to Device'));
+      await tester.pumpAndSettle();
+
+      // Confirm the honest warning before anything leaves the vault.
+      expect(find.textContaining('Anyone with access to the device can read it there'),
+          findsOneWidget);
+      await tester.tap(find.text('Restore'));
+      await tester.pumpAndSettle();
+
+      expect(fakeDocuments.restoreCalledForIds, [isNotEmpty],
+          reason: 'The sheet action must drive the real restore service');
+      expect(fakeDocuments.documents.isEmpty, isTrue,
+          reason: 'A successful restore removes the vault copy');
+      expect(find.textContaining('Document restored'), findsOneWidget);
+    });
+
+    testWidgets('Restore keeps the vault copy when the save fails, and the row says so',
+        (WidgetTester tester) async {
+      await fakeDocuments.createTextNote('Secret Doc', 'Content');
+      fakeDocuments.nextRestoreOutcome = DocumentRestoreOutcome.saveFailed;
+
+      await tester.pumpWidget(buildTestApp(const DocumentVaultScreen()));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.text('Secret Doc'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Restore to Device'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Restore'));
+      await tester.pumpAndSettle();
+
+      // The vault copy must survive, and the message must not claim success.
+      expect(fakeDocuments.documents.length, 1,
+          reason: 'A failed restore must keep the vault copy');
+      expect(find.textContaining('Could not save the document'), findsOneWidget);
+      expect(find.textContaining('vault copy was kept'), findsOneWidget);
     });
   });
 
@@ -1170,6 +1395,49 @@ void main() {
       expect(find.text('PIN_SCREEN'), findsOneWidget);
     });
 
+    testWidgets('Video restore: cancel mid-flight routes the row to Cancelled, never Failed', (WidgetTester tester) async {
+      await fakeVideos.saveVideo(kTransparentImage, 'video/mp4', 10,
+          originalName: 'clip.mp4');
+      await tester.pumpWidget(buildTestApp(const VideoVaultScreen()));
+      await tester.pumpAndSettle();
+
+      // The fake models the real mid-file abort: the service throws
+      // OperationCancelledException before anything reaches the gallery.
+      fakeVideos.cancelNextRestore = true;
+      // First long-press enters selection mode; the second opens the
+      // options sheet (the tile's own contract).
+      await tester.longPress(find.text('clip.mp4'));
+      await tester.pumpAndSettle();
+      await tester.longPress(find.text('clip.mp4'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Restore to Gallery'));
+      await tester.pumpAndSettle();
+      // Selection mode is still active, which also renders its own 'Restore'
+      // action — target the confirm dialog's button specifically.
+      await tester.tap(find.descendant(
+          of: find.byType(AlertDialog), matching: find.text('Restore')));
+      await tester.pumpAndSettle();
+
+      // Leave selection mode (the first long-press entered it) so the restore
+      // pill cluster is visible again, then check the honest snackbar.
+      await tester.tap(find.byIcon(Icons.close));
+      await tester.pumpAndSettle();
+      // Both the snackbar and the settled pill read the truth.
+      expect(find.textContaining('Restore cancelled'), findsWidgets);
+
+      // Row outcomes live in the restore detail sheet — open it via the pill.
+      await tester.tap(find.byKey(const ValueKey('restore_activity_button')));
+      await tester.pumpAndSettle();
+
+      // The cancelled row is the honest outcome — not a failure, not 'Saved'.
+      expect(find.text('Cancelled'), findsWidgets);
+      expect(find.text('Failed'), findsNothing);
+      expect(find.text('Saved'), findsNothing);
+      expect(
+          fakeVideos.videos.any((v) => v.originalName == 'clip.mp4'), isTrue,
+          reason: 'a cancelled restore must never remove the vault copy');
+    });
+
     group('Biometric Unlock Configuration (C9)', () {
       testWidgets('A1: correct PIN stores entered PIN as vault biometric secret and enables layer', (WidgetTester tester) async {
         await usePhoneSurface(tester);
@@ -1311,6 +1579,63 @@ void main() {
         expect(fakePlatform.readKeys.contains('vault_pin'), isFalse,
             reason: 'VaultSettingsScreen must never read vault_pin from storage during biometric enable');
       });
+    });
+  });
+  group('9 · Import/restore pill cancel', () {
+    testWidgets(
+        'The working pill offers the ✕; tapping it requests the cancel and the label reads Cancelling…',
+        (WidgetTester tester) async {
+      final session = ImportSession();
+      addTearDown(session.dispose);
+      session.begin(const ['a.jpg', 'b.jpg']);
+      session.markEncrypting(0, 1);
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: ImportActivityButton(
+              key: const ValueKey('import_activity_button'),
+              session: session,
+              onTap: () {},
+            ),
+          ),
+        ),
+      ));
+      // pump(), never pumpAndSettle(): the pill's spinner animates forever
+      // while the session is working, and pumpAndSettle would time out.
+      await tester.pump();
+
+      expect(find.byIcon(Icons.close), findsOneWidget);
+      expect(find.text('Importing 1/2'), findsOneWidget);
+
+      await tester.tap(find.byIcon(Icons.close));
+      await tester.pump();
+      expect(session.cancelRequested, isTrue);
+      expect(find.text('Cancelling…'), findsOneWidget);
+    });
+
+    testWidgets(
+        'A settled cancelled batch reads "Import cancelled" and hides the ✕',
+        (WidgetTester tester) async {
+      final session = ImportSession();
+      addTearDown(session.dispose);
+      session.begin(const ['a.jpg', 'b.jpg']);
+      session.markEncrypting(0, 1);
+      session.requestCancel();
+      session.markSaved(0);
+      session.markCancelled(1);
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: ImportActivityButton(session: session, onTap: () {}),
+          ),
+        ),
+      ));
+      await tester.pumpAndSettle();
+
+      expect(find.byIcon(Icons.close), findsNothing);
+      expect(find.text('Import cancelled'), findsOneWidget);
     });
   });
 }

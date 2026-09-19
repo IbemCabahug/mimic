@@ -16,3 +16,15 @@ class UnsupportedMediaFormatException implements Exception {
   @override
   String toString() => message;
 }
+
+/// Typed signal that the user cancelled a long-running crypto operation (the
+/// import/restore pill's Cancel). Deliberately distinct from a failure so the
+/// screens can route it to the honest 'Cancelled' row state instead of
+/// 'Failed' — a cancel means nothing went wrong and nothing was lost.
+class OperationCancelledException implements Exception {
+  final String message;
+  const OperationCancelledException([this.message = 'Operation cancelled']);
+
+  @override
+  String toString() => message;
+}

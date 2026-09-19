@@ -115,6 +115,65 @@ void main() {
           reason: 'Decrypted bytes from existing path must match original');
     });
 
+    test('T-CANCEL-ENTRY: a cancel already pending aborts the decrypt before any isolate work', () async {
+      final original = generateRandomBytes(64 * 1024);
+      final src = createTempFile('cancel_src.bin', original);
+      final encrypted = createTempFile('cancel_enc.bin');
+      final decrypted = createTempFile('cancel_dec.bin');
+      await cryptoIsolateEncryptFile(
+        key: testKey,
+        iv: testIv,
+        srcPath: src.path,
+        destPath: encrypted.path,
+      );
+
+      await expectLater(
+        cryptoIsolateDecryptFile(
+          key: testKey,
+          srcPath: encrypted.path,
+          destPath: decrypted.path,
+          shouldAbort: () => true,
+        ),
+        throwsA(isA<OperationCancelledException>()),
+      );
+    });
+
+    test('T-CANCEL-MIDFLIGHT: a cancel arriving mid-decrypt kills the worker and surfaces OperationCancelledException', () async {
+      // 12 MB of ciphertext: far more decrypt work than the 5 ms abort-poll
+      // interval, so the kill lands long before the worker could finish.
+      // One random page tiled over the buffer — this test only needs real
+      // decrypt work, not unique plaintext.
+      final page = generateRandomBytes(64 * 1024);
+      final original = Uint8List(12 * 1024 * 1024);
+      for (var i = 0; i < original.length; i += page.length) {
+        original.setRange(i,
+            i + page.length > original.length ? original.length : i + page.length,
+            page);
+      }
+      final src = createTempFile('cancelmid_src.bin', original);
+      final encrypted = createTempFile('cancelmid_enc.bin');
+      final decrypted = createTempFile('cancelmid_dec.bin');
+      await cryptoIsolateEncryptFile(
+        key: testKey,
+        iv: testIv,
+        srcPath: src.path,
+        destPath: encrypted.path,
+      );
+
+      await expectLater(
+        cryptoIsolateDecryptFile(
+          key: testKey,
+          srcPath: encrypted.path,
+          destPath: decrypted.path,
+          shouldAbort: () => true,
+          abortPollInterval: const Duration(milliseconds: 5),
+        ),
+        throwsA(isA<OperationCancelledException>()),
+        reason:
+            'the worker is a raw Isolate.spawn, so a cancel must kill it mid-file instead of waiting it out',
+      );
+    });
+
     test('existing ciphertext decrypts after an isolate round trip', () async {
       final original = generateRandomBytes(95 * 1024 + 11);
       final src = createTempFile('prod_src.bin', original);

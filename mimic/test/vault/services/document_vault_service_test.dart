@@ -351,6 +351,103 @@ void main() {
       expect(result.originalNote, isNotNull);
       expect(await documentService.getDocumentBytes(result.id), equals(bytes));
     });
+
+    group('restoreDocumentToDisk outcomes', () {
+      test('a confirmed save removes the vault copy', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('123456');
+        final service = _RestoreSeamDocumentService(platformService, crypto);
+        final src = File(p.join(tempDir.path, 'restore_me.pdf'));
+        await src.writeAsBytes(List<int>.generate(4096, (i) => i % 256));
+        final id =
+            await service.saveDocumentFromFile(src, 'pdf', originalName: 'restore_me.pdf');
+        service.saveFileResult = p.join(tempDir.path, 'restored.pdf');
+
+        final outcome = await service.restoreDocumentToDisk(id);
+
+        expect(outcome, DocumentRestoreOutcome.restored);
+        // Per-id assertions, not counts: the document meta store is a
+        // SharedPreferences singleton shared by every test in this isolate,
+        // so earlier tests' rows are still listed here.
+        final remaining = await service.listDocuments();
+        expect(remaining.map((d) => d.id), isNot(contains(id)),
+            reason: 'the vault copy is removed only after the save succeeded');
+        expect(await service.getDocumentBytes(id), isNull);
+      });
+
+      test('a cancelled picker keeps the vault copy', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('123456');
+        final service = _RestoreSeamDocumentService(platformService, crypto);
+        final src = File(p.join(tempDir.path, 'cancelled.pdf'));
+        await src.writeAsBytes(List<int>.generate(1024, (i) => i % 256));
+        final id =
+            await service.saveDocumentFromFile(src, 'pdf', originalName: 'cancelled.pdf');
+        service.saveFileResult = null;
+
+        final outcome = await service.restoreDocumentToDisk(id);
+
+        expect(outcome, DocumentRestoreOutcome.cancelled);
+        expect((await service.listDocuments()).map((d) => d.id), contains(id),
+            reason: 'a cancelled save must never delete the vault copy');
+        expect(await service.getDocumentBytes(id), isNotNull);
+      });
+
+      test('a failed write keeps the vault copy', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('123456');
+        final service = _RestoreSeamDocumentService(platformService, crypto);
+        final src = File(p.join(tempDir.path, 'failed.pdf'));
+        await src.writeAsBytes(List<int>.generate(1024, (i) => i % 256));
+        final id =
+            await service.saveDocumentFromFile(src, 'pdf', originalName: 'failed.pdf');
+        service.saveFileThrows = true;
+
+        final outcome = await service.restoreDocumentToDisk(id);
+
+        expect(outcome, DocumentRestoreOutcome.saveFailed);
+        expect((await service.listDocuments()).map((d) => d.id), contains(id),
+            reason: 'a failed save must never delete the vault copy');
+        expect(await service.getDocumentBytes(id), isNotNull);
+      });
+
+      test('a vault delete failing after the save reports the duplicate', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('123456');
+        final service = _RestoreSeamDocumentService(platformService, crypto);
+        final src = File(p.join(tempDir.path, 'stuck.pdf'));
+        await src.writeAsBytes(List<int>.generate(1024, (i) => i % 256));
+        final id =
+            await service.saveDocumentFromFile(src, 'pdf', originalName: 'stuck.pdf');
+        service.saveFileResult = p.join(tempDir.path, 'stuck_copy.pdf');
+        service.deleteThrows = true;
+
+        final outcome = await service.restoreDocumentToDisk(id);
+
+        expect(outcome, DocumentRestoreOutcome.restoredButVaultCopyRemains);
+        expect((await service.listDocuments()).map((d) => d.id), contains(id),
+            reason: 'the duplicate must actually exist when the message says so');
+        expect(await service.getDocumentBytes(id), isNotNull);
+      });
+
+      test('an unknown id cancels without consulting the picker', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('123456');
+        final service = _RestoreSeamDocumentService(platformService, crypto);
+        service.saveFileResult = p.join(tempDir.path, 'should_not_be_written.pdf');
+
+        final outcome = await service.restoreDocumentToDisk('no_such_doc');
+
+        expect(outcome, DocumentRestoreOutcome.cancelled);
+        expect(service.pickerCalls, 0,
+            reason: 'nothing to restore means nothing to pick a location for');
+      });
+    });
   });
 }
 
@@ -383,4 +480,29 @@ class _FakeFilePicker extends FilePicker {
         PlatformFile(
             name: 'picked.pdf', path: path, size: 4096, identifier: identifier),
       ]);
+}
+
+/// Puts restoreDocumentToDisk's picker behind a controllable seam and can fail
+/// the vault delete, so every DocumentRestoreOutcome is reachable in a plain
+/// ffi test without a real SAF dialog.
+class _RestoreSeamDocumentService extends DocumentVaultService {
+  _RestoreSeamDocumentService(super.platformService, super.crypto);
+
+  String? saveFileResult;
+  bool saveFileThrows = false;
+  bool deleteThrows = false;
+  int pickerCalls = 0;
+
+  @override
+  Future<String?> saveDocumentToDisk(Uint8List bytes, String fileName) async {
+    pickerCalls++;
+    if (saveFileThrows) throw Exception('SAF refused the write');
+    return saveFileResult;
+  }
+
+  @override
+  Future<void> deleteDocument(String id) async {
+    if (deleteThrows) throw Exception('simulated vault delete failure');
+    return super.deleteDocument(id);
+  }
 }

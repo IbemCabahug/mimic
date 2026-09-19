@@ -10,6 +10,7 @@ class PhotoViewerScreen extends ConsumerStatefulWidget {
   final int initialIndex;
   final Future<Uint8List?> Function(String) loadBytes;
   final ValueChanged<String> onDelete;
+  final ValueChanged<String> onRestore;
 
   const PhotoViewerScreen({
     super.key,
@@ -17,6 +18,7 @@ class PhotoViewerScreen extends ConsumerStatefulWidget {
     required this.initialIndex,
     required this.loadBytes,
     required this.onDelete,
+    required this.onRestore,
   });
 
   @override
@@ -39,6 +41,47 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
   void dispose() {
     _pageController.dispose();
     super.dispose();
+  }
+
+  /// Restores the photo being viewed back to the device gallery, with the
+  /// same honest warning the grid's sheet shows. The actual vault write and
+  /// vault delete live in the service; the grid owns the snackbar and the
+  /// list refresh through the onRestore callback.
+  Future<void> _restoreCurrent() async {
+    if (widget.photos.isEmpty) return;
+    final photo = widget.photos[_currentIndex];
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Restore to Gallery',
+          style: TextStyle(color: Color(0xFF1A1A1A), fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+        ),
+        content: const Text(
+          'This decrypts the photo and writes it back into the device gallery, where other apps with media access can see it. After the gallery confirms the save, the encrypted vault copy is removed.',
+          style: TextStyle(color: Color(0xFF6B6B6B), fontFamily: 'Inter'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel', style: TextStyle(color: Color(0xFF8E8E8E), fontFamily: 'Inter')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Restore', style: TextStyle(color: Color(0xFF1A1A1A), fontWeight: FontWeight.w600, fontFamily: 'Inter')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true && mounted) {
+      widget.onRestore(photo.id);
+      if (mounted && widget.photos.length <= 1) {
+        Navigator.of(context).pop();
+      }
+    }
   }
 
   Future<void> _deleteCurrent() async {
@@ -90,6 +133,11 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.unarchive, color: Colors.white),
+            tooltip: 'Restore to gallery',
+            onPressed: _restoreCurrent,
+          ),
           IconButton(
             icon: const Icon(Icons.delete_outline, color: Colors.white),
             onPressed: _deleteCurrent,
