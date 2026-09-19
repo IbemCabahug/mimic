@@ -12,3 +12,8 @@ notes.md
 # IDE and editor settings, not part of the build
 .idea/
 .kilo/
+
+# Local flutter test/analyze output redirected to files (e.g. a8_full.log).
+# Mimic's own .gitignore already covers *.log; this keeps the repo root clean.
+*.log
+*.err.log
