@@ -71,6 +71,24 @@ class DocumentMeta {
       );
 }
 
+/// Where a document restore ended up. Explicit instead of nulls and
+/// exceptions so the screen can tell the user the truth in every case.
+enum DocumentRestoreOutcome {
+  /// Plaintext written where the user chose; vault copy deleted.
+  restored,
+
+  /// The user cancelled the location picker — nothing was written, the
+  /// vault copy is untouched.
+  cancelled,
+
+  /// The write to the chosen location failed — the vault copy is untouched.
+  saveFailed,
+
+  /// The plaintext WAS written, but the vault copy could not be deleted.
+  /// The document now exists in both places and the user must be told.
+  restoredButVaultCopyRemains,
+}
+
 class DocumentVaultService {
   final PlatformService _platformService;
   final VaultCrypto _crypto;
@@ -312,6 +330,23 @@ class DocumentVaultService {
   }
 
   Future<Uint8List?> getDocumentBytes(String id) async {
+    // 2026-09-17: same reason as FileVaultService._readDecryptedBlob — the
+    // whole-file AES pass used to run on the UI isolate while a document was
+    // being opened. Prefer the worker when the blob is file-backed, and keep
+    // the in-memory path as the fallback so web and worker-less states behave
+    // exactly as before. The catch below stays unconditional for the same
+    // reason as there: the old body returned null on every exception, so no
+    // `SystemKeyMissingException` clause is added.
+    if (!kIsWeb) {
+      try {
+        final file = await _platformService.resolveVaultFile(id);
+        if (await file.exists()) {
+          final fromWorker = await _crypto.tryDecryptFileInWorker(file);
+          if (fromWorker != null) return fromWorker;
+        }
+      } catch (_) {}
+    }
+
     final encrypted = await _platformService.readEncryptedFile(id);
     if (encrypted == null) return null;
     try {
@@ -412,6 +447,45 @@ class DocumentVaultService {
       }
       return null;
     }
+  }
+
+  /// Test seam: writes the plaintext to a location the user picks (Android
+  /// SAF via file_picker's saveFile — no storage permission needed). Returns
+  /// the written path, or null when the user cancelled.
+  @visibleForTesting
+  Future<String?> saveDocumentToDisk(Uint8List bytes, String fileName) {
+    return FilePicker.platform.saveFile(fileName: fileName, bytes: bytes);
+  }
+
+  /// Restores a document out of the vault: decrypts, asks the user where to
+  /// save the plaintext, writes it, and ONLY after a confirmed write deletes
+  /// the vault copy. Cancel and write failures leave the vault untouched —
+  /// the vault is never the thing that loses the file.
+  Future<DocumentRestoreOutcome> restoreDocumentToDisk(String id) async {
+    final docs = await listDocuments();
+    final index = docs.indexWhere((d) => d.id == id);
+    if (index == -1) return DocumentRestoreOutcome.cancelled;
+    final doc = docs[index];
+
+    final bytes = await getDocumentBytes(id);
+    if (bytes == null) return DocumentRestoreOutcome.saveFailed;
+
+    final String? savedPath;
+    try {
+      savedPath = await saveDocumentToDisk(bytes, doc.fileName);
+    } catch (_) {
+      return DocumentRestoreOutcome.saveFailed;
+    }
+    if (savedPath == null) return DocumentRestoreOutcome.cancelled;
+
+    try {
+      await deleteDocument(id);
+    } catch (_) {
+      // The plaintext was written AND the vault copy remains. Say so — a
+      // silent duplicate defeats the vault.
+      return DocumentRestoreOutcome.restoredButVaultCopyRemains;
+    }
+    return DocumentRestoreOutcome.restored;
   }
 
   Future<void> cleanupShareTemp() async {

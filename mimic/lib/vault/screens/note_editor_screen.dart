@@ -223,6 +223,18 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
                         style: const TextStyle(fontSize: 17, color: Color(0xFF111111), fontFamily: 'Inter', height: 1.6, fontWeight: FontWeight.w600),
                         maxLines: null,
                         expands: true,
+                        // Measured 2026-09-18 on this exact screen (widget probe,
+                        // 360x760 logical, new empty note, body field
+                        // Rect.fromLTRB(20, 64, 340, 703)): with the Material
+                        // default the caret AND the hint sat 47.2% down the body
+                        // field — the middle of the screen, which is the
+                        // app-owner report ("writing a note should start at the
+                        // top, not the middle"). With TextAlignVertical.top both
+                        // sit at 1.9% (y=76), hard against the top edge, the way
+                        // every text editor behaves. Both numbers come from the
+                        // same probe frame; the 3b tests re-measure them so the
+                        // fix cannot be lost silently.
+                        textAlignVertical: TextAlignVertical.top,
                         textCapitalization: TextCapitalization.sentences,
                         decoration: const InputDecoration(
                           hintText: 'Start typing… (Markdown supported)',

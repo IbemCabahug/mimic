@@ -1,13 +1,16 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import '../widgets/vault_scaffold.dart';
+import '../widgets/import_activity_button.dart';
 import '../security/vault_error_ui.dart';
 import '../crypto/vault_crypto.dart';
 import '../security/auto_lock.dart';
 import '../services/document_vault_service.dart';
+import '../services/import_progress.dart';
 import '../../core/theme/app_theme.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -24,6 +27,17 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
   String _searchQuery = '';
   String _sortMode = 'date';
   String? _selectedFolder;
+
+  /// One restore session, same model and same pill as the video vault (F26).
+  /// A document restore is a single item, so the row count is always 1: the
+  /// pill reads "Restoring 1/1" and the row says 'Restoring' while the decrypt
+  /// and the SAF write run. Its bar is INDETERMINATE on purpose — the vault
+  /// read is a whole-file in-memory decrypt and the copy out goes through the
+  /// system file picker, so there is no byte stream to measure; NN/g's rule is
+  /// a looped indicator for a short unknown wait and a percent only when the
+  /// wait is longer AND measurable, and inventing a percent would be a lie.
+  final ImportSession _restoreSession = ImportSession();
+  Timer? _restoreLingerTimer;
 
   void setDocumentsForTesting(List<DocumentMeta> docs) {
     setState(() {
@@ -183,6 +197,13 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
   }
 
   @override
+  void dispose() {
+    _restoreLingerTimer?.cancel();
+    _restoreSession.dispose();
+    super.dispose();
+  }
+
+  @override
   void initState() {
     super.initState();
     _loadDocuments();
@@ -244,6 +265,11 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                 value: remove,
                 onChanged: (v) => setDialogState(() => remove = v ?? false),
                 activeColor: VaultColors.accent,
+                // The unchecked box was nearly invisible on the white dialog —
+                // M3's default border is a low-contrast grey, and the operator
+                // reported not seeing the checkbox at all. 2px black reads as
+                // a checkbox at a glance.
+                side: const BorderSide(width: 2, color: Colors.black),
                 controlAffinity: ListTileControlAffinity.leading,
                 contentPadding: EdgeInsets.zero,
                 title: const Text(
@@ -462,6 +488,194 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
     );
   }
 
+  /// Moves a document back OUT of the vault: decrypts it and saves a readable
+  /// copy wherever the user picks (Android SAF). The vault copy is removed
+  /// only after the save is confirmed. Every outcome gets an honest message —
+  /// including the partial one where the copy was written but the vault
+  /// delete failed, because a silent duplicate defeats the vault.
+  Future<void> _restoreDocument(DocumentMeta doc) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Restore to Device',
+          style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+        ),
+        content: const Text(
+          'This decrypts the document and saves a readable copy to a location you choose. Anyone with access to the device can read it there. After the save succeeds, it will be removed from the vault.',
+          style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Restore', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    // The restore is visible work now: the same pill the video vault uses sits
+    // above the Add FAB with a 'Restoring' row for this file, so the screen
+    // never looks dead while the decrypt and the save run. A document has no
+    // measurable byte stream (whole-file decrypt in memory, then a copy out
+    // through the system picker), so the row carries no percent — an honest
+    // moving bar instead of an invented number.
+    _restoreLingerTimer?.cancel();
+    _restoreSession.beginRestore([doc.fileName]);
+    _restoreSession.markRestoring(0, 1);
+
+    final outcome =
+        await ref.read(documentVaultServiceProvider).restoreDocumentToDisk(doc.id);
+    if (!mounted) return;
+    // Map the outcome onto the row so the pill tells the same story as the
+    // snackbar below. 'cancelled' (picker dismissed) is not a failure and not
+    // a save either: the vault copy is untouched, so the row is cleared rather
+    // than marked 'Failed'.
+    switch (outcome) {
+      case DocumentRestoreOutcome.restored:
+        _restoreSession.markSaved(0);
+        break;
+      case DocumentRestoreOutcome.restoredButVaultCopyRemains:
+        _restoreSession.markSavedOriginalKept(0);
+        break;
+      case DocumentRestoreOutcome.saveFailed:
+        _restoreSession.markFailed(0, 'Could not save the document');
+        break;
+      case DocumentRestoreOutcome.cancelled:
+        _restoreSession.clear();
+        break;
+    }
+    final String message;
+    switch (outcome) {
+      case DocumentRestoreOutcome.restored:
+        message = 'Document restored. The vault copy was removed.';
+        break;
+      case DocumentRestoreOutcome.cancelled:
+        message = 'Restore cancelled. The vault copy was kept.';
+        break;
+      case DocumentRestoreOutcome.saveFailed:
+        message = 'Could not save the document. The vault copy was kept.';
+        break;
+      case DocumentRestoreOutcome.restoredButVaultCopyRemains:
+        message =
+            'Document was saved, but the vault copy could not be deleted. Delete it from the vault manually.';
+        break;
+    }
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    // Let the outcome row linger ~4s (same rule as the video vault's restore
+    // and the import card), then clear so the pill disappears. Starting
+    // another restore cancels this timer first.
+    if (_restoreSession.isActive && !_restoreSession.isWorking) {
+      _restoreLingerTimer = Timer(const Duration(seconds: 4), () {
+        if (!_restoreSession.isWorking) _restoreSession.clear();
+      });
+    }
+    if (outcome == DocumentRestoreOutcome.restored ||
+        outcome == DocumentRestoreOutcome.restoredButVaultCopyRemains) {
+      await _loadDocuments();
+    }
+  }
+
+  /// The hold-a-file action sheet. Photos and videos both answer a long-press
+  /// with a sheet of actions, so documents do the same instead of hiding
+  /// restore behind the ⋮ menu — the app owner's own report ("should the
+  /// document vault also have the restore button?") was proof that the ⋮ menu
+  /// alone does not read as "restore lives here" (NN/g #4, consistency: the
+  /// same-looking rows in the three vaults must offer their actions the same
+  /// way). The ⋮ menu keeps working; this is the same three handlers.
+  Future<void> _showDocumentOptions(DocumentMeta doc) async {
+    HapticFeedback.mediumImpact();
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Material(
+              color: Colors.transparent,
+              child: ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: VaultColors.accent.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.unarchive, color: VaultColors.accent),
+                ),
+                title: const Text('Restore to Device',
+                    style: TextStyle(
+                        fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _restoreDocument(doc);
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            Material(
+              color: Colors.transparent,
+              child: ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: VaultColors.accent.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.ios_share, color: VaultColors.accent),
+                ),
+                title: const Text('Share / export',
+                    style: TextStyle(
+                        fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _shareDocument(doc);
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            Material(
+              color: Colors.transparent,
+              child: ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: VaultColors.accent.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.drive_file_move_outlined,
+                      color: VaultColors.accent),
+                ),
+                title: const Text('Move to Folder',
+                    style: TextStyle(
+                        fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _showMoveToFolder(doc);
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _deleteDocument(DocumentMeta doc) async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -616,16 +830,31 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
 
     return VaultScaffold(
       title: 'Documents',
-      floatingActionButton: AnimatedFAB(
-        child: FloatingActionButton.extended(
-          onPressed: _showImportOptions,
-          backgroundColor: VaultColors.accent,
-          icon: const Icon(Icons.add, color: Colors.white),
-          label: const Text(
-            'Add',
-            style: TextStyle(color: Colors.white, fontFamily: 'Inter', fontWeight: FontWeight.w600),
+      floatingActionButton: Column(
+        // Restore pill above the Add FAB — the same cluster arrangement the
+        // video vault uses, so an in-flight restore is visible the same way in
+        // both vaults (F26).
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.end,
+        children: [
+          ImportActivityButton(
+            key: const ValueKey('restore_activity_button'),
+            session: _restoreSession,
+            onTap: () => showImportDetailsSheet(context, _restoreSession),
           ),
-        ),
+          const SizedBox(height: 12),
+          AnimatedFAB(
+            child: FloatingActionButton.extended(
+              onPressed: _showImportOptions,
+              backgroundColor: VaultColors.accent,
+              icon: const Icon(Icons.add, color: Colors.white),
+              label: const Text(
+                'Add',
+                style: TextStyle(color: Colors.white, fontFamily: 'Inter', fontWeight: FontWeight.w600),
+              ),
+            ),
+          ),
+        ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: VaultColors.accent))
@@ -759,6 +988,9 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                         child: InkWell(
                           borderRadius: BorderRadius.circular(16),
                           onTap: () => _openDocument(doc),
+                          // Same hold-a-file model as photos and videos; the
+                          // sheet exposes restore without hunting the ⋮ menu.
+                          onLongPress: () => _showDocumentOptions(doc),
                           child: Container(
                             margin: const EdgeInsets.symmetric(vertical: 4),
                             decoration: BoxDecoration(
@@ -810,9 +1042,11 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                                 onSelected: (v) {
                                   if (v == 'share') _shareDocument(doc);
                                   if (v == 'move') _showMoveToFolder(doc);
+                                  if (v == 'restore') _restoreDocument(doc);
                                 },
                                 itemBuilder: (_) => const [
                                   PopupMenuItem(value: 'share', child: Text('Share / export')),
+                                  PopupMenuItem(value: 'restore', child: Text('Restore to device…')),
                                   PopupMenuItem(value: 'move', child: Text('Move to folder')),
                                 ],
                               ),

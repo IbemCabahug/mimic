@@ -137,42 +137,13 @@ class ImportStatusCard extends StatelessWidget {
     );
   }
 
-  Widget _rowIcon(ImportFileStatus status) {
-    switch (status) {
-      case ImportFileStatus.queued:
-        return const Icon(Icons.schedule, size: 14, color: VaultColors.textTertiary);
-      case ImportFileStatus.encrypting:
-        return const SizedBox(
-          width: 14,
-          height: 14,
-          child: CircularProgressIndicator(strokeWidth: 2, color: VaultColors.accent),
-        );
-      case ImportFileStatus.waitingDeleteConfirm:
-        return const Icon(Icons.help_outline, size: 14, color: Colors.orange);
-      case ImportFileStatus.saved:
-        return const Icon(Icons.check_circle, size: 14, color: Colors.green);
-      case ImportFileStatus.savedOriginalKept:
-        return const Icon(Icons.info_outline, size: 14, color: Colors.orange);
-      case ImportFileStatus.failed:
-        return const Icon(Icons.error_outline, size: 14, color: Colors.red);
-    }
-  }
+  // Both of these delegate to the shared top-level helpers below so the card
+  // and the compact pill's detail sheet can never drift apart. (They used to
+  // be two hand-copied switch statements, and the copy here silently missed
+  // the F26 `restoring` status — the shared version is the single source.)
+  Widget _rowIcon(ImportFileStatus status) => importFileRowIcon(status);
 
-  Color _rowColor(ImportFileStatus status) {
-    switch (status) {
-      case ImportFileStatus.saved:
-        return Colors.green;
-      case ImportFileStatus.failed:
-        return Colors.red;
-      case ImportFileStatus.savedOriginalKept:
-      case ImportFileStatus.waitingDeleteConfirm:
-        return Colors.orange;
-      case ImportFileStatus.queued:
-        return VaultColors.textTertiary;
-      case ImportFileStatus.encrypting:
-        return VaultColors.accent;
-    }
-  }
+  Color _rowColor(ImportFileStatus status) => importFileRowColor(status);
 }
 
 // Top-level so other import surfaces (the compact activity button's detail
@@ -182,6 +153,7 @@ Widget importFileRowIcon(ImportFileStatus status) {
     case ImportFileStatus.queued:
       return const Icon(Icons.schedule, size: 14, color: VaultColors.textTertiary);
     case ImportFileStatus.encrypting:
+    case ImportFileStatus.restoring:
       return const SizedBox(
         width: 14,
         height: 14,
@@ -195,6 +167,9 @@ Widget importFileRowIcon(ImportFileStatus status) {
       return const Icon(Icons.info_outline, size: 14, color: Colors.orange);
     case ImportFileStatus.failed:
       return const Icon(Icons.error_outline, size: 14, color: Colors.red);
+    case ImportFileStatus.cancelled:
+      return const Icon(Icons.remove_circle_outline,
+          size: 14, color: VaultColors.textTertiary);
   }
 }
 
@@ -204,12 +179,15 @@ Color importFileRowColor(ImportFileStatus status) {
       return Colors.green;
     case ImportFileStatus.failed:
       return Colors.red;
+    case ImportFileStatus.cancelled:
+      return VaultColors.textTertiary;
     case ImportFileStatus.savedOriginalKept:
     case ImportFileStatus.waitingDeleteConfirm:
       return Colors.orange;
     case ImportFileStatus.queued:
       return VaultColors.textTertiary;
     case ImportFileStatus.encrypting:
+    case ImportFileStatus.restoring:
       return VaultColors.accent;
   }
 }

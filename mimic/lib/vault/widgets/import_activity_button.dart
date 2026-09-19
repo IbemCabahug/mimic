@@ -39,13 +39,42 @@ class ImportActivityButton extends StatelessWidget {
         final working = session.isWorking;
         final failed =
             session.files.where((f) => f.status == ImportFileStatus.failed).length;
+        // The active row's measurable percent, when the work is of a kind that
+        // HAS one (restore decrypt). Imports have none and simply omit it —
+        // the NN/g rule this follows is "percent-done for >=10 s waits", and a
+        // percent that cannot be measured must not be invented.
+        final activeRow = session.position >= 1 && session.position <= session.total
+            ? session.files[session.position - 1]
+            : null;
+        final activePercent = activeRow?.progress;
+        // Restore rows that are past their measurable part (gallery write) or
+        // still in-flight indeterminately show a plain spinner percent-less
+        // label; the sheet carries the phase detail.
         final String label;
         if (working) {
-          label = 'Importing ${session.position}/${session.total}';
+          // A requested cancel is itself a status the user must see: the
+          // in-flight file still finishes, so "Cancelling…" is the honest
+          // label until the loop actually stops.
+          if (session.cancelRequested) {
+            label = 'Cancelling…';
+          } else {
+            final base = '${session.verb} ${session.position}/${session.total}';
+            label = activePercent != null
+                ? '$base — ${(activePercent * 100).round()}%'
+                : base;
+          }
+        } else if (session.cancelRequested) {
+          label = session.verb == 'Restoring'
+              ? 'Restore cancelled'
+              : 'Import cancelled';
         } else if (failed > 0) {
-          label = 'Import finished — $failed not imported';
+          label = session.verb == 'Restoring'
+              ? 'Restore finished — $failed not restored'
+              : 'Import finished — $failed not imported';
         } else {
-          label = 'Import finished (${session.total}/${session.total})';
+          label = session.verb == 'Restoring'
+              ? 'Restore finished (${session.total}/${session.total})'
+              : 'Import finished (${session.total}/${session.total})';
         }
         return Material(
           color: VaultColors.surface,
@@ -87,6 +116,28 @@ class ImportActivityButton extends StatelessWidget {
                       color: VaultColors.textPrimary,
                     ),
                   ),
+                  // The ✕ requests the cancel; the loops stop before the NEXT
+                  // file, so this never truncates the file in flight. It is
+                  // an immediate action with no confirm dialog on purpose:
+                  // already-encrypted files simply stay in the vault, so a
+                  // cancel costs nothing but the remaining waiting time.
+                  if (working) ...[
+                    const SizedBox(width: 6),
+                    Tooltip(
+                      message: session.verb == 'Restoring'
+                          ? 'Cancel restore'
+                          : 'Cancel import',
+                      child: InkWell(
+                        onTap: session.requestCancel,
+                        borderRadius: BorderRadius.circular(12),
+                        child: const Padding(
+                          padding: EdgeInsets.all(4),
+                          child: Icon(Icons.close,
+                              size: 16, color: VaultColors.textTertiary),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -125,8 +176,10 @@ Future<void> showImportDetailsSheet(
                     padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
                     child: Text(
                       session.isWorking
-                          ? 'Importing ${session.position}/${session.total} ...'
-                          : 'Import finished',
+                          ? '${session.verb} ${session.position}/${session.total} ...'
+                          : session.verb == 'Restoring'
+                              ? 'Restore finished'
+                              : 'Import finished',
                       style: const TextStyle(
                         fontFamily: 'Inter',
                         fontWeight: FontWeight.w700,
@@ -154,6 +207,13 @@ Future<void> showImportDetailsSheet(
                         itemCount: rows.length,
                         itemBuilder: (context, i) {
                           final row = rows[i];
+                          // Determinate restore percent -> the trailing text
+                          // becomes the percent and a bar appears under the
+                          // name; indeterminate restore -> plain 'Restoring'
+                          // plus a moving bar with no fake percent.
+                          final showPercent = row.status ==
+                                  ImportFileStatus.restoring &&
+                              row.progress != null;
                           return ListTile(
                             dense: true,
                             leading: importFileRowIcon(row.status),
@@ -167,20 +227,49 @@ Future<void> showImportDetailsSheet(
                                 color: VaultColors.textPrimary,
                               ),
                             ),
-                            subtitle: row.detail == null
+                            subtitle: (row.detail == null &&
+                                    row.status != ImportFileStatus.restoring)
                                 ? null
-                                : Text(
-                                    row.detail!,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      fontFamily: 'Inter',
-                                      fontSize: 11,
-                                      color: VaultColors.textTertiary,
-                                    ),
+                                : Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      if (row.detail != null)
+                                        Text(
+                                          row.detail!,
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(
+                                            fontFamily: 'Inter',
+                                            fontSize: 11,
+                                            color: VaultColors.textTertiary,
+                                          ),
+                                        ),
+                                      if (row.status ==
+                                          ImportFileStatus.restoring)
+                                        Padding(
+                                          padding: const EdgeInsets.only(top: 4),
+                                          // A null value IS the indeterminate
+                                          // bar: when the OS-side gallery write
+                                          // has no observable percent the bar
+                                          // moves without claiming a number
+                                          // (never fake progress). With a value
+                                          // it is the streamed decrypt's real
+                                          // percent.
+                                          child: LinearProgressIndicator(
+                                            minHeight: 3,
+                                            value: row.progress,
+                                            color: VaultColors.accent,
+                                            backgroundColor: VaultColors.accent
+                                                .withValues(alpha: 0.15),
+                                          ),
+                                        ),
+                                    ],
                                   ),
                             trailing: Text(
-                              importFileStatusLabel(row.status),
+                              showPercent
+                                  ? '${(row.progress! * 100).round()}%'
+                                  : importFileStatusLabel(row.status),
                               style: TextStyle(
                                 fontFamily: 'Inter',
                                 fontSize: 12,
@@ -194,11 +283,28 @@ Future<void> showImportDetailsSheet(
                     ),
                   Align(
                     alignment: Alignment.centerRight,
-                    child: TextButton(
-                      onPressed: () => Navigator.of(sheetContext).pop(),
-                      child: const Text('Close',
-                          style: TextStyle(
-                              fontFamily: 'Inter', color: VaultColors.accent)),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Same rule as the pill's ✕: closing a view is not
+                        // cancelling work, so the sheet's Cancel is a separate
+                        // explicit control and only exists while work is live.
+                        if (session.isWorking)
+                          TextButton(
+                            onPressed: session.requestCancel,
+                            child: const Text('Cancel',
+                                style: TextStyle(
+                                    fontFamily: 'Inter',
+                                    color: VaultColors.textTertiary)),
+                          ),
+                        TextButton(
+                          onPressed: () => Navigator.of(sheetContext).pop(),
+                          child: const Text('Close',
+                              style: TextStyle(
+                                  fontFamily: 'Inter',
+                                  color: VaultColors.accent)),
+                        ),
+                      ],
                     ),
                   ),
                 ],

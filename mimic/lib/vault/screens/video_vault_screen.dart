@@ -39,11 +39,20 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
   // gone) and the next import cancels it, so a stale timer can never wipe the
   // new session's rows.
   Timer? _lingerTimer;
+  // Restore activity: the SAME live-card model the import flow uses, fed by
+  // the restore flow (single or bulk). One pill above the import pill, one
+  // sheet, truthful per-video rows — a 1-3 GB restore is minutes, and NN/g's
+  // visibility-of-system-status rule does not stop applying because the
+  // direction is outward.
+  final ImportSession _restoreSession = ImportSession();
+  Timer? _restoreLingerTimer;
 
   @override
   void dispose() {
     _lingerTimer?.cancel();
+    _restoreLingerTimer?.cancel();
     _importSession.dispose();
+    _restoreSession.dispose();
     super.dispose();
   }
 
@@ -124,6 +133,9 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
                             setState(() => dontShowAgain = val ?? false);
                           },
                           activeColor: VaultColors.accent,
+                          // Same fix as the photo vault's dialog: M3's default
+                          // unchecked border vanishes on white. 2px black.
+                          side: const BorderSide(width: 2, color: Colors.black),
                         ),
                         const Expanded(
                           child: Text(
@@ -182,6 +194,9 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
         onFileSaved: (index) => savedRows.add(index),
         onFileFailed: (index, detail) => failedRows[index] = detail,
         onWaitingDeleteConfirm: () => _importSession.markWaitingDeleteConfirm(),
+        // The pill's ✕ / the sheet's Cancel set this flag; the service checks
+        // it before each NEXT file, so the in-flight video always finishes.
+        isCancelled: () => _importSession.cancelRequested,
       );
       sessionActive = false;
       // Outcome rows: per-file Saved / Saved-original-kept. The snackbar
@@ -196,15 +211,26 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
         }
       }
       failedRows.forEach((i, detail) => _importSession.markFailed(i, detail));
-      // Files the service never reached (the batch stopped on a failure) are
-      // still Queued or Encrypting. A row left in either state would keep
-      // isWorking true forever and the card would never clear.
+      // Files the service never reached (the batch stopped on a failure OR a
+      // requested cancel) are still Queued or Encrypting. A row left in either
+      // state would keep isWorking true forever and the card would never
+      // clear. A cancel is not a failure: its unreached rows read 'Cancelled'.
+      final wasCancelled = _importSession.cancelRequested;
       for (var i = 0; i < _importSession.total; i++) {
         final status = _importSession.files[i].status;
         if (status == ImportFileStatus.queued ||
             status == ImportFileStatus.encrypting) {
-          _importSession.markFailed(i, 'Not imported');
+          if (wasCancelled) {
+            _importSession.markCancelled(i);
+          } else {
+            _importSession.markFailed(i, 'Not imported');
+          }
         }
+      }
+      if (wasCancelled && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                'Import cancelled — ${result.successfulIds.length} of ${result.totalAttempted} imported. Unimported originals are still in the gallery.')));
       }
       if (result.successfulIds.isNotEmpty) {
         await _loadVideos();
@@ -369,7 +395,7 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
           style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
         ),
         content: const Text(
-          'Move this video back to the device gallery? It will be removed from the vault.',
+          'This decrypts the video and writes it back into the device gallery, where other apps with media access can see it. After the gallery confirms the save, the encrypted vault copy is removed.',
           style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
         ),
         actions: [
@@ -386,22 +412,118 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     );
 
     if (confirmed == true && mounted) {
+      await _runRestore([video]);
+    }
+  }
+
+  /// Runs one or many video restores through the restore activity session,
+  /// so the pill above the import pill reads "Restoring 1/2 — 45%" while the
+  /// decrypt streams and the detail sheet shows the per-video truth. Every
+  /// failure keeps that video's vault copy and lands in the sheet as a
+  /// 'Failed' row with the honest reason; the final snackbar reports both
+  /// counts instead of one optimistic number. Cancel stops for real: the
+  /// in-flight decrypt is killed mid-file and its row reads 'Cancelled'
+  /// (nothing reached the gallery, nothing left the vault).
+  Future<void> _runRestore(List<VideoMeta> videos) async {
+    final service = ref.read(videoVaultServiceProvider);
+    _restoreLingerTimer?.cancel();
+    _restoreSession
+        .beginRestore(videos.map((v) => v.originalName ?? '${v.id}.mp4').toList());
+    var restored = 0;
+    var failed = 0;
+    for (var i = 0; i < videos.length; i++) {
+      // Stop BEFORE the next video; and the in-flight one stops too — the
+      // service polls the same flag and kills its decrypt mid-file (nothing
+      // reaches the gallery, the vault copy stays). Once a gallery write has
+      // started the file is committed; cancel then covers the rest.
+      if (_restoreSession.cancelRequested) break;
+      final video = videos[i];
+      _restoreSession.markRestoring(i, i + 1);
       try {
-        await ref.read(videoVaultServiceProvider).restoreVideoToGallery(video.id);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Video restored to gallery successfully.')),
-          );
-          await _loadVideos();
-        }
+        await service.restoreVideoToGallery(
+          video.id,
+          onProgress: (p) => _restoreSession.updateProgress(i, p),
+          isCancelled: () => _restoreSession.cancelRequested,
+        );
+        _restoreSession.markSaved(i);
+        restored++;
+      } on OperationCancelledException {
+        // The decrypt was killed mid-file by the Cancel press: the video
+        // never reached the gallery and its vault copy is untouched. The
+        // row's truth is 'Cancelled', not 'Failed' — nothing went wrong.
+        // Also mark the batch cancelled, so the loop stops after this file
+        // and the snackbar reports the truth instead of a bare count.
+        _restoreSession.requestCancel();
+        _restoreSession.markCancelled(i);
       } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to restore video: $e')),
-          );
-        }
+        _restoreSession.markFailed(
+            i, e.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''));
+        failed++;
       }
     }
+    // Rows the cancelled loop never reached stay 'restoring'; finalize them so
+    // the session can settle and the pill can clear.
+    for (var i = 0; i < _restoreSession.total; i++) {
+      if (_restoreSession.files[i].status == ImportFileStatus.restoring) {
+        _restoreSession.markCancelled(i);
+      }
+    }
+    if (!mounted) return;
+    HapticFeedback.mediumImpact();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(_restoreSession.cancelRequested
+            ? 'Restore cancelled — $restored restored, the rest are still in the vault.'
+            : failed == 0
+                ? 'Restored $restored video(s) to the gallery.'
+                : 'Restored $restored of ${videos.length}; $failed failed (their vault copies were kept).')));
+    // Let the outcome rows linger ~4s (same rule as the import card), then
+    // clear so the pill disappears. A new restore cancels this timer first.
+    if (_restoreSession.isActive && !_restoreSession.isWorking) {
+      _restoreLingerTimer = Timer(const Duration(seconds: 4), () {
+        if (!_restoreSession.isWorking) _restoreSession.clear();
+      });
+    }
+    await _loadVideos();
+  }
+
+  /// Moves the selected videos back OUT of the vault into the device gallery.
+  /// The mirror of bulk import: each video is streamed to the gallery and —
+  /// only after the gallery confirms — removed from the vault. A video whose
+  /// restore fails keeps its encrypted copy; the snackbar reports both
+  /// truths instead of a single optimistic number.
+  Future<void> _restoreSelection() async {
+    final count = _selection.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Restore $count video(s) to the gallery?',
+            style: const TextStyle(
+                color: VaultColors.textPrimary,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'Inter')),
+        content: const Text(
+            'This decrypts the selected videos and writes them back into the device gallery, where other apps with media access can see them. After each save is confirmed, the vault copy is removed.',
+            style: TextStyle(
+                color: VaultColors.textSecondary, fontFamily: 'Inter')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel',
+                  style: TextStyle(
+                      color: VaultColors.textTertiary, fontFamily: 'Inter'))),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Restore',
+                  style: TextStyle(color: VaultColors.accent))),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    final chosen = _visibleVideos().where((v) => _selection.contains(v.id)).toList();
+    _clearSelection();
+    await _runRestore(chosen);
   }
 
   Future<void> _deleteVideo(VideoMeta video) async {
@@ -699,6 +821,12 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 ImportActivityButton(
+                  key: const ValueKey('restore_activity_button'),
+                  session: _restoreSession,
+                  onTap: () => showImportDetailsSheet(context, _restoreSession),
+                ),
+                const SizedBox(height: 12),
+                ImportActivityButton(
                   key: const ValueKey('import_activity_button'),
                   session: _importSession,
                   onTap: () => showImportDetailsSheet(context, _importSession),
@@ -775,6 +903,15 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
                                 icon: const Icon(Icons.drive_file_move_outlined,
                                     size: 20, color: VaultColors.accent),
                                 label: const Text('Move',
+                                    style: TextStyle(
+                                        fontFamily: 'Inter',
+                                        color: VaultColors.accent)),
+                              ),
+                              TextButton.icon(
+                                onPressed: _restoreSelection,
+                                icon: const Icon(Icons.unarchive,
+                                    size: 20, color: VaultColors.accent),
+                                label: const Text('Restore',
                                     style: TextStyle(
                                         fontFamily: 'Inter',
                                         color: VaultColors.accent)),

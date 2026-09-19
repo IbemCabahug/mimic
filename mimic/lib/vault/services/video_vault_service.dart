@@ -1,4 +1,5 @@
 // lib/vault/services/video_vault_service.dart
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -555,7 +556,7 @@ class VideoVaultService {
         where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptVideo(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed}) async {
+  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptVideo(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed, bool Function()? isCancelled}) async {
     final List<AssetEntity>? assets = await AssetPicker.pickAssets(
       context,
       pickerConfig: const AssetPickerConfig(
@@ -579,6 +580,14 @@ class VideoVaultService {
     Object? failureError;
 
     for (var i = 0; i < assets.length; i++) {
+      // Cancellation only stops the NEXT file: the one in flight always
+      // finishes, so the vault never holds a partial entry. Unreached files
+      // stay queued; the screen's finalization sweep labels them 'Cancelled'.
+      // The batch-delete phase below is naturally skipped on cancel, because
+      // savedIds.length no longer equals the batch size — cancelling never
+      // pops the OS delete dialog, and saved originals stay on the device
+      // (rows honestly read 'Saved, original kept').
+      if (isCancelled != null && isCancelled()) break;
       final asset = assets[i];
       try {
         // Live import card: announce each file BEFORE its encrypt pass, so a
@@ -661,27 +670,158 @@ class VideoVaultService {
     );
   }
 
-  Future<void> restoreVideoToGallery(String id) async {
-    final bytes = await getVideo(id);
-    if (bytes == null) throw Exception('Video file not found in vault');
-
+  /// Restores a video: decrypts the blob straight to a transient temp file
+  /// (STREAMED — a multi-GB video is never held in RAM), writes it into the
+  /// system gallery via photo_manager, and ONLY after the gallery confirms
+  /// the write removes the vault copy. Same no-loss/no-silent-duplicate
+  /// contract as restorePhotoToGallery.
+  ///
+  /// 2026-09-18 (F26 follow-up): the old path decrypted the ENTIRE video into
+  /// memory first (`getVideo` -> one byte list) and showed nothing while it
+  /// ran, so a 1-3 GB restore was minutes of a dead screen — exactly the
+  /// complaint F4's import pill was built to answer for imports. This version
+  /// streams the decrypt through the format-routing stream decryptor into the
+  /// temp file and reports progress through [onProgress]: a 0..1 percent
+  /// while the temp file grows (measured off the file, never invented) and
+  /// null once the gallery write starts, because that OS-side copy has no
+  /// observable percent (NN/g: percent-done for waits >= 10 s; visibility of
+  /// system status always; never fake a percent).
+  ///
+  /// The temp plaintext lives in `vault_share` — the directory auto-lock's
+  /// wipeTransientPlaintext already secure-wipes on lock — and the whole
+  /// restore holds the auto-lock protected-operation claim, so a background
+  /// trip cannot lock the vault mid-restore and wipe the plaintext half-way
+  /// (the M35 rule, applied to this flow).
+  Future<void> restoreVideoToGallery(
+    String id, {
+    void Function(double? progress)? onProgress,
+    bool Function()? isCancelled,
+    @visibleForTesting Duration progressPollInterval =
+        const Duration(milliseconds: 150),
+  }) async {
+    // The pill's Cancel is a real stop, not just a between-files stop: the
+    // streamed decrypt polls [isCancelled] and is killed mid-file, so a
+    // cancel during the long decrypt phase leaves the vault copy and the
+    // gallery BOTH untouched. The flag is re-checked after the decrypt and
+    // before the gallery write; once that opaque OS copy starts the file is
+    // committed, and cancel then applies to the remaining files.
+    if (isCancelled != null && isCancelled()) {
+      throw const OperationCancelledException();
+    }
     final videos = await getAllVideos();
-    final video = videos.firstWhere((v) => v.id == id);
+    final video = videos.firstWhere(
+      (v) => v.id == id,
+      orElse: () => throw Exception('Video metadata not found in vault'),
+    );
     final originalName = video.originalName ?? '$id.mp4';
 
     final tempDir = await getTemporaryDirectory();
-    final tempFile = File(p.join(tempDir.path, originalName));
+    final shareDir = Directory(p.join(tempDir.path, 'vault_share'));
+    if (!shareDir.existsSync()) shareDir.createSync(recursive: true);
+    final tempFile = File(p.join(shareDir.path, originalName));
+
+    // The metadata size IS the plaintext size — exactly what the streamed
+    // decrypt writes — so it is the right percent denominator. Absent/zero
+    // means the percent cannot be measured and stays null (honest default).
+    final expectedBytes = video.size;
+
+    AutoLock().beginProtectedOperation();
     try {
-      await tempFile.writeAsBytes(bytes);
-      await PhotoManager.editor.saveVideo(
-        tempFile,
-        title: originalName,
-      );
-      await deleteVideo(id);
-    } finally {
-      if (await tempFile.exists()) {
-        await tempFile.delete();
+      onProgress?.call(expectedBytes > 0 ? 0.0 : null);
+
+      var streamed = false;
+      if (!kIsWeb) {
+        try {
+          final srcBlob = await _platformService.resolveVaultFile(id);
+          if (srcBlob.existsSync()) {
+            // Poll the temp file's length while the decrypt runs. A small
+            // video may finish between two polls; that is fine — the
+            // percent-less save-phase callback still fires below, so the UI
+            // never sits at a frozen bar believing the work stalled.
+            Timer? poll;
+            if (onProgress != null && expectedBytes > 0) {
+              poll = Timer.periodic(progressPollInterval, (_) async {
+                try {
+                  if (await tempFile.exists()) {
+                    final len = await tempFile.length();
+                    onProgress((len / expectedBytes).clamp(0.0, 0.99));
+                  }
+                } catch (_) {
+                  // A transient read failure says nothing about the
+                  // decrypt; the next tick simply tries again.
+                }
+              });
+            }
+            try {
+              await _crypto.decryptStreamSystem(srcBlob, tempFile,
+                  shouldAbort: isCancelled);
+              streamed = true;
+            } finally {
+              poll?.cancel();
+            }
+          }
+        } on OperationCancelledException {
+          // The decrypt was killed by the user's Cancel. Rethrow: falling
+          // through to the whole-file fallback below would restart the
+          // ENTIRE decrypt in RAM — exactly what the user asked to stop.
+          // The partial temp plaintext is secure-deleted in the finally
+          // below; the vault copy and the gallery are both untouched.
+          rethrow;
+        } catch (_) {
+          // Unresolvable path or decrypt failure: fall through to the
+          // in-memory fallback below, which is the pre-streaming behavior
+          // and reports its own honest failures. The vault copy is intact
+          // either way.
+        }
       }
+
+      if (!streamed) {
+        // Web and fallback path: the old whole-file behavior.
+        final bytes = await getVideo(id);
+        if (bytes == null) throw Exception('Video file not found in vault');
+        await tempFile.writeAsBytes(bytes);
+      }
+
+      // The decrypt finished, but a cancel pressed while it ran must still
+      // stop the restore BEFORE anything reaches the gallery: the decrypted
+      // work is discarded, the temp plaintext is wiped below, and the vault
+      // copy stays. (Past this point the file is committed.)
+      if (isCancelled != null && isCancelled()) {
+        throw const OperationCancelledException();
+      }
+
+      // Gallery write: no measurable percent — report the indeterminate
+      // phase so the UI switches from "45%" to "Saving to gallery…" instead
+      // of a bar that appears to have stalled.
+      onProgress?.call(null);
+
+      // photo_manager 3.9.0 (the pinned plugin) has saveVideo return a
+      // NON-NULLABLE Future<AssetEntity> and report a refusal by throwing,
+      // so "the gallery refused" is a catch branch — a null return is
+      // impossible and would have been dead code here.
+      try {
+        await PhotoManager.editor.saveVideo(
+          tempFile,
+          title: originalName,
+        );
+      } catch (_) {
+        // Gallery refused — nothing left the vault. Say so instead of
+        // surfacing a raw plugin error.
+        throw Exception('The gallery did not accept the video. The vault copy was kept.');
+      }
+      try {
+        await deleteVideo(id);
+      } catch (_) {
+        // Plaintext now exists in the gallery AND the vault. The user must
+        // know both copies exist — a silent duplicate defeats the vault.
+        throw Exception(
+            'Video was saved to the gallery, but the vault copy could not be deleted. Delete it from the vault manually.');
+      }
+    } finally {
+      AutoLock().endProtectedOperation();
+      // Secure-delete the transient plaintext (overwrite-before-delete),
+      // matching the AutoLock standard used for every other temp plaintext.
+      await AutoLock.secureDeleteFile(tempFile);
     }
   }
 

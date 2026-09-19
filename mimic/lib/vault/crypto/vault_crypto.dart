@@ -73,6 +73,10 @@ class VaultCrypto extends ChangeNotifier {
   /// unlock). Started lazily on the first range request; disposed on lock.
   RangeDecryptWorker? _rangeWorker;
 
+  /// In-flight spawn of [_rangeWorker], held so that concurrent callers share
+  /// one Isolate.spawn instead of each creating an orphaned isolate.
+  Future<RangeDecryptWorker?>? _rangeWorkerSpawn;
+
   static final Map<String, String> _webKeyStore = {};
 
   Future<void> _mutex = Future<void>.value();
@@ -305,6 +309,12 @@ class VaultCrypto extends ChangeNotifier {
     _lockEpoch++;
     final rangeWorker = _rangeWorker;
     _rangeWorker = null;
+    // A spawn may still be in flight (photo grid asked for every tile in the
+    // same frame). Clearing the token does not cancel the isolate creation —
+    // nothing can cancel an Isolate.spawn — but it stops tile readers from
+    // awaiting a worker the lock is about to dispose. _spawnRangeWorker
+    // re-checks the lock after starting, so the orphan is disposed too.
+    _rangeWorkerSpawn = null;
     if (rangeWorker != null) {
       rangeWorker.dispose();
     }
@@ -911,7 +921,18 @@ class VaultCrypto extends ChangeNotifier {
     );
   }
 
-  Future<void> decryptStreamSystem(File src, File dest) async {
+  /// Decrypts [src] into [dest], routing by media magic. [shouldAbort] (the
+  /// restore pill's cancel flag) is polled by the background worker roughly
+  /// every 100ms; when it returns true the worker is killed mid-file and this
+  /// future throws OperationCancelledException, so the caller reports the row
+  /// as cancelled rather than failed. The legacy branch (one in-memory pass
+  /// on the calling isolate) has no mid-flight abort point, so it only
+  /// refuses to start when a cancel is already pending.
+  Future<void> decryptStreamSystem(
+    File src,
+    File dest, {
+    bool Function()? shouldAbort,
+  }) async {
     int magicType = 0; // 0 = legacy, 1 = v1 (CBC), 2 = c1 (CTR, system key), 3 = c2 (CTR, master key)
     final raf = await src.open(mode: FileMode.read);
     try {
@@ -938,6 +959,7 @@ class VaultCrypto extends ChangeNotifier {
           key: Uint8List.fromList(_derivedKey!),
           srcPath: src.path,
           destPath: dest.path,
+          shouldAbort: shouldAbort,
         );
       } else if (magicType == 2) {
         // c1 (CTR, system key) decrypts in the background isolate too (H15):
@@ -950,6 +972,7 @@ class VaultCrypto extends ChangeNotifier {
           key: systemKey,
           srcPath: src.path,
           destPath: dest.path,
+          shouldAbort: shouldAbort,
         );
       } else if (magicType == 3) {
         if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
@@ -957,6 +980,7 @@ class VaultCrypto extends ChangeNotifier {
           key: Uint8List.fromList(_derivedKey!),
           srcPath: src.path,
           destPath: dest.path,
+          shouldAbort: shouldAbort,
         );
       }
     } finally {
@@ -964,6 +988,11 @@ class VaultCrypto extends ChangeNotifier {
     }
 
     if (magicType == 0) {
+      // The legacy blob decrypts in one in-memory pass with no abort point;
+      // refusing to start is the honest minimum for this legacy path.
+      if (shouldAbort != null && shouldAbort()) {
+        throw const OperationCancelledException();
+      }
       final length = await src.length();
       if (length < 32 || length % 16 != 0) {
         throw const CorruptedMediaFileException();
@@ -1294,6 +1323,57 @@ class VaultCrypto extends ChangeNotifier {
     );
   }
 
+  Future<RangeDecryptWorker?> _ensureRangeWorker() {
+    final existing = _rangeWorker;
+    if (existing != null && existing.isAlive) return Future.value(existing);
+    // One spawn at a time. The photo grid asks for every visible tile in the
+    // same frame, and before this memo the fast path above was false for all of
+    // them, so each caller spawned its own isolate and all but the last became
+    // orphaned isolates still holding a copy of the master key. Serialising the
+    // spawn means nine concurrent tile reads share one worker.
+    return _rangeWorkerSpawn ??=
+        _spawnRangeWorker().whenComplete(() => _rangeWorkerSpawn = null);
+  }
+
+  /// Spawns the long-lived range worker if this unlock has not created one
+  /// yet, and returns it. Extracted from [decryptRangeSystem] (2026-09-17) so
+  /// the photo path can reuse it: the worker used to be created lazily on the
+  /// FIRST video range request only, so a user who opened the photo vault
+  /// before any video had no worker and every photo tile would have decrypted
+  /// inline on the UI isolate.
+  ///
+  /// The system key is read here because c1/legacy blobs need it; a missing key
+  /// is not fatal (null is passed and those formats then report a locked state).
+  /// Returns null when the vault is locked or the spawn failed, and the caller
+  /// falls back to the inline implementation.
+  Future<RangeDecryptWorker?> _spawnRangeWorker() async {
+    if (!_isUnlocked || _derivedKey == null) return null;
+    Uint8List? sysKey;
+    try {
+      sysKey = await _getSystemKey();
+    } catch (_) {
+      sysKey = null;
+    }
+    final fresh = RangeDecryptWorker();
+    try {
+      await fresh.start(
+        masterKey: Uint8List.fromList(_derivedKey!),
+        systemKey: sysKey == null ? null : Uint8List.fromList(sysKey),
+      );
+    } catch (_) {
+      if (sysKey != null) sysKey.fillRange(0, sysKey.length, 0);
+      await fresh.dispose();
+      return null;
+    }
+    if (sysKey != null) sysKey.fillRange(0, sysKey.length, 0);
+    if (!_isUnlocked || _derivedKey == null) {
+      await fresh.dispose();
+      return null;
+    }
+    _rangeWorker = fresh;
+    return fresh;
+  }
+
   /// Serves one seekable CTR range. Prefers the long-lived worker isolate so
   /// the 256 KB AES pass never blocks the UI thread (M13 follow-up); falls
   /// back to the original inline implementation for non-CTR blobs (v1-CBC,
@@ -1301,27 +1381,7 @@ class VaultCrypto extends ChangeNotifier {
   Future<Uint8List> decryptRangeSystem(File src, int offset, int length) async {
     if (_isUnlocked && _derivedKey != null) {
       try {
-        var worker = _rangeWorker;
-        if (worker == null) {
-          Uint8List? sysKey;
-          try {
-            sysKey = await _getSystemKey();
-          } catch (_) {
-            sysKey = null;
-          }
-          final fresh = RangeDecryptWorker();
-          await fresh.start(
-            masterKey: Uint8List.fromList(_derivedKey!),
-            systemKey: sysKey == null ? null : Uint8List.fromList(sysKey),
-          );
-          if (sysKey != null) sysKey.fillRange(0, sysKey.length, 0);
-          if (!_isUnlocked || _derivedKey == null) {
-            await fresh.dispose();
-          } else {
-            _rangeWorker = fresh;
-            worker = fresh;
-          }
-        }
+        final worker = await _ensureRangeWorker();
         if (worker != null && worker.isAlive) {
           try {
             return await worker.decrypt(path: src.path, offset: offset, length: length);
@@ -1334,6 +1394,42 @@ class VaultCrypto extends ChangeNotifier {
       }
     }
     return _decryptRangeInline(src, offset, length);
+  }
+
+  /// Whole-file decrypt that prefers the long-lived worker isolate (added
+  /// 2026-09-17 for the photo vault).
+  ///
+  /// Why this exists: the photo grid draws every visible tile at once, and the
+  /// previous path (`readEncryptedFile` + `decryptSystem`) did the whole AES
+  /// pass for each tile on the UI isolate. Measured on the dev box: 588 ms for
+  /// one 3 MB photo and 2134 ms for a nine-tile grid, with zero event-loop
+  /// ticks — that is the entry "hang" reported on device. This method runs the
+  /// identical crypto inside the range worker, which is already spawned and
+  /// keyed at unlock.
+  ///
+  /// Contract: returns decrypted bytes, or null when the worker is
+  /// unavailable, the vault locked mid-read, or the blob is damaged. The
+  /// caller then uses the synchronous fallback, which reports the same failure
+  /// the same way, so no behavior is lost when the worker is down.
+  /// Deliberately swallows everything, including a missing system key and the
+  /// lock race: the pre-2026-09-17 callers caught every exception and returned
+  /// null, so a null here preserves their behavior exactly.
+  Future<Uint8List?> tryDecryptFileInWorker(File src) async {
+    if (!_isUnlocked || _derivedKey == null) return null;
+    try {
+      final worker = await _ensureRangeWorker();
+      if (worker == null || !worker.isAlive) return null;
+      try {
+        return await worker.decryptFile(path: src.path);
+      } catch (_) {
+        // Worker refused, blob damaged, key missing, or lock raced the read:
+        // hand back to the inline path so the caller sees exactly the null it
+        // saw before this method existed.
+        return null;
+      }
+    } catch (_) {
+      return null;
+    }
   }
 
   /// Original inline range decrypt (pre-M13-follow-up behavior). Kept as the

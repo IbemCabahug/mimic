@@ -35,6 +35,12 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   // delete-confirm wait -> Saved, so bulk imports never look dead — and a
   // single big photo cannot look like a frozen screen either.
   final ImportSession _importSession = ImportSession();
+
+  /// Restore gets the SAME live pill + sheet the import flow has (one session
+  /// per flow, like VideoVaultScreen): a batch restore is minutes of work, and
+  /// the user must be able to see — and stop — it.
+  final ImportSession _restoreSession = ImportSession();
+  Timer? _restoreLingerTimer;
   // Keeps a settled card on screen ~4s so the outcome is seen, then clears it.
   // Cancellable: dispose() cancels it and the next import cancels it, so a
   // stale timer can never wipe a new session's rows.
@@ -88,8 +94,10 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     // cancelled here: otherwise it survives the screen and can fire against a
     // disposed session (and flutter_test flags it as a pending timer).
     _lingerTimer?.cancel();
+    _restoreLingerTimer?.cancel();
     _bytesCache.clear();
     _bytesCacheSize = 0;
+    _restoreSession.dispose();
     _importSession.dispose();
     super.dispose();
   }
@@ -139,6 +147,11 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                             setState(() => dontShowAgain = val ?? false);
                           },
                           activeColor: VaultColors.accent,
+                          // M3's unchecked border is a low-contrast grey that
+                          // all but disappears on the white dialog — the
+                          // operator reported exactly that. 2px black reads
+                          // as a checkbox at a glance.
+                          side: const BorderSide(width: 2, color: Colors.black),
                         ),
                         const Expanded(
                           child: Text(
@@ -197,6 +210,9 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
         onFileSaved: (index) => savedRows.add(index),
         onFileFailed: (index, detail) => failedRows[index] = detail,
         onWaitingDeleteConfirm: () => _importSession.markWaitingDeleteConfirm(),
+        // The pill's ✕ / the sheet's Cancel set this flag; the service checks
+        // it before each NEXT file, so the in-flight photo always finishes.
+        isCancelled: () => _importSession.cancelRequested,
       );
       sessionActive = false;
       // Outcome rows: per-photo Saved / Saved-original-kept. originalsKept ==
@@ -210,15 +226,29 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
         }
       }
       failedRows.forEach((i, detail) => _importSession.markFailed(i, detail));
-      // Files the service never reached (the batch stopped on a failure) are
-      // still Queued or Encrypting. A row left in either state would keep
-      // isWorking true forever and the card would never clear.
+      // Files the service never reached (the batch stopped on a failure OR a
+      // requested cancel) are still Queued or Encrypting. A row left in either
+      // state would keep isWorking true forever and the card would never
+      // clear. A cancel is not a failure: its unreached rows read 'Cancelled'.
+      final wasCancelled = _importSession.cancelRequested;
       for (var i = 0; i < _importSession.total; i++) {
         final status = _importSession.files[i].status;
         if (status == ImportFileStatus.queued ||
             status == ImportFileStatus.encrypting) {
-          _importSession.markFailed(i, 'Not imported');
+          if (wasCancelled) {
+            _importSession.markCancelled(i);
+          } else {
+            _importSession.markFailed(i, 'Not imported');
+          }
         }
+      }
+      if (wasCancelled && mounted) {
+        // Unimported originals untouched + already-saved originals kept: the
+        // cancel skipped the batch-delete phase entirely, so the gallery is
+        // exactly as it was before for every file not imported.
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(
+                'Import cancelled — ${result.successfulIds.length} of ${result.totalAttempted} imported. Unimported originals are still in the gallery.')));
       }
       if (result.successfulIds.isNotEmpty) {
         await _loadPhotos();
@@ -388,7 +418,7 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
           style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
         ),
         content: const Text(
-          'Move this photo back to the device gallery? It will be removed from the vault.',
+          'This decrypts the photo and writes it back into the device gallery, where other apps with media access can see it. After the gallery confirms the save, the encrypted vault copy is removed.',
           style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
         ),
         actions: [
@@ -405,22 +435,72 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     );
 
     if (confirmed == true && mounted) {
+      await _runRestore([photo]);
+    }
+  }
+
+  /// Runs one or many photo restores through the restore activity session —
+  /// the same pill + sheet model the video vault uses, so a batch restore is
+  /// visible on the pill and stoppable. Cancellation stops the loop BEFORE
+  /// the next photo, and the in-flight photo is checked again after its
+  /// decrypt so a cancel still stops it before the gallery write; the vault
+  /// copy is only removed after the gallery confirms the save, so a cancel
+  /// can never lose a photo.
+  Future<void> _runRestore(List<PhotoMeta> photos) async {
+    final service = ref.read(fileVaultServiceProvider);
+    _restoreLingerTimer?.cancel();
+    _restoreSession
+        .beginRestore(photos.map((p) => p.originalName ?? 'photo').toList());
+    var restored = 0;
+    var failed = 0;
+    for (var i = 0; i < photos.length; i++) {
+      if (_restoreSession.cancelRequested) break;
+      final photo = photos[i];
+      _restoreSession.markRestoring(i, i + 1);
       try {
-        await ref.read(fileVaultServiceProvider).restorePhotoToGallery(photo.id);
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Photo restored to gallery successfully.')),
-          );
-          await _loadPhotos();
-        }
+        await service.restorePhotoToGallery(
+          photo.id,
+          isCancelled: () => _restoreSession.cancelRequested,
+        );
+        _restoreSession.markSaved(i);
+        restored++;
+      } on OperationCancelledException {
+        // Cancelled before the photo reached the gallery: nothing changed,
+        // so the row reads 'Cancelled' rather than pretending a failure.
+        // Also mark the batch cancelled, so the loop stops after this photo
+        // and the snackbar reports the truth instead of a bare count.
+        _restoreSession.requestCancel();
+        _restoreSession.markCancelled(i);
       } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Failed to restore photo: $e')),
-          );
-        }
+        _restoreSession.markFailed(
+            i, e.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''));
+        failed++;
       }
     }
+    // Rows the cancelled loop never reached are still 'restoring'; they are
+    // done now, and 'Cancelled' is their truth. Without this the session
+    // would never settle and the pill would never clear.
+    for (var i = 0; i < _restoreSession.total; i++) {
+      if (_restoreSession.files[i].status == ImportFileStatus.restoring) {
+        _restoreSession.markCancelled(i);
+      }
+    }
+    if (!mounted) return;
+    HapticFeedback.mediumImpact();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(_restoreSession.cancelRequested
+            ? 'Restore cancelled — $restored restored, the rest are still in the vault.'
+            : failed == 0
+                ? 'Restored $restored photo(s) to the gallery.'
+                : 'Restored $restored of ${photos.length}; $failed failed (their vault copies were kept).')));
+    // Let the outcome rows linger ~4s (same rule as the import card), then
+    // clear so the pill disappears. A new restore cancels this timer first.
+    if (_restoreSession.isActive && !_restoreSession.isWorking) {
+      _restoreLingerTimer = Timer(const Duration(seconds: 4), () {
+        if (!_restoreSession.isWorking) _restoreSession.clear();
+      });
+    }
+    await _loadPhotos();
   }
 
   Future<void> _deletePhoto(PhotoMeta photo) async {
@@ -654,6 +734,52 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     await _loadPhotos();
   }
 
+  /// Moves the selected photos back OUT of the vault into the device gallery.
+  /// The mirror of bulk import: every photo is decrypted, written to the
+  /// gallery and — only after the gallery confirms — removed from the vault.
+  /// A photo whose restore fails keeps its encrypted copy; the snackbar
+  /// reports both truths instead of a single optimistic number.
+  Future<void> _restoreSelection() async {
+    final count = _selection.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Restore $count photo(s) to the gallery?',
+            style: const TextStyle(
+                color: VaultColors.textPrimary,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'Inter')),
+        content: const Text(
+            'This decrypts the selected photos and writes them back into the device gallery, where other apps with media access can see them. After each save is confirmed, the vault copy is removed.',
+            style: TextStyle(
+                color: VaultColors.textSecondary, fontFamily: 'Inter')),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel',
+                  style: TextStyle(
+                      color: VaultColors.textTertiary,
+                      fontFamily: 'Inter'))),
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('Restore',
+                  style: TextStyle(
+                      color: VaultColors.accent, fontFamily: 'Inter'))),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    // Collect from the CURRENT selection before clearing, then hand the whole
+    // batch to the restore session (pill + sheet + cancel), like the video
+    // vault's bulk restore.
+    final chosen =
+        _visiblePhotos().where((p) => _selection.contains(p.id)).toList();
+    _clearSelection();
+    await _runRestore(chosen);
+  }
+
   void _toggleSelection(String id) {
     setState(() {
       if (!_selection.remove(id)) _selection.add(id);
@@ -675,6 +801,30 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
           loadBytes: _loadPhotoBytes,
           onDelete: (id) async {
             await ref.read(fileVaultServiceProvider).deletePhoto(id);
+            await _loadPhotos();
+          },
+          onRestore: (id) async {
+            // Captured BEFORE the await: a closure's context use after an
+            // async gap is not covered by the State's mounted check in the
+            // linter's eyes (use_build_context_synchronously), and grabbing
+            // the messenger synchronously removes the cross-gap use entirely.
+            final messenger = ScaffoldMessenger.of(context);
+            try {
+              await ref
+                  .read(fileVaultServiceProvider)
+                  .restorePhotoToGallery(id);
+              if (mounted) {
+                messenger.showSnackBar(const SnackBar(
+                    content: Text('Photo restored to gallery successfully.')));
+              }
+            } catch (e) {
+              if (mounted) {
+                messenger.showSnackBar(SnackBar(
+                    content: Text(e
+                        .toString()
+                        .replaceFirst(RegExp(r'^Exception:\s*'), ''))));
+              }
+            }
             await _loadPhotos();
           },
         ),
@@ -778,6 +928,12 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 ImportActivityButton(
+                  key: const ValueKey('restore_activity_button'),
+                  session: _restoreSession,
+                  onTap: () => showImportDetailsSheet(context, _restoreSession),
+                ),
+                const SizedBox(height: 12),
+                ImportActivityButton(
                   key: const ValueKey('import_activity_button'),
                   session: _importSession,
                   onTap: () => showImportDetailsSheet(context, _importSession),
@@ -854,6 +1010,15 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                                 icon: const Icon(Icons.drive_file_move_outlined,
                                     size: 20, color: VaultColors.accent),
                                 label: const Text('Move',
+                                    style: TextStyle(
+                                        fontFamily: 'Inter',
+                                        color: VaultColors.accent)),
+                              ),
+                              TextButton.icon(
+                                onPressed: _restoreSelection,
+                                icon: const Icon(Icons.unarchive,
+                                    size: 20, color: VaultColors.accent),
+                                label: const Text('Restore',
                                     style: TextStyle(
                                         fontFamily: 'Inter',
                                         color: VaultColors.accent)),

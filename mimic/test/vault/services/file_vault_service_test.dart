@@ -8,6 +8,17 @@ import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/crypto/keystore_service.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:path/path.dart' as p;
+
+/// Forces deletePhoto to fail so the duplicate-reporting branch of
+/// restorePhotoToGallery runs against a vault copy that genuinely survives.
+class _NoDeleteFileVaultService extends FileVaultService {
+  _NoDeleteFileVaultService(super.platformService, super.crypto);
+
+  @override
+  Future<void> deletePhoto(String id) async =>
+      throw Exception('simulated vault delete failure');
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -284,6 +295,127 @@ void main() {
       expect(separateService.openCount, equals(0));
       await separateService.getAllPhotos();
       expect(separateService.openCount, equals(1));
+    });
+
+    group('restorePhotoToGallery honesty contract', () {
+      // The gallery write goes through photo_manager's channel — the same
+      // seam the batch-import test above already uses for 'deleteWithIds'.
+      // A success reply must carry the keys convertMapToAsset requires
+      // (id/type/width/height); a refusal is a throw, because the pinned
+      // plugin's saveImage returns a non-nullable Future<AssetEntity>.
+      void mockSaveImage({required bool succeeds}) {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+          const MethodChannel('com.fluttercandies/photo_manager'),
+          (MethodCall call) async {
+            if (call.method == 'saveImage') {
+              if (!succeeds) {
+                throw PlatformException(code: 'photo_manager', message: 'denied');
+              }
+              return <String, dynamic>{'id': '1', 'type': 1, 'width': 1, 'height': 1};
+            }
+            return null;
+          },
+        );
+        addTearDown(() => TestDefaultBinaryMessengerBinding
+            .instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+                const MethodChannel('com.fluttercandies/photo_manager'), null));
+      }
+
+      test('a confirmed gallery save removes the vault copy', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('1234');
+        final service = FileVaultService(platformService, crypto);
+        final id = await service.savePhoto(
+            Uint8List.fromList([9, 8, 7, 6, 5]),
+            'image/jpeg',
+            originalName: 'trip.jpg');
+        mockSaveImage(succeeds: true);
+
+        await service.restorePhotoToGallery(id);
+
+        expect(await service.getPhoto(id), isNull,
+            reason: 'the vault copy is deleted only after the save succeeded');
+      });
+
+      test('a gallery refusal keeps the vault copy and says so', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('1234');
+        final service = FileVaultService(platformService, crypto);
+        final bytes = Uint8List.fromList([1, 2, 3, 4, 5, 6, 7, 8]);
+        final id = await service.savePhoto(bytes, 'image/jpeg',
+            originalName: 'denied.jpg');
+        mockSaveImage(succeeds: false);
+
+        await expectLater(
+          service.restorePhotoToGallery(id),
+          throwsA(predicate((Object e) =>
+              e.toString().contains('The gallery did not accept the photo'))),
+        );
+        expect(await service.getPhoto(id), equals(bytes),
+            reason: 'a refused save must never delete the vault copy');
+      });
+
+      test('a vault delete failing after a successful save reports the duplicate', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('1234');
+        final service = _NoDeleteFileVaultService(platformService, crypto);
+        final id = await service.savePhoto(Uint8List.fromList([4, 5, 6]),
+            'image/jpeg',
+            originalName: 'stuck.jpg');
+        mockSaveImage(succeeds: true);
+
+        await expectLater(
+          service.restorePhotoToGallery(id),
+          throwsA(predicate((Object e) =>
+              e.toString().contains('vault copy could not be deleted'))),
+        );
+        expect(await service.getPhoto(id), isNotNull,
+            reason:
+                'the message says both copies exist, so the vault copy must still be there');
+      });
+
+      test('a restore of a photo whose blob is gone reports the missing copy', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('1234');
+        final service = FileVaultService(platformService, crypto);
+
+        await expectLater(
+          service.restorePhotoToGallery('no_such_photo'),
+          throwsA(predicate((Object e) =>
+              e.toString().contains('Photo file not found in vault'))),
+        );
+      });
+
+      test('a blob with no metadata row is reported honestly and the blob survives', () async {
+        final platformService = AndroidPlatformService();
+        final crypto = VaultCrypto(platformService, FakeKeystoreService());
+        await crypto.initialize('1234');
+        final service = FileVaultService(platformService, crypto);
+        final bytes = Uint8List.fromList([7, 7, 7, 7]);
+        final id = await service.savePhoto(bytes, 'image/jpeg',
+            originalName: 'orphan.jpg');
+
+        // Orphan the blob: remove only the metadata row, through a second ffi
+        // connection to the same vault_files.db the service uses.
+        final raw = await databaseFactory
+            .openDatabase(p.join(dbDirPath, 'vault_files.db'));
+        await raw.delete('photos', where: 'id = ?', whereArgs: [id]);
+        await raw.close();
+
+        await expectLater(
+          service.restorePhotoToGallery(id),
+          throwsA(predicate((Object e) =>
+              e.toString().contains('Photo metadata not found in vault'))),
+        );
+        expect(await service.getPhoto(id), equals(bytes),
+            reason: 'nothing was written, so the vault copy must survive');
+      });
     });
   });
 }

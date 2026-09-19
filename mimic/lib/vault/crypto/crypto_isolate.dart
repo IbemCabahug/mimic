@@ -694,12 +694,27 @@ Future<void> cryptoIsolateEncryptFileCtr({
 /// system key) and c2 (MVKEYc2\0, AES-CTR under the master DEK) formats;
 /// legacy headerless blobs are rejected as unsupported. Must not be used for
 /// playback until the classifier is ported.
+/// [shouldAbort] makes a user cancel genuinely stop a restore mid-file:
+/// while the worker decrypts, it is polled every [abortPollInterval]; a
+/// `true` return KILLS the worker (a raw Isolate.spawn, so killable) and
+/// this future completes with OperationCancelledException. Aborting is safe
+/// by the restore order — the vault copy is removed only after a confirmed
+/// gallery save, and the caller secure-deletes the partial destPath
+/// plaintext. A cancel pending before the call returns immediately without
+/// spawning any worker.
 Future<void> cryptoIsolateDecryptFile({
   required Uint8List key,
   required String srcPath,
   required String destPath,
   SendPort? progressPort,
+  bool Function()? shouldAbort,
+  Duration abortPollInterval = const Duration(milliseconds: 100),
 }) async {
+  // A cancel that arrived before this call starts must not spawn (or pay
+  // the key-copy setup of) a worker at all.
+  if (shouldAbort != null && shouldAbort()) {
+    throw const OperationCancelledException();
+  }
   final keyForWorker = Uint8List.fromList(key);
   final replyPort = ReceivePort();
   final exitPort = ReceivePort();
@@ -753,7 +768,29 @@ Future<void> cryptoIsolateDecryptFile({
       }
     });
 
-    final response = await completer.future;
+    // The user-cancel hook: polled while the worker decrypts. On a cancel
+    // the typed error is completed FIRST (the kill makes the exit port fire,
+    // and the exit listener would otherwise report a bogus premature-exit
+    // failure); the worker is then killed mid-decrypt. The finally around
+    // the await stops the poll on every path — a surviving periodic timer
+    // would keep the event loop (and the test suite) alive forever.
+    final abortPoll = shouldAbort == null
+        ? null
+        : Timer.periodic(abortPollInterval, (_) {
+            if (completer.isCompleted || isolate == null) return;
+            if (shouldAbort()) {
+              completer.completeError(const OperationCancelledException());
+              // The guard above returned when isolate was null, so this
+              // dereference is provably safe (the analyzer agrees).
+              isolate.kill(priority: Isolate.immediate);
+            }
+          });
+    dynamic response;
+    try {
+      response = await completer.future;
+    } finally {
+      abortPoll?.cancel();
+    }
     if (response is Map && response['errorKind'] != null) {
       final kind = response['errorKind'] as String;
       final message = response['message'] as String? ?? 'Crypto isolate operation failed';

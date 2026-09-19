@@ -192,7 +192,38 @@ class FileVaultService {
     }
   }
 
-  Future<Uint8List?> getPhoto(String id) async {
+  /// Reads and decrypts one stored blob, off the UI isolate when possible.
+  ///
+  /// 2026-09-17: the photo grid draws every visible tile at once, so the old
+  /// `readEncryptedFile` + `decryptSystem` pair ran one whole-file AES pass per
+  /// tile on the UI isolate, all in the same frame window. Measured on the dev
+  /// box: 588 ms for one 3 MB photo, 2134 ms for a nine-tile grid, zero
+  /// event-loop ticks — the "hang" reported when re-entering the photo vault.
+  /// The worker isolate that already serves video ranges now does this AES pass
+  /// too, so the UI keeps painting while tiles fill in.
+  ///
+  /// The worker path only exists for file-backed blobs (native platforms), is
+  /// only tried while the vault is unlocked, and any failure falls through to
+  /// the exact previous code path, so behavior and error handling are unchanged
+  /// on web and whenever the worker cannot start. Note the deliberate absence of
+  /// a `SystemKeyMissingException` clause: the old body caught every exception
+  /// and returned null, and `photo_vault_screen.dart:70`'s snackbar was never
+  /// reachable from here, so making it reachable now would be an unrequested
+  /// behavior change on top of a performance fix.
+  Future<Uint8List?> _readDecryptedBlob(String id) async {
+    if (!kIsWeb) {
+      try {
+        final file = await _platformService.resolveVaultFile(id);
+        if (await file.exists()) {
+          final fromWorker = await _crypto.tryDecryptFileInWorker(file);
+          if (fromWorker != null) return fromWorker;
+        }
+      } catch (_) {
+        // Unresolvable path or worker failure: fall through to the in-memory
+        // path below, which is the pre-2026-09-17 behavior.
+      }
+    }
+
     final encrypted = await _platformService.readEncryptedFile(id);
     if (encrypted == null) return null;
     try {
@@ -200,6 +231,10 @@ class FileVaultService {
     } catch (e) {
       return null;
     }
+  }
+
+  Future<Uint8List?> getPhoto(String id) async {
+    return _readDecryptedBlob(id);
   }
 
   Future<void> deletePhoto(String id) async {
@@ -287,7 +322,7 @@ class FileVaultService {
         where: 'id = ?', whereArgs: [id]);
   }
 
-  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptImage(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed}) async {
+  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptImage(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed, bool Function()? isCancelled}) async {
     final List<AssetEntity>? assets = await AssetPicker.pickAssets(
       context,
       pickerConfig: const AssetPickerConfig(
@@ -311,6 +346,14 @@ class FileVaultService {
     Object? failureError;
 
     for (var i = 0; i < assets.length; i++) {
+      // Cancellation only stops the NEXT file: the one in flight always
+      // finishes, so the vault never holds a partial entry. Unreached files
+      // stay queued; the screen's finalization sweep labels them 'Cancelled'.
+      // The batch-delete phase below is naturally skipped on cancel, because
+      // savedIds.length no longer equals the batch size — cancelling never
+      // pops the OS delete dialog, and saved originals stay on the device
+      // (rows honestly read 'Saved, original kept').
+      if (isCancelled != null && isCancelled()) break;
       final asset = assets[i];
       try {
         try {
@@ -410,19 +453,59 @@ class FileVaultService {
     }
   }
 
-  Future<void> restorePhotoToGallery(String id) async {
+  /// Restores a photo: writes the decrypted bytes back into the system
+  /// gallery, and ONLY after the gallery confirms the write removes the vault
+  /// copy. Order matters — deleting before a confirmed write is how photos
+  /// get lost; the old code deleted unconditionally after saveImage returned,
+  /// whether or not the gallery had actually accepted the file.
+  /// [isCancelled] is the restore pill's cancel flag. The photo decrypt is
+  /// one in-memory pass with no mid-flight abort point, so the flag is
+  /// checked before starting and again after the bytes are loaded — a cancel
+  /// pressed during the load still stops before anything reaches the gallery.
+  Future<void> restorePhotoToGallery(
+    String id, {
+    bool Function()? isCancelled,
+  }) async {
+    if (isCancelled != null && isCancelled()) {
+      throw const OperationCancelledException();
+    }
     final bytes = await getPhoto(id);
     if (bytes == null) throw Exception('Photo file not found in vault');
+    if (isCancelled != null && isCancelled()) {
+      throw const OperationCancelledException();
+    }
 
     final photos = await getAllPhotos();
-    final photo = photos.firstWhere((p) => p.id == id);
+    final photo = photos.firstWhere(
+      (p) => p.id == id,
+      orElse: () => throw Exception('Photo metadata not found in vault'),
+    );
     final originalName = photo.originalName ?? '$id.jpg';
 
-    await PhotoManager.editor.saveImage(
-      bytes,
-      filename: originalName,
-    );
-    await deletePhoto(id);
+    // photo_manager 3.9.0 (the pinned plugin) has saveImage return a
+    // NON-NULLABLE Future<AssetEntity> and report a refusal by throwing
+    // (editor.dart:85 -> plugin.dart:397 in the pub cache), so "the gallery
+    // refused" is the catch branch — a null return is impossible and would
+    // have been dead code here.
+    try {
+      await PhotoManager.editor.saveImage(
+        bytes,
+        filename: originalName,
+      );
+    } catch (_) {
+      // The gallery refused. The vault copy is untouched — say so instead of
+      // pretending nothing happened.
+      throw Exception('The gallery did not accept the photo. The vault copy was kept.');
+    }
+
+    try {
+      await deletePhoto(id);
+    } catch (_) {
+      // The plaintext now exists in the gallery AND the vault. The user must
+      // know both copies exist — a silent duplicate defeats the vault.
+      throw Exception(
+          'Photo was saved to the gallery, but the vault copy could not be deleted. Delete it from the vault manually.');
+    }
   }
 
   Future<void> restorePhotos(List<dynamic> decodedPhotos) async {
