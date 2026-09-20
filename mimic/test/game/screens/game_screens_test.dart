@@ -9,6 +9,9 @@
 // 5. ResultsScreen
 // 6. GameStateNotifier
 
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -19,11 +22,16 @@ import 'package:mimic/game/screens/pack_select_screen.dart';
 import 'package:mimic/game/screens/player_setup_screen.dart';
 import 'package:mimic/game/screens/word_reveal_screen.dart';
 import 'package:mimic/game/screens/voting_screen.dart';
+import 'package:mimic/game/screens/final_standings_screen.dart';
 import 'package:mimic/game/screens/results_screen.dart';
 import 'package:mimic/game/state/game_state.dart';
 import 'package:mimic/vault/trigger/trigger_detector.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/game/data/word_packs.dart';
+import 'package:mimic/core/services/platform_service.dart';
+import 'package:mimic/multiplayer/network/network_service.dart';
+import 'package:mimic/vault/services/pro_status_service.dart';
+import 'package:mimic/vault/services/quick_entry_service.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helper / Utility Functions
@@ -42,6 +50,7 @@ Widget buildGameTestApp({
         '/mode-select': (_) => const ModeSelectScreen(),
         '/pack-select': (_) => const PackSelectScreen(),
         '/player-setup': (_) => const PlayerSetupScreen(),
+        '/final-standings': (_) => const FinalStandingsScreen(),
         '/word-reveal': (_) => const WordRevealScreen(),
         '/discussion': (_) => const DiscussionScreen(),
         '/voting': (_) => const VotingScreen(),
@@ -56,6 +65,104 @@ Widget buildGameTestApp({
 Future<void> pumpScreen(WidgetTester tester) async {
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 300));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// F27 helpers — in-memory secure storage + network stub for the Pro
+// quick-entry long-press matrix (no device, no plugin channels).
+// ═══════════════════════════════════════════════════════════════════════════
+
+class _F27FakePlatform implements PlatformService {
+  final Map<String, String> store = {};
+
+  @override
+  bool isWeb() => false;
+
+  @override
+  Future<String?> secureRead(String key) async => store[key];
+
+  @override
+  Future<Map<String, String>> secureReadAll() async => Map.from(store);
+
+  @override
+  Future<void> secureWrite(String key, String value) async {
+    store[key] = value;
+  }
+
+  @override
+  Future<void> secureDelete(String key) async {
+    store.remove(key);
+  }
+
+  @override
+  Future<void> saveEncryptedFile(String path, Uint8List data) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<Uint8List?> readEncryptedFile(String path) async =>
+      throw UnimplementedError();
+
+  @override
+  Future<void> deleteFile(String path) async => throw UnimplementedError();
+
+  @override
+  Future<File> resolveVaultFile(String path) async =>
+      throw UnimplementedError();
+}
+
+/// NetworkService stub whose only job is to answer [role] — the one thing
+/// [isMultiplayerSessionActive] consults on the entry path.
+class _StubNetworkService extends NetworkService {
+  _StubNetworkService(NetworkRole role) : _stubRole = role;
+  final NetworkRole _stubRole;
+
+  @override
+  NetworkRole get role => _stubRole;
+}
+
+/// Pro install, preference ON, vault exists, not concealed — the fully
+/// allowed environment. Individual tests break one condition at a time.
+_F27FakePlatform _readyF27Platform() {
+  final fake = _F27FakePlatform();
+  fake.store[proEntitlementKey] = proEntitlementValue;
+  fake.store[quickEntryEnabledKey] = quickEntryEnabledValue;
+  fake.store[quickEntryVaultSaltKey] = 'a-salt';
+  fake.store[quickEntryVaultConcealedKey] = 'false';
+  return fake;
+}
+
+ProviderContainer _f27Container(
+  _F27FakePlatform fake, {
+  NetworkRole role = NetworkRole.none,
+  // true pins the billing-era gate (the entitlement key decides); false
+  // exercises the pre-billing launch window where isPro() answers true for
+  // every install and no entitlement is needed.
+  bool billingEnforced = true,
+}) {
+  return ProviderContainer(overrides: [
+    platformServiceProvider.overrideWithValue(fake),
+    if (billingEnforced)
+      proStatusServiceProvider
+          .overrideWith((ref) => ProStatusService(fake, billingEnforced: true)),
+    if (role != NetworkRole.none)
+      networkServiceProvider.overrideWith((ref) => _StubNetworkService(role)),
+  ]);
+}
+
+/// Pump HomeScreen, long-press the MIMIC title, then pump enough frames
+/// for the async gate to finish and any navigation to render.
+Future<void> pumpHomeAndLongPress(
+  WidgetTester tester,
+  ProviderContainer container,
+) async {
+  await tester.pumpWidget(
+    buildGameTestApp(home: const HomeScreen(), container: container),
+  );
+  await pumpScreen(tester);
+  await tester.longPress(find.text('MIMIC'));
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 300));
+  await tester.pump();
 }
 
 /// Helper to build a fresh ResultsScreen with seeded state.
@@ -115,6 +222,134 @@ void main() {
       await pumpScreen(tester);
 
       expect(find.byType(ModeSelectScreen), findsOneWidget);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // F27 · Pro quick-entry long-press on the MIMIC title
+  // ═══════════════════════════════════════════════════════════════════════
+  group('F27 · quick-entry long-press', () {
+    testWidgets('free user: long-press stays an ordinary game tap',
+        (WidgetTester tester) async {
+      // Preference left ON with a vault present — ONLY the entitlement is
+      // missing, and that alone must deny (disguise preservation: no
+      // navigation, no error, nothing to notice).
+      final fake = _readyF27Platform()
+        ..store.remove(proEntitlementKey);
+      await pumpHomeAndLongPress(tester, _f27Container(fake));
+
+      expect(find.text('VAULT_PIN_SCREEN'), findsNothing);
+      expect(find.text('MIMIC'), findsOneWidget);
+    });
+
+    testWidgets('pro but preference off: nothing happens (default OFF holds)',
+        (WidgetTester tester) async {
+      final fake = _readyF27Platform()
+        ..store.remove(quickEntryEnabledKey);
+      await pumpHomeAndLongPress(tester, _f27Container(fake));
+
+      expect(find.text('VAULT_PIN_SCREEN'), findsNothing);
+    });
+
+    testWidgets('pro + on but no vault exists: nothing happens',
+        (WidgetTester tester) async {
+      final fake = _readyF27Platform()
+        ..store.remove(quickEntryVaultSaltKey);
+      await pumpHomeAndLongPress(tester, _f27Container(fake));
+
+      expect(find.text('VAULT_PIN_SCREEN'), findsNothing);
+    });
+
+    testWidgets('pro + on but the vault is concealed: nothing happens',
+        (WidgetTester tester) async {
+      final fake = _readyF27Platform()
+        ..store[quickEntryVaultConcealedKey] = quickEntryVaultConcealedValue;
+      await pumpHomeAndLongPress(tester, _f27Container(fake));
+
+      expect(find.text('VAULT_PIN_SCREEN'), findsNothing);
+    });
+
+    testWidgets('everything set: long-press lands on the PIN screen, which still does the authentication',
+        (WidgetTester tester) async {
+      await pumpHomeAndLongPress(tester, _f27Container(_readyF27Platform()));
+
+      expect(find.text('VAULT_PIN_SCREEN'), findsOneWidget);
+      // Home stays underneath (pushNamed, not replacement).
+      expect(find.text('MIMIC'), findsOneWidget);
+    });
+
+    testWidgets('multiplayer session active: denied even when everything else is on',
+        (WidgetTester tester) async {
+      await pumpHomeAndLongPress(
+        tester,
+        _f27Container(_readyF27Platform(), role: NetworkRole.host),
+      );
+
+      expect(find.text('VAULT_PIN_SCREEN'), findsNothing);
+    });
+
+    testWidgets('PRE-BILLING WINDOW: no entitlement, everything else on — the long-press still opens the PIN screen (kBillingEnforced == false)',
+        (WidgetTester tester) async {
+      // The launch window reads Pro for every install before storage is
+      // consulted, so early downloaders get the quick entry without any
+      // Play entitlement. The other checks (preference, vault, conceal)
+      // keep doing their job.
+      final fake = _readyF27Platform()
+        ..store.remove(proEntitlementKey);
+      await pumpHomeAndLongPress(
+        tester,
+        _f27Container(fake, billingEnforced: false),
+      );
+
+      expect(find.text('VAULT_PIN_SCREEN'), findsOneWidget);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 2a · PLAY AGAIN roster keeps a back button (F31)
+  // ═══════════════════════════════════════════════════════════════════════
+  // Owner report: after a finished game (Survival in particular), PLAY AGAIN
+  // wiped the whole route stack, so Roster Setup was the ONLY route and the
+  // app bar showed no back arrow — the player was stranded. The fix keeps the
+  // home route ('/') beneath the roster: stale game screens are still
+  // removed, but back (arrow, system back, swipe) now returns home.
+  group('2a · PLAY AGAIN roster back button', () {
+    testWidgets('PLAY AGAIN leaves home beneath the roster and the back arrow works',
+        (WidgetTester tester) async {
+      final container = ProviderContainer();
+      await tester.pumpWidget(buildGameTestApp(
+        home: const Scaffold(body: Text('GAME_HOME')),
+        container: container,
+      ));
+      await pumpScreen(tester);
+
+      // End of a game: final standings sits on top of home.
+      Navigator.of(tester.element(find.text('GAME_HOME')))
+          .pushNamed('/final-standings');
+      await pumpScreen(tester);
+
+      await tester.tap(find.text('PLAY AGAIN'));
+      await pumpScreen(tester);
+
+      // Roster is up — and it is NOT a stranded root: the back arrow exists
+      // because home is still beneath it.
+      expect(find.text('ROSTER SETUP'), findsOneWidget);
+      expect(find.byType(BackButton), findsOneWidget,
+          reason: 'the PLAY AGAIN roster must keep a way back to home');
+
+      await tester.tap(find.byType(BackButton));
+      // Two pumps > the 300ms pop transition, so the roster route is really
+      // gone from the stack before the assertion runs.
+      await tester.pump(const Duration(milliseconds: 350));
+      await tester.pump(const Duration(milliseconds: 350));
+
+      expect(find.text('GAME_HOME'), findsOneWidget,
+          reason: 'back must land on the game home screen');
+      expect(find.text('ROSTER SETUP'), findsNothing);
+
+      // The stale game screens were still cleared by PLAY AGAIN: nothing but
+      // home and the roster ever existed above home.
+      expect(find.text('FINAL STANDINGS'), findsNothing);
     });
   });
 
@@ -238,6 +473,196 @@ void main() {
       await pumpScreen(tester);
 
       expect(find.text('DISCUSSION'), findsOneWidget);
+    });
+
+    testWidgets('Word context: the info button opens the describing-angles sheet and pauses the auto-hide',
+        (WidgetTester tester) async {
+      final container = ProviderContainer();
+      final notifier = container.read(gameStateProvider.notifier);
+
+      notifier.addPlayer('Alice', 0xFF7F77DD);
+
+      final state = container.read(gameStateProvider);
+      notifier.state = state.copyWith(
+        currentWordPair: const WordPair(
+          realWord: 'Cemetery',
+          mimicWord: 'Garden',
+          realWordContext:
+              'Rows of carved stone markers, mourners leaving flowers.',
+          mimicWordContext: 'Tended beds of blooms and a watering can.',
+        ),
+      );
+
+      await tester.pumpWidget(
+          buildGameTestApp(home: const WordRevealScreen(), container: container));
+      await pumpScreen(tester);
+
+      // Alice is not the Mimic — reveal shows her real word and the button.
+      await tester.tap(find.byType(GestureDetector).first);
+      await pumpScreen(tester);
+
+      expect(find.text('REMEMBER YOUR WORD'), findsOneWidget);
+      expect(find.text('NEED DESCRIBING ANGLES?'), findsOneWidget);
+
+      // The sheet carries HER word's context (the real side).
+      // Fixed pumps, never pumpAndSettle: this screen's horror widgets
+      // animate forever, so settling would time out.
+      await tester.tap(find.text('NEED DESCRIBING ANGLES?'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('DESCRIBING ANGLES'), findsOneWidget);
+      expect(find.text('Rows of carved stone markers, mourners leaving flowers.'),
+          findsOneWidget);
+
+      // The 3-second auto-hide is paused while the sheet is open: after
+      // four seconds the screen is still in the revealed state.
+      await tester.pump(const Duration(seconds: 4));
+      expect(find.widgetWithText(ElevatedButton, 'PROCEED'), findsNothing);
+      expect(find.text('DESCRIBING ANGLES'), findsOneWidget);
+
+      // Closing the sheet starts a fresh 3-second window. Any dismissal
+      // path (the GOT IT button, a barrier tap, a swipe) restarts the
+      // countdown, so five seconds of pumping covers whichever frame
+      // scheduled it.
+      await tester.tap(find.widgetWithText(ElevatedButton, 'GOT IT'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump();
+      expect(find.text('DESCRIBING ANGLES'), findsNothing);
+
+      await tester.pump(const Duration(seconds: 5));
+      await tester.pump(const Duration(milliseconds: 100));
+      // Alice is the only player, so she is the last player — the pass
+      // screen offers START DISCUSSION rather than PROCEED.
+      expect(find.text('PASS THE DEVICE'), findsOneWidget);
+      expect(find.widgetWithText(ElevatedButton, 'START DISCUSSION'),
+          findsOneWidget);
+    });
+
+    testWidgets('Word context: a Mimic sees their own word context, never the real side',
+        (WidgetTester tester) async {
+      final container = ProviderContainer();
+      final notifier = container.read(gameStateProvider.notifier);
+
+      notifier.addPlayer('Alice', 0xFF7F77DD);
+
+      final state = container.read(gameStateProvider);
+      final aliceId = state.players[0].id;
+      notifier.state = state.copyWith(
+        mimicIds: [aliceId],
+        currentWordPair: const WordPair(
+          realWord: 'Cemetery',
+          mimicWord: 'Garden',
+          realWordContext:
+              'Rows of carved stone markers, mourners leaving flowers.',
+          mimicWordContext: 'Tended beds of blooms and a watering can.',
+        ),
+      );
+
+      await tester.pumpWidget(
+          buildGameTestApp(home: const WordRevealScreen(), container: container));
+      await pumpScreen(tester);
+
+      // Alice is the Mimic — the sheet must describe HER word, not the real one.
+      await tester.tap(find.byType(GestureDetector).first);
+      await pumpScreen(tester);
+      expect(find.text('YOU ARE THE MIMIC'), findsOneWidget);
+
+      await tester.tap(find.text('NEED DESCRIBING ANGLES?'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Tended beds of blooms and a watering can.'), findsOneWidget);
+      expect(find.text('Rows of carved stone markers, mourners leaving flowers.'),
+          findsNothing);
+    });
+
+    testWidgets('Word context: a pair without authored context renders no button at all',
+        (WidgetTester tester) async {
+      final container = ProviderContainer();
+      final notifier = container.read(gameStateProvider.notifier);
+
+      notifier.addPlayer('Alice', 0xFF7F77DD);
+
+      // No contexts (the shape of unauthored languages and pairs synced
+      // from older peers) — the button must be absent entirely.
+      final state = container.read(gameStateProvider);
+      notifier.state = state.copyWith(
+        currentWordPair: const WordPair(realWord: 'Guitar', mimicWord: 'Piano'),
+      );
+
+      await tester.pumpWidget(
+          buildGameTestApp(home: const WordRevealScreen(), container: container));
+      await pumpScreen(tester);
+
+      await tester.tap(find.byType(GestureDetector).first);
+      await pumpScreen(tester);
+
+      expect(find.text('REMEMBER YOUR WORD'), findsOneWidget);
+      expect(find.text('NEED DESCRIBING ANGLES?'), findsNothing);
+    });
+
+    testWidgets('Word context: a Pro install sees the DETAILED angles',
+        (WidgetTester tester) async {
+      final container = ProviderContainer(overrides: [
+        isProProvider.overrideWith((ref) => true),
+      ]);
+      final notifier = container.read(gameStateProvider.notifier);
+      notifier.addPlayer('Alice', 0xFF7F77DD);
+
+      final state = container.read(gameStateProvider);
+      notifier.state = state.copyWith(
+        currentWordPair: const WordPair(
+          realWord: 'Cemetery',
+          mimicWord: 'Garden',
+          realWordContext: 'General angles: mood, quiet, respect.',
+          realWordProContext: 'Detailed angles: angels, slabs, marble, lilies.',
+        ),
+      );
+
+      await tester.pumpWidget(
+          buildGameTestApp(home: const WordRevealScreen(), container: container));
+      await pumpScreen(tester);
+      await tester.tap(find.byType(GestureDetector).first);
+      await pumpScreen(tester);
+
+      await tester.tap(find.text('NEED DESCRIBING ANGLES?'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('Detailed angles: angels, slabs, marble, lilies.'),
+          findsOneWidget);
+      expect(find.text('General angles: mood, quiet, respect.'), findsNothing);
+    });
+
+    testWidgets('Word context: a free install sees the GENERALIZED angles',
+        (WidgetTester tester) async {
+      final container = ProviderContainer(overrides: [
+        isProProvider.overrideWith((ref) => false),
+      ]);
+      final notifier = container.read(gameStateProvider.notifier);
+      notifier.addPlayer('Alice', 0xFF7F77DD);
+
+      final state = container.read(gameStateProvider);
+      notifier.state = state.copyWith(
+        currentWordPair: const WordPair(
+          realWord: 'Cemetery',
+          mimicWord: 'Garden',
+          realWordContext: 'General angles: mood, quiet, respect.',
+          realWordProContext: 'Detailed angles: angels, slabs, marble, lilies.',
+        ),
+      );
+
+      await tester.pumpWidget(
+          buildGameTestApp(home: const WordRevealScreen(), container: container));
+      await pumpScreen(tester);
+      await tester.tap(find.byType(GestureDetector).first);
+      await pumpScreen(tester);
+
+      await tester.tap(find.text('NEED DESCRIBING ANGLES?'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(find.text('General angles: mood, quiet, respect.'), findsOneWidget);
+      expect(find.text('Detailed angles: angels, slabs, marble, lilies.'),
+          findsNothing);
     });
   });
 

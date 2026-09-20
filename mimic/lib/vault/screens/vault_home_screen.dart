@@ -10,6 +10,7 @@ import '../services/notes_service.dart';
 import '../services/video_vault_service.dart';
 import '../services/document_vault_service.dart';
 import '../services/backup_reminder_service.dart';
+import '../services/onboarding_service.dart';
 import '../widgets/vault_scaffold.dart';
 import '../security/shake_wipe_service.dart';
 import '../widgets/blood_splatter_overlay.dart';
@@ -44,12 +45,30 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
     )..forward();
     _loadCounts();
     _setupShakeListener();
+    _maybeShowManual();
 
     _reminderTimer = Timer(const Duration(seconds: 1), () {
       if (mounted) {
         BackupReminderService.checkAndShowReminder(context);
       }
     });
+  }
+
+  /// F30: the field manual introduces itself exactly once — on the first
+  /// arrival at the vault home after a successful unlock. A read failure is
+  /// treated as "already seen" so a storage hiccup can never pop a screen at
+  /// the owner, and the check runs only while the vault is actually unlocked
+  /// (a locked home is already redirecting to /vault-pin).
+  Future<void> _maybeShowManual() async {
+    try {
+      final seen = await ref.read(onboardingServiceProvider).isVaultManualSeen();
+      if (seen || !mounted) return;
+      if (!ref.read(vaultCryptoProvider).isUnlocked) return;
+      if (!Navigator.of(context).canPop()) return;
+      await Navigator.of(context).pushNamed('/vault-manual');
+    } catch (_) {
+      // Never surface a first-run failure to the owner.
+    }
   }
 
   Future<void> _setupShakeListener() async {
@@ -128,6 +147,13 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
       title: null,
       showBackButton: false,
       actions: [
+        // F30: the field manual stays one tap away forever — the first-run
+        // walkthrough is never the only chance to read it.
+        IconButton(
+          icon: const Icon(Icons.help_outline, color: VaultColors.accent),
+          onPressed: () => Navigator.of(context).pushNamed('/vault-manual'),
+          tooltip: 'Field Manual',
+        ),
         IconButton(
           icon: const Icon(Icons.settings_outlined, color: VaultColors.accent),
           onPressed: () async {

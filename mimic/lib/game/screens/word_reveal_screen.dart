@@ -9,6 +9,7 @@ import 'package:mimic/core/animations/horror_animations.dart';
 import 'package:mimic/game/state/game_state.dart';
 import 'package:mimic/game/widgets/suspicion_meter.dart';
 import 'package:mimic/game/game.dart';
+import 'package:mimic/vault/services/pro_status_service.dart';
 
 enum RevealState { cover, revealed, pass }
 
@@ -42,10 +43,17 @@ class _WordRevealScreenState extends ConsumerState<WordRevealScreen> {
       _revealState = RevealState.revealed;
     });
 
+    _startAutoHideTimer();
+  }
+
+  /// 3-second auto-hide timer before showing the pass device screen.
+  /// Paused while the describing-angles sheet is open — the word was on
+  /// screen the whole time the player was reading, so a fresh window
+  /// starts when the sheet closes.
+  void _startAutoHideTimer() {
     _timer?.cancel();
-    // 3-second auto-hide timer before showing the pass device screen
     _timer = Timer(const Duration(seconds: 3), () {
-      if (mounted) {
+      if (mounted && _revealState == RevealState.revealed) {
         setState(() {
           _revealState = RevealState.pass;
         });
@@ -53,10 +61,112 @@ class _WordRevealScreenState extends ConsumerState<WordRevealScreen> {
     });
   }
 
+  /// Opens the describing-angles sheet for the revealed word and pauses
+  /// the auto-hide timer until it is dismissed.
+  void _showContextSheet(String contextText) {
+    _timer?.cancel();
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: HorrorColors.voidBlack,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 20, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'DESCRIBING ANGLES',
+                style: GoogleFonts.creepster(
+                  color: HorrorColors.crimson,
+                  fontSize: 22,
+                  letterSpacing: 1.5,
+                ),
+              ),
+              const SizedBox(height: 12),
+              // English only, for every language pack (owner's call —
+              // localized context text reads as "cringe" to Filipino/
+              // Cebuano players; their pairs inherit these English
+              // definitions at pack-merge time).
+              Text(
+                contextText,
+                style: GoogleFonts.inter(
+                  color: HorrorColors.fogWhite,
+                  fontSize: 15,
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Never say the word. Describe around it.',
+                style: GoogleFonts.inter(
+                  color: HorrorColors.ashGray,
+                  fontSize: 13,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+              const SizedBox(height: 20),
+              SizedBox(
+                width: double.infinity,
+                height: 46,
+                child: ElevatedButton(
+                  onPressed: () {
+                    Navigator.of(sheetContext).pop();
+                    // Restart the grace window right away — deterministic
+                    // for tests and honest on device (the countdown
+                    // resumes from the tap). The sheet's dismissal
+                    // future below is the safety net for the other
+                    // dismissal paths (barrier tap, swipe down) and is
+                    // idempotent: it cancels and restarts the same way.
+                    _startAutoHideTimer();
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: HorrorColors.crimson,
+                    foregroundColor: HorrorColors.fogWhite,
+                    side: const BorderSide(
+                      color: HorrorColors.bloodRed,
+                      width: 1.5,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                  ),
+                  child: Text(
+                    'GOT IT',
+                    style: GoogleFonts.creepster(
+                      fontSize: 18,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ).whenComplete(() {
+      if (mounted && _revealState == RevealState.revealed) {
+        _startAutoHideTimer();
+      }
+    });
+  }
+
+  /// F31: the reveal turn order skips eliminated players. In Survival,
+  /// Watchers used to be dealt a full word-reveal turn — a word they can
+  /// never use, announced to the table as if they were still playing.
+  /// Classic and Nightmare never eliminate anyone, so there this list is
+  /// simply all players.
+  List<Player> _revealOrder(GameState gameState) =>
+      gameState.players.where((p) => !p.isEliminated).toList();
+
   void _nextPlayer() {
     _timer?.cancel();
     final gameState = ref.read(gameStateProvider);
-    if (_currentIndex < gameState.players.length - 1) {
+    final revealOrder = _revealOrder(gameState);
+    if (_currentIndex < revealOrder.length - 1) {
       setState(() {
         _currentIndex++;
         _revealState = RevealState.cover;
@@ -69,8 +179,15 @@ class _WordRevealScreenState extends ConsumerState<WordRevealScreen> {
   @override
   Widget build(BuildContext context) {
     final gameState = ref.watch(gameStateProvider);
+    // Pro installs see the DETAILED describing angles; free installs the
+    // generalized ones. The entitlement source is ProStatusService —
+    // during the pre-billing window every install reads Pro.
+    final isPro = ref.watch(isProProvider).value ?? false;
 
-    if (gameState.players.isEmpty) {
+    // F31: reveal turn order — Watchers (eliminated players) take no turn.
+    final revealOrder = _revealOrder(gameState);
+
+    if (revealOrder.isEmpty) {
       return const Scaffold(
         backgroundColor: HorrorColors.voidBlack,
         body: Center(
@@ -79,14 +196,14 @@ class _WordRevealScreenState extends ConsumerState<WordRevealScreen> {
       );
     }
 
-    final currentPlayer = gameState.players[_currentIndex];
+    final currentPlayer = revealOrder[_currentIndex];
     // In Nightmare mode, there are 2 mimics. Check if player is one of them.
     final isMimic = gameState.mimicIds.contains(currentPlayer.id);
     
     // Retrieve player's specific word dynamically from Riverpod state
     final wordToShow = gameState.getWordForPlayer(currentPlayer.id);
     final category = gameState.currentCategory;
-    final isLastPlayer = _currentIndex >= gameState.players.length - 1;
+    final isLastPlayer = _currentIndex >= revealOrder.length - 1;
 
     return Scaffold(
       backgroundColor: HorrorColors.voidBlack,
@@ -94,7 +211,7 @@ class _WordRevealScreenState extends ConsumerState<WordRevealScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         title: Text(
-          'VICTIM ${_currentIndex + 1} OF ${gameState.players.length}',
+          'VICTIM ${_currentIndex + 1} OF ${revealOrder.length}',
           style: GoogleFonts.creepster(
             color: HorrorColors.crimson,
             fontSize: 20,
@@ -128,6 +245,10 @@ class _WordRevealScreenState extends ConsumerState<WordRevealScreen> {
                 category: category,
                 isMimic: isMimic,
                 isLastPlayer: isLastPlayer,
+                contextText: gameState.getContextForPlayer(
+                  currentPlayer.id,
+                  isPro: isPro,
+                ),
               ),
             ),
           ],
@@ -142,6 +263,7 @@ class _WordRevealScreenState extends ConsumerState<WordRevealScreen> {
     required String category,
     required bool isMimic,
     required bool isLastPlayer,
+    required String contextText,
   }) {
     switch (_revealState) {
       case RevealState.cover:
@@ -249,14 +371,38 @@ class _WordRevealScreenState extends ConsumerState<WordRevealScreen> {
                       letterSpacing: 1.0,
                     ),
                   ),
+                // Word context: describing angles for this player's own
+                // word. Hidden entirely when the pair has no authored
+                // context (synced pairs without contexts). Pauses the
+                // auto-hide timer while open.
+                if (contextText.isNotEmpty) ...[
+                  const SizedBox(height: 12),
+                  TextButton.icon(
+                    onPressed: () => _showContextSheet(contextText),
+                    icon: const Icon(Icons.info_outline, size: 18),
+                    label: Text(
+                      'NEED DESCRIBING ANGLES?',
+                      style: GoogleFonts.inter(
+                        fontSize: 12,
+                        letterSpacing: 1.2,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    style: TextButton.styleFrom(
+                      foregroundColor: HorrorColors.ashGray,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
         );
 
       case RevealState.pass:
-        final nextPlayerName = _currentIndex < ref.read(gameStateProvider).players.length - 1
-            ? ref.read(gameStateProvider).players[_currentIndex + 1].name
+        // F31: next-name comes from the reveal order, so a Watcher is never
+        // announced as the next recipient of the device.
+        final nextPlayerName = _currentIndex < _revealOrder(ref.read(gameStateProvider)).length - 1
+            ? _revealOrder(ref.read(gameStateProvider))[_currentIndex + 1].name
             : '';
 
         return Center(

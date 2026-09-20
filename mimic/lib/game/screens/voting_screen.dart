@@ -153,9 +153,16 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
                                   height: 52,
                                   child: ElevatedButton(
                                     onPressed: () {
-                                      Navigator.of(context).pushNamed(
+                                      // F31: replace, not push — a voting
+                                      // screen left on the stack kept an
+                                      // armed REVEAL button that could be
+                                      // walked back into after the round
+                                      // had already advanced.
+                                      Navigator.of(context)
+                                          .pushReplacementNamed(
                                         MimicGame.resultsRoute,
-                                        arguments: Map<String, int>.from(_voteCounts),
+                                        arguments:
+                                            Map<String, int>.from(_voteCounts),
                                       );
                                     },
                                     style: ElevatedButton.styleFrom(

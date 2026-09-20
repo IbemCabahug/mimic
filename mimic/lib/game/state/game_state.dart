@@ -108,7 +108,11 @@ class GameState {
   bool get isGameOver {
     if (selectedMode == GameMode.survival) {
       final survivors = players.where((p) => p.isAlive).length;
-      return survivors <= 1 || isFinalRound;
+      // F31: the game ends at TWO survivors, not one. With one vote each the
+      // round is a guaranteed mutual tie — no elimination is possible and the
+      // round is dead weight. winnerIds already knows how to resolve a
+      // finished game with 2+ survivors: the highest-scoring survivor wins.
+      return survivors <= 2 || isFinalRound;
     }
     return isFinalRound;
   }
@@ -195,6 +199,35 @@ class GameState {
       return secondMimicWord!;
     }
     return currentWordPair?.mimicWord ?? '';
+  }
+
+  /// Helper to get the describing-angles context for any player's word —
+  /// what the word-reveal info button shows. Matches the pair's own two
+  /// context tiers; returns '' (button hidden) when the word has none,
+  /// e.g. a synced pair without contexts, or the Nightmare second mimic
+  /// whose word is not one of the pair's two sides.
+  ///
+  /// Tiers: free installs get the GENERALIZED angles; Pro installs get the
+  /// DETAILED angles, falling back to the free blurb when the pro fields
+  /// are empty (pairs synced from older peers carry only free fields).
+  /// Contexts are written in English for every language pack (owner's call
+  /// — localized context text reads as "cringe" to Filipino/Cebuano
+  /// players); Filipino and Cebuano pairs inherit the English definitions
+  /// of their parallel base pairs at pack-merge time (see
+  /// getPacksForLanguage).
+  String getContextForPlayer(String playerId, {bool isPro = false}) {
+    final pair = currentWordPair;
+    if (pair == null) return '';
+    final word = getWordForPlayer(playerId);
+    String tiered(String free, String pro) =>
+        (isPro && pro.isNotEmpty) ? pro : free;
+    if (word == pair.realWord) {
+      return tiered(pair.realWordContext, pair.realWordProContext);
+    }
+    if (word == pair.mimicWord) {
+      return tiered(pair.mimicWordContext, pair.mimicWordProContext);
+    }
+    return '';
   }
 }
 
@@ -324,27 +357,13 @@ class GameStateNotifier extends StateNotifier<GameState> {
     );
   }
 
-  // Backward compatibility alias
-  void toggleEliminated(String playerId) {
-    final isEliminated = state.eliminatedPlayers.contains(playerId);
-    if (!isEliminated) {
-      eliminatePlayer(playerId);
-    } else {
-      // Revive player
-      final updatedPlayers = state.players.map((p) {
-        if (p.id == playerId) {
-          return p.copyWith(isAlive: true, isGhost: false);
-        }
-        return p;
-      }).toList();
-
-      state = state.copyWith(
-        players: updatedPlayers,
-        eliminatedPlayers: state.eliminatedPlayers.where((id) => id != playerId).toList(),
-        ghostPlayers: state.ghostPlayers.where((id) => id != playerId).toList(),
-      );
-    }
-  }
+  // F31: toggleEliminated was removed deliberately. It was the only code
+  // path that could revive an eliminated player, and the results screen
+  // called it on every re-entry — voting a Watcher out again silently
+  // resurrected them, making them eligible to be dealt the Mimic role next
+  // round. Elimination is now one-way from the game flow (eliminatePlayer
+  // is idempotent); reviving is a host/admin tool decision, not a side
+  // effect of re-showing a screen.
 
   void assignMimics() {
     if (state.players.isEmpty) return;

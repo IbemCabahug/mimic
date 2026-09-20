@@ -112,9 +112,14 @@ class _FinalStandingsScreenState extends ConsumerState<FinalStandingsScreen> {
 
   void _playAgain() {
     ref.read(gameStateProvider.notifier).resetGame();
+    // F31: keep the home route ('/') beneath the roster. Wiping the whole
+    // stack stranded the player on Roster Setup with no back button (noticed
+    // in Survival, where every finished game passes through here). All stale
+    // game screens are still removed — only home survives, so the app-bar
+    // back arrow, system back and swipe all return to the home screen.
     Navigator.of(context).pushNamedAndRemoveUntil(
       MimicGame.playerSetupRoute,
-      (route) => false,
+      (route) => route.settings.name == MimicGame.homeRoute,
     );
   }
 

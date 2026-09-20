@@ -8,6 +8,8 @@ import 'package:mimic/core/animations/horror_animations.dart';
 import 'package:mimic/game/game.dart';
 import 'package:mimic/multiplayer/network/network_service.dart';
 import 'package:mimic/game/data/language_store.dart';
+import 'package:mimic/vault/services/pro_status_service.dart';
+import 'package:mimic/vault/services/quick_entry_service.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -84,6 +86,25 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStat
     super.dispose();
   }
 
+  /// F27 — the Pro quick-entry path: a long-press on the MIMIC title that
+  /// skips ONLY the secret tap-gesture navigation and lands on the existing
+  /// PIN screen, which still does all the authentication it always did.
+  /// Every failed check silently does nothing — an ordinary game tap, with
+  /// no error, no hint and no delay (disguise-preservation, acceptance
+  /// criterion 2). The gate re-reads Pro at tap time so a lapsed install's
+  /// stale preference degrades silently (the golden rule).
+  Future<void> _onQuickEntryLongPress() async {
+    final net = ref.read(networkServiceProvider);
+    if (isMultiplayerSessionActive(net)) return; // same guard as the gesture
+    final isPro = await ref.read(proStatusServiceProvider).isPro();
+    if (!mounted) return;
+    final allowed = await ref
+        .read(quickEntryServiceProvider)
+        .shouldOpenEntry(isPro: isPro);
+    if (!allowed || !mounted) return;
+    Navigator.of(context).pushNamed(MimicGame.vaultPinRoute);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -118,25 +139,32 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStat
                         children: [
                           const SizedBox(height: 40),
                           // Heartbeat Pulse Animated Blood-Red Title
-                          HeartbeatPulse(
-                            child: Text(
-                              'MIMIC',
-                              style: GoogleFonts.creepster(
-                                fontSize: 96,
-                                color: HorrorColors.bloodRed,
-                                letterSpacing: 8.0,
-                                shadows: [
-                                  Shadow(
-                                    blurRadius: 25,
-                                    color: HorrorColors.crimson.withValues(alpha: 0.6),
-                                    offset: const Offset(0, 0),
-                                  ),
-                                  Shadow(
-                                    blurRadius: 10,
-                                    color: Colors.black.withValues(alpha: 0.8),
-                                    offset: const Offset(2, 4),
-                                  ),
-                                ],
+                          // F27: long-pressing the title is the Pro
+                          // quick-entry shortcut (gated silently inside —
+                          // for everyone else it is just a dead long-press,
+                          // preserving the disguise).
+                          GestureDetector(
+                            onLongPress: _onQuickEntryLongPress,
+                            child: HeartbeatPulse(
+                              child: Text(
+                                'MIMIC',
+                                style: GoogleFonts.creepster(
+                                  fontSize: 96,
+                                  color: HorrorColors.bloodRed,
+                                  letterSpacing: 8.0,
+                                  shadows: [
+                                    Shadow(
+                                      blurRadius: 25,
+                                      color: HorrorColors.crimson.withValues(alpha: 0.6),
+                                      offset: const Offset(0, 0),
+                                    ),
+                                    Shadow(
+                                      blurRadius: 10,
+                                      color: Colors.black.withValues(alpha: 0.8),
+                                      offset: const Offset(2, 4),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ),

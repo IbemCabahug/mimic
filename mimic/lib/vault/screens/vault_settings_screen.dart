@@ -21,6 +21,8 @@ import '../security/auto_lock.dart';
 import '../security/vault_conceal_service.dart';
 import '../widgets/vault_scaffold.dart';
 import 'gesture_setup_screen.dart';
+import '../services/pro_status_service.dart';
+import '../services/quick_entry_service.dart';
 import '../trigger/gesture_store.dart';
 
 class VaultSettingsScreen extends ConsumerStatefulWidget {
@@ -36,6 +38,14 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   bool _isLoadingBiometric = false;
   bool _shakeEnabled = false;
   ShakeSensitivity _shakeSensitivity = ShakeSensitivity.medium;
+  // F7: the persisted foreground-idle choice in whole minutes; null until
+  // loaded. Pro-gated options are offered only when [ref] reports Pro.
+  int? _idleTimeoutMinutes;
+
+  // F27: the persisted quick-entry preference; null until loaded. The
+  // entry check itself happens at tap time on the game screen — this
+  // field only drives the toggle and its subtitle.
+  bool? _quickEntryEnabled;
 
   @override
   void initState() {
@@ -43,6 +53,8 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     _checkRecoveryBlob();
     _checkGesture();
     _loadShakePref();
+    _loadIdleTimeoutPref();
+    _loadQuickEntryPref();
   }
 
   Future<void> _loadShakePref() async {
@@ -55,6 +67,212 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
         );
       });
     }
+  }
+
+  /// F7: reads the persisted foreground-idle choice so the tile subtitle
+  /// reflects it. Missing/foreign values stay null (the AutoLock default
+  /// applies); the dialog still offers the full list.
+  ///
+  /// The stored number is CLAMPED here before display, exactly as
+  /// [AutoLock.loadIdleTimeout] clamps it before running: a value below the
+  /// protective floor reads as the floor, and a Pro value above the
+  /// caller's ceiling reads as that ceiling. Without this the subtitle
+  /// would promise a lapsed install "30 min idle" while the timer actually
+  /// fired at 10 — the UI must report what runs, not what is stored.
+  Future<void> _loadIdleTimeoutPref() async {
+    final platformService = ref.read(platformServiceProvider);
+    int? minutes;
+    try {
+      minutes = int.tryParse(
+        await platformService.secureRead('auto_lock_idle_minutes') ?? '',
+      );
+    } catch (_) {
+      minutes = null;
+    }
+    if (minutes != null) {
+      final isPro = await ref.read(proStatusServiceProvider).isPro();
+      final ceiling =
+          isPro ? AutoLock.absoluteIdleCap : AutoLock.freeIdleCeiling;
+      final wanted = Duration(minutes: minutes);
+      minutes = (wanted < AutoLock.defaultIdleTimeout
+              ? AutoLock.defaultIdleTimeout
+              : (wanted > ceiling ? ceiling : wanted))
+          .inMinutes;
+    }
+    if (mounted) {
+      setState(() => _idleTimeoutMinutes = minutes);
+    }
+  }
+
+  /// F27: reads the quick-entry preference for the toggle. Missing or
+  /// unreadable storage reads as OFF (QuickEntryService semantics).
+  Future<void> _loadQuickEntryPref() async {
+    final enabled = await ref.read(quickEntryServiceProvider).isEnabled();
+    if (mounted) {
+      setState(() => _quickEntryEnabled = enabled);
+    }
+  }
+
+  /// F27 toggle handler. Pro-gated at use time: a lapsed install's stale
+  /// 'true' keeps working the same way — the home-screen check re-reads
+  /// isPro() every tap, so lapse degrades silently to an ordinary game
+  /// tap (the golden rule), and this toggle honestly reflects and fixes
+  /// the stored preference either way. Turning OFF is allowed for
+  /// everyone (a protective direction is never gated).
+  Future<void> _onQuickEntryToggle(bool value) async {
+    // Turning OFF is never Pro-gated.
+    if (!value) {
+      try {
+        await ref.read(quickEntryServiceProvider).setEnabled(false);
+        if (mounted) setState(() => _quickEntryEnabled = false);
+      } catch (_) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not save the setting')),
+          );
+        }
+      }
+      return;
+    }
+    // Turning ON requires Pro. Stated in words on the locked control —
+    // same pattern as the F7 dialog rows.
+    final isPro = await ref.read(proStatusServiceProvider).isPro();
+    if (!mounted) return;
+    if (!isPro) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Quick entry is part of Mimic Pro'),
+        ),
+      );
+      return;
+    }
+    try {
+      await ref.read(quickEntryServiceProvider).setEnabled(true);
+      if (mounted) setState(() => _quickEntryEnabled = true);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Could not save the setting')),
+        );
+      }
+    }
+  }
+
+  /// F27 subtitle: current state, or 'Off' while the value loads.
+  String _quickEntrySubtitle() {
+    if (_quickEntryEnabled == null) return 'Off';
+    return _quickEntryEnabled! ? 'On' : 'Off';
+  }
+
+  /// F7 subtitle: the current choice, or the protective default while the
+  /// stored value loads (or when it is missing/foreign).
+  String _idleTimeoutSubtitle() {
+    if (_idleTimeoutMinutes == null) {
+      return 'Lock the vault after an idle delay (currently 5 min)';
+    }
+    return 'Lock the vault after $_idleTimeoutMinutes min idle';
+  }
+
+  /// F7: free choices run 5–10 min; Pro choices extend to 30 min (the
+  /// suspend ceiling — nothing the user picks can outlive the backstop).
+  /// Non-Pro users SEE the Pro rows with a PRO badge, an explanatory
+  /// subtitle, and a DISABLED control (`enabled: isPro` nulls the tap, so
+  /// the row cannot be picked and does not silently change anything). The
+  /// gate is stated in words on the locked row itself, not in a tap
+  /// response. Pro-only persistence is guarded twice: the dialog filters,
+  /// and AutoLock clamps at load (a stale Pro value on a lapsed install
+  /// degrades to the free ceiling, never a lockout).
+  Future<void> _showIdleTimeoutDialog() async {
+    final platformService = ref.read(platformServiceProvider);
+    final proService = ref.read(proStatusServiceProvider);
+    final isPro = await proService.isPro();
+    if (!mounted) return;
+    const freeChoices = [5, 10];
+    const proChoices = [15, 30];
+    final picked = await showDialog<int>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Auto-lock when idle'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: RadioGroup<int>(
+            groupValue: _idleTimeoutMinutes,
+            onChanged: (value) {
+              if (value != null) Navigator.of(dialogContext).pop(value);
+            },
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                for (final minutes in freeChoices)
+                  RadioListTile<int>(
+                    title: Text('$minutes min'),
+                    value: minutes,
+                  ),
+                for (final minutes in proChoices)
+                  RadioListTile<int>(
+                    title: Row(
+                      children: [
+                        Text('$minutes min'),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: VaultColors.accent.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            'PRO',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              color: VaultColors.accent,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    value: minutes,
+                    enabled: isPro,
+                    subtitle: isPro
+                        ? null
+                        : const Text('Pro only — upgrade to unlock'),
+                  ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+    if (picked == null || !mounted) return;
+    // Second guard: a non-Pro pick above the free ceiling is rejected even
+    // if the dialog filter is ever bypassed.
+    if (!isPro && picked > AutoLock.freeIdleCeiling.inMinutes) return;
+    try {
+      await platformService.secureWrite(
+        'auto_lock_idle_minutes',
+        picked.toString(),
+      );
+    } catch (_) {
+      return;
+    }
+    if (mounted) {
+      setState(() {
+        _idleTimeoutMinutes = picked;
+      });
+    }
+    // F7: the live timer follows the persisted choice. loadIdleTimeout
+    // re-reads storage and clamps to the caller's Pro ceiling, so a stale
+    // Pro value on a lapsed install degrades to the free ceiling here too.
+    await AutoLock().loadIdleTimeout(
+      isPro: await proService.isPro(),
+    );
   }
 
   Future<void> _checkRecoveryBlob() async {
@@ -497,6 +715,10 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   Widget build(BuildContext context) {
     final bool stealth = ref.watch(stealthModeProvider);
     final bool iconVisible = ref.watch(launcherIconProvider);
+    // F27: the quick-entry row is a Pro feature — hidden entirely for free
+    // installs (the toggle handler still re-checks isPro() at use time, so
+    // a lapsed install that somehow reaches the row cannot turn it on).
+    final bool isPro = ref.watch(isProProvider).valueOrNull ?? false;
 
     return VaultScaffold(
       title: 'Settings',
@@ -635,6 +857,38 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
               activeThumbColor: VaultColors.accent,
             ),
           ),
+          // F7: foreground-idle auto-lock timeout. The tile's tap opens a
+          // dialog listing the free choices plus the Pro choices (badge).
+          // The background grace is intentionally NOT listed here — it is
+          // fixed at 1 minute by design (see auto_lock.dart).
+          _buildSettingsTile(
+            icon: Icons.timer_outlined,
+            title: 'Auto-lock when idle',
+            subtitle: _idleTimeoutSubtitle(),
+            onTap: _showIdleTimeoutDialog,
+          ),
+          // F27: the Pro quick-entry toggle — rendered only for Pro. The
+          // handler additionally asks isPro() at use time (turning ON is
+          // gated; turning OFF is allowed for everyone — a protective
+          // direction is never gated). The subtitle carries the honest
+          // warning the spec requires: what the shortcut skips, and the
+          // coercion note.
+          if (isPro)
+            _buildSettingsTile(
+              icon: Icons.bolt_outlined,
+              title: 'Quick entry to the vault',
+              subtitle: '${_quickEntrySubtitle()}: long-press the MIMIC '
+                  'title on the game home to skip the tap gesture. Your '
+                  'PIN, biometrics, lockout and break-in log are unchanged, '
+                  'and anyone holding your unlocked phone can reach this '
+                  'screen and turn it on.',
+              onTap: () {},
+              trailing: Switch(
+                value: _quickEntryEnabled ?? false,
+                onChanged: _onQuickEntryToggle,
+                activeThumbColor: VaultColors.accent,
+              ),
+            ),
           // Shake Sensitivity selector — only active when shake is enabled
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -753,6 +1007,19 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
             subtitle: 'Timing and hardware checks',
             onTap: () {
               Navigator.of(context).pushNamed('/vault-diagnostics');
+            },
+          ),
+
+          const SizedBox(height: 24),
+
+          // Guide Section
+          _buildSectionHeader('Guide'),
+          _buildSettingsTile(
+            icon: Icons.menu_book_outlined,
+            title: 'Field Manual',
+            subtitle: 'How the vault works, and how to stay hidden',
+            onTap: () {
+              Navigator.of(context).pushNamed('/vault-manual');
             },
           ),
 

@@ -30,6 +30,7 @@ import 'package:mimic/core/theme/app_theme.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/services/notes_service.dart';
+import 'package:mimic/vault/services/pro_status_service.dart';
 import 'package:mimic/vault/services/file_vault_service.dart';
 import 'package:mimic/vault/services/import_progress.dart';
 import 'package:mimic/vault/widgets/import_activity_button.dart';
@@ -49,6 +50,7 @@ import 'package:mimic/vault/screens/document_vault_screen.dart';
 import 'package:mimic/vault/screens/vault_settings_screen.dart';
 import 'package:mimic/vault/screens/gesture_setup_screen.dart';
 import 'package:mimic/vault/screens/breakin_log_screen.dart';
+import 'package:mimic/vault/screens/vault_manual_screen.dart';
 import 'package:mimic/vault/services/video_vault_service.dart';
 import 'package:mimic/vault/screens/video_vault_screen.dart';
 import 'package:mimic/vault/services/document_vault_service.dart';
@@ -298,6 +300,15 @@ class FakeFileVaultService extends FileVaultService {
     if (isCancelled?.call() ?? false) throw const OperationCancelledException();
     await deletePhoto(id);
   }
+
+  /// F31: relabel one photo's folder in the in-memory store (the real
+  /// service rewrites its metadata row; the screen only ever reads the list).
+  @override
+  Future<void> movePhoto(String id, String folder) async {
+    final index = photos.indexWhere((p) => p.id == id);
+    if (index == -1) return;
+    photos[index] = photos[index].copyWith(folder: folder);
+  }
 }
 
 /// Fake implementation of VideoVaultService that stores videos in memory.
@@ -332,6 +343,14 @@ class FakeVideoVaultService extends VideoVaultService {
   Future<void> deleteVideo(String id) async {
     videos.removeWhere((v) => v.id == id);
     videoData.remove(id);
+  }
+
+  /// F31: relabel one video's folder in the in-memory store.
+  @override
+  Future<void> moveVideo(String id, String folder) async {
+    final index = videos.indexWhere((v) => v.id == id);
+    if (index == -1) return;
+    videos[index] = videos[index].copyWith(folder: folder);
   }
 
   @override
@@ -538,16 +557,34 @@ void main() {
     fakeBiometricService = FakeBiometricService();
     fakeBiometricStore = FakeBiometricUnlockStore();
     mockLogs = [];
-    SharedPreferences.setMockInitialValues({});
+    // F30: default the suite to an owner who has already acknowledged the
+    // field manual. Unacknowledged, the manual auto-opens the first time a
+    // route stack reaches the vault home, which would sit on top of whatever
+    // the other groups assert. Its own first-run behaviour is exercised by
+    // group '10 · Field Manual (F30)', which clears this flag explicitly.
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      'field_manual_seen': true,
+    });
   });
 
   /// Build a standard MaterialApp containing Riverpod overrides for all vault providers and routing tables.
+  ///
+  /// [enforceBilling] pins the Pro-gate era under test. The default true
+  /// overrides proStatusServiceProvider with a billing-enforced service so
+  /// the Pro-gated rows behave exactly as they will once kBillingEnforced
+  /// flips in Phase 2; pass false to test the pre-billing launch window,
+  /// where the shipped default (kBillingEnforced == false) reads Pro for
+  /// every install and no entitlement is needed.
   Widget buildTestApp(Widget homeScreen,
-      {bool debugShowCheckedModeBanner = true}) {
+      {bool debugShowCheckedModeBanner = true,
+      bool enforceBilling = true}) {
     return ProviderScope(
       key: UniqueKey(),
       overrides: [
         platformServiceProvider.overrideWithValue(fakePlatform),
+        if (enforceBilling)
+          proStatusServiceProvider.overrideWith((ref) =>
+              ProStatusService(fakePlatform, billingEnforced: true)),
         vaultCryptoProvider.overrideWith((ref) => fakeCrypto),
         notesServiceProvider.overrideWithValue(fakeNotes),
         fileVaultServiceProvider.overrideWithValue(fakePhotos),
@@ -570,6 +607,7 @@ void main() {
           '/vault-documents': (_) => const DocumentVaultScreen(),
           '/vault-settings': (_) => const VaultSettingsScreen(),
           '/vault-breakin-logs': (_) => const Scaffold(body: Text('BREAKIN_LOGS_SCREEN')),
+          '/vault-manual': (_) => const VaultManualScreen(),
           '/': (_) => const Scaffold(body: Text('GAME_HOME')),
         },
       ),
@@ -1103,6 +1141,15 @@ void main() {
 
   group('6 - VaultSettingsScreen', () {
     testWidgets('All settings options render, decoy PIN flow works, and break-in link navigates', (WidgetTester tester) async {
+      // Tall viewport: this test walks nearly the entire settings list, and the
+      // lower rows (Intruder Logs, Clear All Data) sit past the fold on a phone.
+      // Building the list at full height keeps "does this row exist" assertions
+      // independent of where a fixed-length drag happened to land.
+      tester.view.physicalSize = const Size(800, 4200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
       await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
       await tester.pumpAndSettle();
 
@@ -1112,10 +1159,6 @@ void main() {
       // Verify settings options render
       expect(find.text('Change PIN'), findsOneWidget);
       expect(find.text('Lock Vault'), findsOneWidget);
-
-      // Scroll to render lower settings options
-      await tester.drag(find.byType(ListView), const Offset(0, -1200));
-      await tester.pumpAndSettle();
 
       expect(find.text('Intruder Logs'), findsOneWidget);
       expect(find.text('Clear All Data'), findsOneWidget);
@@ -1203,6 +1246,118 @@ void main() {
       // Following the deletion of the duplicate, there is exactly one Lock Vault tile in the entire widget tree.
       expect(find.text('Lock Vault'), findsOneWidget);
       expect(find.text('Lock vault and return to PIN screen'), findsOneWidget);
+    });
+
+    testWidgets('F27: the quick-entry tile is HIDDEN for a free user (the install has no Pro entitlement)', (WidgetTester tester) async {
+      // Default fakePlatform: no pro_entitlement key, so isPro() is false.
+      // A tall viewport builds the whole ListView at once — the row must not
+      // exist anywhere, not merely be off-screen (drag sampling jumps past
+      // rows between settle points, which would let findsNothing lie).
+      tester.view.physicalSize = const Size(800, 3200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Quick entry to the vault'), findsNothing);
+      expect(fakePlatform.secureStore['pro_quick_entry_enabled'], isNull);
+    });
+
+    testWidgets('F27: the quick-entry tile is visible for Pro, and toggling ON persists the preference', (WidgetTester tester) async {
+      // Tall viewport so the whole settings list builds at once — the tile
+      // sits deep in the list, and drag sampling skips past it.
+      tester.view.physicalSize = const Size(800, 3200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      fakePlatform.secureStore['pro_entitlement'] = 'pro';
+      await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
+      await tester.pumpAndSettle();
+
+      // The F27 tile (it sits after the F7 idle-timeout row).
+      final tile = find.text('Quick entry to the vault');
+      expect(tile, findsOneWidget);
+
+      // The switch starts OFF (preference missing) and the subtitle opens
+      // with the Off state.
+      final switchFinder = find.descendant(
+        of: find.ancestor(
+          of: tile,
+          matching: find.byType(ListTile),
+        ),
+        matching: find.byType(Switch),
+      );
+      expect(switchFinder, findsOneWidget);
+      expect(tester.widget<Switch>(switchFinder).value, isFalse);
+
+      // Toggling ON asks isPro() (Pro here), persists, and flips the state.
+      await tester.tap(switchFinder);
+      await tester.pumpAndSettle();
+      expect(fakePlatform.secureStore['pro_quick_entry_enabled'], 'true');
+      expect(tester.widget<Switch>(switchFinder).value, isTrue);
+    });
+
+    testWidgets('F27: a lapsed install cannot re-enable from the tile — the toggle asks isPro() at use time', (WidgetTester tester) async {
+      // Tall viewport so the whole settings list builds at once.
+      tester.view.physicalSize = const Size(800, 3200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      // Pro at render time (tile visible), then entitlement cleared before
+      // the tap: the handler must refuse and change nothing.
+      fakePlatform.secureStore['pro_entitlement'] = 'pro';
+      await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
+      await tester.pumpAndSettle();
+      fakePlatform.secureStore.remove('pro_entitlement');
+
+      final tile = find.text('Quick entry to the vault');
+      expect(tile, findsOneWidget);
+      final switchFinder = find.descendant(
+        of: find.ancestor(
+          of: tile,
+          matching: find.byType(ListTile),
+        ),
+        matching: find.byType(Switch),
+      );
+      await tester.tap(switchFinder);
+      await tester.pumpAndSettle();
+
+      // Nothing was written: the gate answered free, the row stays Off.
+      expect(fakePlatform.secureStore['pro_quick_entry_enabled'], isNull);
+      expect(tester.widget<Switch>(switchFinder).value, isFalse);
+    });
+
+    testWidgets('F27: PRE-BILLING WINDOW — the tile shows with no entitlement at all (kBillingEnforced == false)', (WidgetTester tester) async {
+      // The launch window reads Pro for every install before storage is
+      // consulted, so early downloaders see and can use the toggle even
+      // though no Play entitlement exists yet.
+      tester.view.physicalSize = const Size(800, 3200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+      await tester.pumpWidget(
+        buildTestApp(const VaultSettingsScreen(), enforceBilling: false),
+      );
+      await tester.pumpAndSettle();
+
+      final tile = find.text('Quick entry to the vault');
+      expect(tile, findsOneWidget);
+
+      final switchFinder = find.descendant(
+        of: find.ancestor(
+          of: tile,
+          matching: find.byType(ListTile),
+        ),
+        matching: find.byType(Switch),
+      );
+      await tester.tap(switchFinder);
+      await tester.pumpAndSettle();
+
+      // The toggle persists and flips exactly as it does for a granted
+      // install — the window behaves like Pro everywhere.
+      expect(fakePlatform.secureStore['pro_quick_entry_enabled'], 'true');
+      expect(tester.widget<Switch>(switchFinder).value, isTrue);
     });
   });
 
@@ -1636,6 +1791,384 @@ void main() {
 
       expect(find.byIcon(Icons.close), findsNothing);
       expect(find.text('Import cancelled'), findsOneWidget);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 10 · Field Manual (F30)
+  // ═══════════════════════════════════════════════════════════════════════
+  // The manual is the in-vault walkthrough for a brand-new owner. It must
+  // (a) appear by itself exactly once, right after the first successful
+  // unlock, (b) mark itself seen on every dismissal path so it never nags,
+  // (c) stay one tap away forever from the vault home and Settings > Guide,
+  // and (d) never be paywalled — a lost owner is not a sales funnel.
+  group('10 · Field Manual (F30)', () {
+    const String kFirstRunBannerFragment = 'First time in here';
+
+    /// Pushes '/vault-home' onto a real route stack. The first-run auto-open
+    /// needs a poppable stack (the manual never opens as the only route, which
+    /// would strand the owner on a screen they cannot dismiss), so the test
+    /// starts on a launcher and navigates in, exactly like production.
+    Future<void> pushVaultHome(WidgetTester tester,
+        {bool enforceBilling = true}) async {
+      await tester.pumpWidget(buildTestApp(
+        const Scaffold(body: Text('LAUNCHER')),
+        enforceBilling: enforceBilling,
+      ));
+      await tester.pumpAndSettle();
+      Navigator.of(tester.element(find.text('LAUNCHER')))
+          .pushNamed('/vault-home');
+      await tester.pumpAndSettle();
+    }
+
+    /// Seeds the one-time acknowledgement flag. The suite's setUp defaults it
+    /// to true so the manual never intrudes on the other groups; the first-run
+    /// tests here clear it explicitly.
+    Future<void> seedManualSeen({required bool seen}) async {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('field_manual_seen', seen);
+    }
+
+    Future<bool> manualSeenInPrefs() async {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool('field_manual_seen') ?? false;
+    }
+
+    /// The genuinely-first-run state: no acknowledgement recorded at all.
+    /// Replaces the whole mock store, which also resets the cached
+    /// SharedPreferences instance, so it must run before any pump. Local
+    /// functions cannot be referenced before declaration, so this sits after
+    /// [manualSeenInPrefs] even though it reads more naturally first.
+    Future<void> markUnseenInPrefs() async {
+      SharedPreferences.setMockInitialValues(<String, Object>{});
+      expect(await manualSeenInPrefs(), isFalse);
+    }
+    testWidgets('Renders the walkthrough sections, and no first-run banner once acknowledged',
+        (WidgetTester tester) async {
+      await seedManualSeen(seen: true);
+      // Tall viewport: the manual is a long list, so a default-sized viewport
+      // only ever builds the top of it.
+      tester.view.physicalSize = const Size(800, 2600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(buildTestApp(const VaultManualScreen()));
+      await tester.pumpAndSettle();
+
+      // Same wrapper/theme contract as every other vault screen.
+      verifySharedConstraints(tester);
+
+      // Title + the sections an owner actually needs.
+      expect(find.text('Field Manual'), findsOneWidget);
+      expect(find.text('WHAT THIS PLACE IS'), findsOneWidget);
+      expect(find.text('GETTING BACK IN'), findsOneWidget);
+      expect(find.text('STAYING HIDDEN'), findsOneWidget);
+      expect(find.text('LOCKING'), findsOneWidget);
+      expect(find.text('QUICK ENTRY (PRO)'), findsOneWidget);
+      expect(find.text('DECOYS AND LOGS'), findsOneWidget);
+      expect(find.text('BACKUPS'), findsOneWidget);
+      expect(find.text('IF SOMETHING IS WRONG'), findsOneWidget);
+
+      // Acknowledged installs get the plain document: no banner, no GOT IT.
+      expect(find.textContaining(kFirstRunBannerFragment), findsNothing);
+      expect(find.text('GOT IT'), findsNothing);
+    });
+    testWidgets('FIRST RUN: the first unlock opens the manual once, and GOT IT marks it seen',
+        (WidgetTester tester) async {
+      // Tall viewport: the manual is a long list and the assertions must see
+      // the real widget tree, not a lazily-built prefix of it.
+      tester.view.physicalSize = const Size(800, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await markUnseenInPrefs();
+      await pushVaultHome(tester);
+
+      // The manual invited itself in, on top of the home screen.
+      expect(find.byType(VaultManualScreen), findsOneWidget,
+          reason: 'A never-acknowledged manual must open on the first vault visit');
+      expect(find.textContaining(kFirstRunBannerFragment), findsOneWidget);
+      expect(find.text('GOT IT'), findsOneWidget);
+
+      // GOT IT dismisses, lands back on the home screen, and sets the flag.
+      await tester.tap(find.text('GOT IT'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(VaultManualScreen), findsNothing);
+      expect(find.text('Photos'), findsOneWidget,
+          reason: 'Dismissing the manual must return the owner to the vault home');
+      expect(await manualSeenInPrefs(), isTrue);
+    });
+
+    testWidgets('SECOND VISIT: an acknowledged manual never opens by itself',
+        (WidgetTester tester) async {
+      await seedManualSeen(seen: true);
+      await pushVaultHome(tester);
+
+      expect(find.byType(VaultManualScreen), findsNothing,
+          reason: 'The manual is a one-time introduction, never a recurring popup');
+      expect(find.text('Photos'), findsOneWidget);
+    });
+
+    testWidgets('BACK EXIT: leaving the first-run manual by the back button also marks it seen',
+        (WidgetTester tester) async {
+      await markUnseenInPrefs();
+      await pushVaultHome(tester);
+      expect(find.byType(VaultManualScreen), findsOneWidget);
+
+      // System back, app-bar back and swipe all arrive here as a route pop.
+      Navigator.of(tester.element(find.byType(VaultManualScreen))).pop();
+      await tester.pumpAndSettle();
+
+      expect(find.byType(VaultManualScreen), findsNothing);
+      expect(await manualSeenInPrefs(), isTrue,
+          reason: 'Every dismissal path must acknowledge the manual, not just GOT IT');
+    });
+    testWidgets('the vault home keeps the manual one tap away via the ? button',
+        (WidgetTester tester) async {
+      await seedManualSeen(seen: true);
+      await pushVaultHome(tester);
+
+      // Already read on this install, so it is closed: the owner must still be
+      // able to reopen it from the vault home app bar.
+      expect(find.byType(VaultManualScreen), findsNothing);
+      final helpButton = find.descendant(
+        of: find.byType(AppBar),
+        matching: find.byIcon(Icons.help_outline),
+      );
+      expect(helpButton, findsOneWidget);
+
+      await tester.tap(helpButton);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(VaultManualScreen), findsOneWidget);
+      expect(find.text('WHAT THIS PLACE IS'), findsOneWidget);
+    });
+    testWidgets('Settings > Guide > Field Manual opens the same walkthrough',
+        (WidgetTester tester) async {
+      await seedManualSeen(seen: true);
+      // Tall viewport: the Guide section sits below the whole settings list,
+      // and drag sampling can jump past a row between settle points.
+      tester.view.physicalSize = const Size(800, 4200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
+      await tester.pumpAndSettle();
+
+      final tile = find.text('Field Manual');
+      expect(tile, findsOneWidget);
+      expect(find.text('How the vault works, and how to stay hidden'), findsOneWidget);
+
+      await tester.tap(tile);
+      await tester.pumpAndSettle();
+
+      expect(find.byType(VaultManualScreen), findsOneWidget);
+      expect(find.text('GETTING BACK IN'), findsOneWidget);
+    });
+    testWidgets('LOCKED: a locked vault never auto-opens the manual (it redirects to the PIN first)',
+        (WidgetTester tester) async {
+      // Locked BEFORE arriving at the vault home: the screen must send the
+      // owner to authentication, never hand them a readable manual. The store
+      // holds no acknowledgement, so an auto-open would be visible here.
+      await markUnseenInPrefs();
+      await tester.pumpWidget(buildTestApp(const Scaffold(body: Text('LAUNCHER'))));
+      await tester.pumpAndSettle();
+      fakeCrypto.lock();
+      await tester.runAsync(() async {
+        for (int i = 0; i < 50; i++) {
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+          if (!fakeCrypto.isUnlocked) break;
+        }
+      });
+
+      Navigator.of(tester.element(find.text('LAUNCHER'))).pushNamed('/vault-home');
+      for (int i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 50));
+        if (find.text('PIN_SCREEN').evaluate().isNotEmpty) break;
+      }
+      await tester.pumpAndSettle();
+
+      expect(find.byType(VaultManualScreen), findsNothing,
+          reason: 'The manual must never open behind a locked vault');
+      expect(find.text('PIN_SCREEN'), findsOneWidget);
+      expect(await manualSeenInPrefs(), isFalse,
+          reason: 'A locked vault must not consume the one-time first-run showing');
+    });
+    testWidgets('FREE INSTALL: the manual is fully readable with no entitlement (billing enforced)',
+        (WidgetTester tester) async {
+      await seedManualSeen(seen: true);
+      // Tall viewport so the whole document is built, including its last
+      // section, which is the point of this test.
+      tester.view.physicalSize = const Size(800, 2600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      // enforceBilling: true and no pro_entitlement in the fake store, so this
+      // install is a free one. The manual must not care: it documents the vault
+      // for whoever is holding it.
+      await tester.pumpWidget(
+        buildTestApp(const VaultManualScreen(), enforceBilling: true),
+      );
+      await tester.pumpAndSettle();
+
+      expect(fakePlatform.secureStore['pro_entitlement'], isNull);
+      expect(find.text('WHAT THIS PLACE IS'), findsOneWidget);
+      expect(find.text('IF SOMETHING IS WRONG'), findsOneWidget);
+      expect(find.textContaining('Upgrade'), findsNothing);
+      expect(find.textContaining('upgrade'), findsNothing);
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 11 · Folder removal (F31)
+  // ═══════════════════════════════════════════════════════════════════════
+  // Owner's rule: a folder may only be removed by moving its items OUT
+  // first. This vault has no trash can — a folder-and-contents wipe would
+  // be unrecoverable — so removal is DEFINED as re-filing the items; the
+  // label then disappears because nothing carries it anymore. Nothing in
+  // this flow ever deletes an item.
+  group('11 · Folder removal (F31)', () {
+    testWidgets('PHOTOS: removing a folder moves its items to Unfiled and '
+        'the label disappears — nothing is deleted', (WidgetTester tester) async {
+      fakePhotos.photos.addAll([
+        PhotoMeta(id: 'p1', mimeType: 'image/jpeg', size: 10,
+            createdAt: DateTime(2024, 1, 1), folder: 'Trips'),
+        PhotoMeta(id: 'p2', mimeType: 'image/jpeg', size: 10,
+            createdAt: DateTime(2024, 1, 2), folder: 'Trips'),
+        PhotoMeta(id: 'p3', mimeType: 'image/jpeg', size: 10,
+            createdAt: DateTime(2024, 1, 3)),
+      ]);
+
+      await tester.pumpWidget(buildTestApp(const PhotoVaultScreen()));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(ChoiceChip, 'Trips'), findsOneWidget);
+
+      // Long-press the folder chip: the remove affordance.
+      await tester.longPress(find.widgetWithText(ChoiceChip, 'Trips'));
+      await tester.pumpAndSettle();
+
+      // The dialog states the safety rule with the real item count.
+      expect(find.text('Remove folder "Trips"?'), findsOneWidget);
+      expect(find.textContaining('2 items will be moved out first'),
+          findsOneWidget);
+      expect(find.textContaining('never deletes anything'), findsOneWidget);
+
+      await tester.tap(find.text('Move to Unfiled'));
+      await tester.pumpAndSettle();
+
+      // The label is gone (no item carries it), every item survived, and
+      // the two Trips photos are now Unfiled.
+      expect(find.widgetWithText(ChoiceChip, 'Trips'), findsNothing);
+      expect(find.widgetWithText(ChoiceChip, 'Unfiled'), findsOneWidget);
+      expect(fakePhotos.photos.length, 3,
+          reason: 'removing a folder must never delete an item');
+      expect(
+        fakePhotos.photos.where((p) => p.id == 'p1' || p.id == 'p2'),
+        everyElement(predicate<PhotoMeta>((p) => p.folder.isEmpty)),
+      );
+      expect(
+        fakePhotos.photos.singleWhere((p) => p.id == 'p3').folder,
+        isEmpty,
+      );
+    });
+    // __F31_G11__
+
+    testWidgets('PHOTOS: cancelling the dialog changes nothing',
+        (WidgetTester tester) async {
+      fakePhotos.photos.addAll([
+        PhotoMeta(id: 'p1', mimeType: 'image/jpeg', size: 10,
+            createdAt: DateTime(2024, 1, 1), folder: 'Trips'),
+      ]);
+
+      await tester.pumpWidget(buildTestApp(const PhotoVaultScreen()));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.widgetWithText(ChoiceChip, 'Trips'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(ChoiceChip, 'Trips'), findsOneWidget);
+      expect(fakePhotos.photos.single.folder, 'Trips');
+    });
+
+    testWidgets('VIDEOS: removing a folder moves its items to Unfiled too — '
+        'the same rule as photos', (WidgetTester tester) async {
+      fakeVideos.videos.addAll([
+        VideoMeta(id: 'v1', mimeType: 'video/mp4', size: 10, durationS: 10,
+            createdAt: DateTime(2024, 1, 1), folder: 'Clips'),
+        VideoMeta(id: 'v2', mimeType: 'video/mp4', size: 10, durationS: 10,
+            createdAt: DateTime(2024, 1, 2), folder: 'Clips'),
+      ]);
+
+      await tester.pumpWidget(buildTestApp(const VideoVaultScreen()));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(ChoiceChip, 'Clips'), findsOneWidget);
+
+      await tester.longPress(find.widgetWithText(ChoiceChip, 'Clips'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Remove folder "Clips"?'), findsOneWidget);
+      expect(find.textContaining('2 items will be moved out first'),
+          findsOneWidget);
+
+      await tester.tap(find.text('Move to Unfiled'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(ChoiceChip, 'Clips'), findsNothing);
+      expect(find.widgetWithText(ChoiceChip, 'Unfiled'), findsOneWidget);
+      expect(fakeVideos.videos.length, 2,
+          reason: 'removing a folder must never delete an item');
+      expect(
+        fakeVideos.videos,
+        everyElement(predicate<VideoMeta>((v) => v.folder.isEmpty)),
+      );
+    });
+
+    testWidgets('PHOTOS: "Choose folder..." re-files the items into another '
+        'folder (new or existing) instead of Unfiled',
+        (WidgetTester tester) async {
+      fakePhotos.photos.addAll([
+        PhotoMeta(id: 'p1', mimeType: 'image/jpeg', size: 10,
+            createdAt: DateTime(2024, 1, 1), folder: 'Trips'),
+        PhotoMeta(id: 'p2', mimeType: 'image/jpeg', size: 10,
+            createdAt: DateTime(2024, 1, 2), folder: 'Trips'),
+        PhotoMeta(id: 'p3', mimeType: 'image/jpeg', size: 10,
+            createdAt: DateTime(2024, 1, 3), folder: 'Family'),
+      ]);
+
+      await tester.pumpWidget(buildTestApp(const PhotoVaultScreen()));
+      await tester.pumpAndSettle();
+
+      await tester.longPress(find.widgetWithText(ChoiceChip, 'Trips'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Choose folder...'));
+      await tester.pumpAndSettle();
+
+      // The picker excludes the folder being removed.
+      expect(find.text('Move to folder'), findsOneWidget);
+      expect(find.widgetWithText(ListTile, 'Family'), findsOneWidget);
+
+      // Move into a brand-new folder via Create & Move.
+      await tester.enterText(
+          find.widgetWithText(TextField, 'New folder name'), 'Archive');
+      await tester.tap(find.text('Create & Move'));
+      await tester.pumpAndSettle();
+
+      expect(find.widgetWithText(ChoiceChip, 'Trips'), findsNothing);
+      expect(find.widgetWithText(ChoiceChip, 'Archive'), findsOneWidget);
+      expect(
+        fakePhotos.photos.where((p) => p.id == 'p1' || p.id == 'p2'),
+        everyElement(predicate<PhotoMeta>((p) => p.folder == 'Archive')),
+      );
+      expect(fakePhotos.photos.length, 3);
     });
   });
 }
