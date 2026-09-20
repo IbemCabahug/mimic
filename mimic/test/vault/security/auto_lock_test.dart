@@ -722,5 +722,185 @@ void main() {
 
       AutoLock().dispose();
     });
+    // -------------------------------------------------------------------------
+    // F7: foreground-idle timeout follows the persisted choice.
+    // -------------------------------------------------------------------------
+    testWidgets('F7a: default install locks on the 5-minute default',
+        (WidgetTester tester) async {
+      late VaultCrypto crypto;
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+          ],
+          child: MaterialApp(
+            home: Consumer(
+              builder: (context, ref, _) {
+                crypto = ref.read(vaultCryptoProvider);
+                AutoLock().init(context, ref);
+                return const AutoLockWrapper(
+                  child: Text('VAULT_CONTENT'),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      await crypto.initialize('1234');
+      expect(crypto.isUnlocked, isTrue);
+      await AutoLock().loadIdleTimeout(isPro: false);
+      expect(AutoLock().idleTimeoutForTesting,
+          equals(AutoLock.defaultIdleTimeout));
+
+      // 4 minutes of silence: still open. 70 more seconds: locked.
+      await tester.pump(const Duration(minutes: 4));
+      expect(crypto.isUnlocked, isTrue);
+      await tester.pump(const Duration(seconds: 70));
+      expect(crypto.isUnlocked, isFalse);
+
+      AutoLock().dispose();
+    });
+
+    testWidgets('F7b: free choice of 10 minutes is honoured',
+        (WidgetTester tester) async {
+      late VaultCrypto crypto;
+      fakePlatform.store['auto_lock_idle_minutes'] = '10';
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+          ],
+          child: MaterialApp(
+            home: Consumer(
+              builder: (context, ref, _) {
+                crypto = ref.read(vaultCryptoProvider);
+                AutoLock().init(context, ref);
+                return const AutoLockWrapper(
+                  child: Text('VAULT_CONTENT'),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      await crypto.initialize('1234');
+      // F7b root cause (honest first run): init() itself fires
+      // _loadIdleTimeoutBestEffort fire-and-forget, racing this explicit
+      // load — AND every resetTimer() re-arms from _idleTimeout, so the
+      // load must land BEFORE the first reset arms the 5-minute default
+      // (9 pump-minutes later that stale 5-minute timer fires mid-test).
+      await tester.pump();
+      await AutoLock().loadIdleTimeout(isPro: false);
+      expect(AutoLock().idleTimeoutForTesting,
+          equals(const Duration(minutes: 10)));
+      // Re-arm from the loaded value: the timer reset() armed at init (or
+      // by the racing best-effort load) may still carry the old default.
+      AutoLock().resetTimer();
+
+      // 9 minutes of silence: still open. 70 more seconds: locked.
+      await tester.pump(const Duration(minutes: 9));
+      expect(crypto.isUnlocked, isTrue);
+      await tester.pump(const Duration(seconds: 70));
+      expect(crypto.isUnlocked, isFalse);
+
+      AutoLock().dispose();
+    });
+
+    testWidgets('F7c: stale Pro value on a free install degrades to the free ceiling',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+          ],
+          child: MaterialApp(
+            home: Consumer(
+              builder: (context, ref, _) {
+                AutoLock().init(context, ref);
+                return const AutoLockWrapper(
+                  child: Text('VAULT_CONTENT'),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      // A lapsed install whose storage still holds a Pro 30-minute choice:
+      // the free ceiling (10 min) applies, never a lockout, never the
+      // stale Pro value.
+      fakePlatform.store['auto_lock_idle_minutes'] = '30';
+      await AutoLock().loadIdleTimeout(isPro: false);
+      expect(AutoLock().idleTimeoutForTesting,
+          equals(AutoLock.freeIdleCeiling));
+
+      AutoLock().dispose();
+    });
+
+    testWidgets('F7d: Pro choice of 30 minutes is honoured while Pro',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+          ],
+          child: MaterialApp(
+            home: Consumer(
+              builder: (context, ref, _) {
+                AutoLock().init(context, ref);
+                return const AutoLockWrapper(
+                  child: Text('VAULT_CONTENT'),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      fakePlatform.store['auto_lock_idle_minutes'] = '30';
+      await AutoLock().loadIdleTimeout(isPro: true);
+      expect(AutoLock().idleTimeoutForTesting,
+          equals(AutoLock.absoluteIdleCap));
+
+      AutoLock().dispose();
+    });
+
+    testWidgets('F7e: foreign and below-floor values fall back to the default',
+        (WidgetTester tester) async {
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            platformServiceProvider.overrideWithValue(fakePlatform),
+          ],
+          child: MaterialApp(
+            home: Consumer(
+              builder: (context, ref, _) {
+                AutoLock().init(context, ref);
+                return const AutoLockWrapper(
+                  child: Text('VAULT_CONTENT'),
+                );
+              },
+            ),
+          ),
+        ),
+      );
+
+      fakePlatform.store['auto_lock_idle_minutes'] = 'not-a-number';
+      await AutoLock().loadIdleTimeout(isPro: true);
+      expect(AutoLock().idleTimeoutForTesting,
+          equals(AutoLock.defaultIdleTimeout));
+
+      // A 1-minute choice would weaken the protective floor: clamped up.
+      fakePlatform.store['auto_lock_idle_minutes'] = '1';
+      await AutoLock().loadIdleTimeout(isPro: true);
+      expect(AutoLock().idleTimeoutForTesting,
+          equals(AutoLock.defaultIdleTimeout));
+
+      AutoLock().dispose();
+    });
   });
 }

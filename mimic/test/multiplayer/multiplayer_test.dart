@@ -12,7 +12,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:mimic/core/theme/horror_theme.dart';
+import 'package:mimic/game/data/word_packs.dart';
 import 'package:mimic/game/state/game_state.dart';
+import 'package:mimic/multiplayer/game_sync.dart';
 import 'package:mimic/multiplayer/network/network_service.dart';
 import 'package:mimic/multiplayer/network/disconnect_handler.dart';
 import 'package:mimic/multiplayer/state/game_state_sync_notifier.dart';
@@ -152,6 +154,56 @@ Future<void> pumpScreen(WidgetTester tester) async {
 
 void main() {
   group('Multiplayer Game Tests', () {
+    group('6 · GameSync word-pair payload (context tiers)', () {
+      test('serializes and deserializes both context tiers round-trip', () {
+        const pair = WordPair(
+          realWord: 'Cemetery',
+          mimicWord: 'Garden',
+          realWordContext: 'free real',
+          mimicWordContext: 'free mimic',
+          realWordProContext: 'pro real',
+          mimicWordProContext: 'pro mimic',
+        );
+        final state = GameState(
+          players: [Player(id: 'h', name: 'Host', color: 0xFF7F77DD)],
+          currentWordPair: pair,
+        );
+
+        final json = GameSync.serializeState(state);
+        expect(json['currentWordPair']['realWordContext'], 'free real');
+        expect(json['currentWordPair']['realWordProContext'], 'pro real');
+
+        final back = GameSync.deserializeState(json);
+        expect(back, isNotNull);
+        expect(back!.currentWordPair!.realWordContext, 'free real');
+        expect(back.currentWordPair!.mimicWordContext, 'free mimic');
+        expect(back.currentWordPair!.realWordProContext, 'pro real');
+        expect(back.currentWordPair!.mimicWordProContext, 'pro mimic');
+      });
+
+      test('a pre-Pro payload without pro keys deserializes to empty pro fields', () {
+        const legacyPair = {
+          'realWord': 'Cemetery',
+          'mimicWord': 'Garden',
+          'realWordContext': 'free real',
+          'mimicWordContext': 'free mimic',
+        };
+        final state = GameState(
+          players: [Player(id: 'h', name: 'Host', color: 0xFF7F77DD)],
+          currentWordPair: const WordPair(realWord: 'Cemetery', mimicWord: 'Garden'),
+        );
+        final json = GameSync.serializeState(state);
+        json['currentWordPair'] = legacyPair;
+
+        final back = GameSync.deserializeState(json);
+        expect(back, isNotNull);
+        expect(back!.currentWordPair!.realWordContext, 'free real');
+        expect(back.currentWordPair!.mimicWordContext, 'free mimic');
+        expect(back.currentWordPair!.realWordProContext, '');
+        expect(back.currentWordPair!.mimicWordProContext, '');
+      });
+    });
+
     late FakeNetworkService fakeNetworkService;
     late ProviderContainer container;
     late ProviderSubscription<GameSyncState> gameStateSyncSub;

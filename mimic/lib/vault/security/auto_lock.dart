@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path_provider/path_provider.dart';
 import '../crypto/vault_crypto.dart';
 import '../services/media_stream_server.dart';
+import '../services/pro_status_service.dart';
 import '../services/video_vault_service.dart';
 import '../../core/services/platform_service.dart';
 import '../../core/router/app_router.dart' as router;
@@ -27,12 +28,61 @@ class AutoLock with WidgetsBindingObserver {
   // M20: three different clocks, for three different situations.
   //   foreground idle   5 minutes  — long enough to read a screen, short enough that an
   //                                  abandoned unlocked phone does not stay open.
+  //                                  F7: configurable (see _idleTimeout below); the
+  //                                  5-minute value is the protective default.
   //   background grace  1 minute   — the app is unattended and out of sight; lock fast. This
   //                                  applies even when a screen has paused the idle clock.
+  //                                  NEVER user-configurable (F7 design constraint).
   //   suspendCeiling    30 minutes — final backstop for read-only screens (decision D13).
-  static const Duration _timeout = Duration(minutes: 5);
+  //   (The old `_timeout` const is retired: [defaultIdleTimeout] below is
+  //   its replacement as the protective default, kept equal at 5 minutes.)
   static const Duration _backgroundGrace = Duration(minutes: 1);
   static const Duration suspendCeiling = Duration(minutes: 30);
+  // F7: the foreground idle clock is user-configurable. Free choices run
+  // from the protective default up to the free ceiling; Pro choices may
+  // extend to the absolute cap (which equals the suspend ceiling on
+  // purpose — nothing the user picks can outlive the final backstop).
+  // The background grace has no equivalent knob: it stays 1 minute.
+  static const Duration defaultIdleTimeout = Duration(minutes: 5);
+  static const Duration freeIdleCeiling = Duration(minutes: 10);
+  static const Duration absoluteIdleCap = Duration(minutes: 30);
+  Duration _idleTimeout = defaultIdleTimeout;
+
+  @visibleForTesting
+  Duration get idleTimeoutForTesting => _idleTimeout;
+
+  @visibleForTesting
+  void setIdleTimeoutForTesting(Duration value) {
+    _idleTimeout = value;
+  }
+
+  /// F7: loads the persisted foreground-idle choice from secure storage at
+  /// unlock ('auto_lock_idle_minutes', whole minutes). A Pro choice above
+  /// the free ceiling is honoured ONLY while [isPro] is true — a lapsed
+  /// install with a stale Pro value silently degrades to the free ceiling,
+  /// never to a lockout and never below the protective default. Never
+  /// throws: unreadable storage keeps the default.
+  Future<void> loadIdleTimeout({required bool isPro}) async {
+    final container = _container;
+    if (container == null) return;
+    try {
+      final stored = await container
+          .read(platformServiceProvider)
+          .secureRead('auto_lock_idle_minutes');
+      final minutes = int.tryParse(stored ?? '');
+      if (minutes == null) {
+        _idleTimeout = defaultIdleTimeout;
+        return;
+      }
+      final wanted = Duration(minutes: minutes);
+      final ceiling = isPro ? absoluteIdleCap : freeIdleCeiling;
+      _idleTimeout = wanted < defaultIdleTimeout
+          ? defaultIdleTimeout
+          : (wanted > ceiling ? ceiling : wanted);
+    } catch (_) {
+      _idleTimeout = defaultIdleTimeout;
+    }
+  }
   bool _observerRegistered = false;
   DateTime? _backgroundedAt;
   // M22: Android delivers the picker result and the "back in foreground" event
@@ -94,7 +144,9 @@ class AutoLock with WidgetsBindingObserver {
     // M19: a suspend that never got its matching resume would leave the counter above zero,
     // and resetTimer() would then never arm the idle timer again for the rest of the session.
     // Unlocking is a clean slate: nobody can legitimately be holding a pause at this moment.
+    // F7: the persisted foreground-idle choice loads here too (best-effort).
     _suspendCount = 0;
+    unawaited(_loadIdleTimeoutBestEffort());
     _protectedOpCount = 0;
     _protectedOpAtPause = false;
 
@@ -140,7 +192,20 @@ class AutoLock with WidgetsBindingObserver {
     _timer?.cancel();
     if (_suspendCount > 0) return;
     if (_context == null || _ref == null) return;
-    _timer = Timer(_timeout, _lockVault);
+    _timer = Timer(_idleTimeout, _lockVault);
+  }
+
+  /// F7 helper: reads the Pro flag and the persisted idle choice without
+  /// ever throwing; unlock must never fail because a preference was
+  /// unreadable. A missing import would be a compile error, not a runtime
+  /// one — the Pro service is part of Phase 1 scaffolding.
+  Future<void> _loadIdleTimeoutBestEffort() async {
+    final container = _container;
+    if (container == null) return;
+    try {
+      final isPro = await container.read(proStatusServiceProvider).isPro();
+      await loadIdleTimeout(isPro: isPro);
+    } catch (_) {}
   }
 
   void suspend() {

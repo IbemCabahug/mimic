@@ -35,6 +35,12 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
   bool _mimicWasCaught = false;
   String _accusedPlayerId = '';
 
+  /// F31: one continuation per screen instance. The NEXT ROUND / END GAME
+  /// button stays tappable for a moment while the route transition plays;
+  /// a double-tap used to run nextRound() twice, skipping a round and
+  /// re-dealing roles mid-flow.
+  bool _continueHandled = false;
+
   // Multiplayer variables
   StreamSubscription<Map<String, dynamic>>? _messageSub;
   late AnimationController _pulseController;
@@ -102,6 +108,25 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
     final bool isDeadlock = topPlayers.length != 1; // tie OR no votes
     _accusedPlayerId = isDeadlock ? '' : topPlayers.first;
 
+    // F31: this method's side effects (elimination, score award, outcome
+    // record) must run exactly once per round. This screen is pushed, not
+    // replaced, so re-entering it on the same votes replays the method on a
+    // fresh instance. Previously that replay re-toggled the Survival
+    // elimination — REVIVING the player the table had voted out, who could
+    // then be dealt the Mimic next round. If this round's outcome is already
+    // on record, we are that replay: rebuild the display flags from the
+    // record and touch nothing.
+    final recordedOutcomes = gameState.roundOutcomes
+        .where((o) => o.round == gameState.currentRound)
+        .toList();
+    if (recordedOutcomes.isNotEmpty) {
+      final outcome = recordedOutcomes.first;
+      _accusedPlayerId = outcome.accusedPlayerId ?? '';
+      _mimicWasCaught =
+          _accusedPlayerId.isNotEmpty && mimicIds.contains(_accusedPlayerId);
+      return;
+    }
+
     if (_accusedPlayerId.isEmpty) {
       gameStateNotifier.addRoundOutcome(RoundOutcome(
         round: gameState.currentRound,
@@ -116,7 +141,10 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
 
     // Handle Survival Mode Elimination
     if (gameState.gameMode == GameMode.survival) {
-      gameStateNotifier.toggleEliminated(_accusedPlayerId);
+      // F31: eliminatePlayer is idempotent and one-way. toggleEliminated
+      // (the old call here) revived any already-eliminated player it was
+      // handed — the root cause of voted-out Watchers turning up as Mimics.
+      gameStateNotifier.eliminatePlayer(_accusedPlayerId);
     }
 
     // Record round outcome exactly once
@@ -208,11 +236,16 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
   }
 
   void _playAgain() {
+    // F31: guard against a second continuation from this instance — the
+    // button is tappable during the route transition, and a double-tap used
+    // to advance the round twice.
+    if (_continueHandled) return;
+    _continueHandled = true;
     final networkService = ref.read(networkServiceProvider);
     if (networkService.isConnected) {
       if (networkService.role == NetworkRole.host) {
         ref.read(gameStateSyncProvider.notifier).startNextRound();
-        Navigator.of(context).pushNamed(MimicGame.wordRevealRoute);
+        Navigator.of(context).pushReplacementNamed(MimicGame.wordRevealRoute);
       }
     } else {
       final gameState = ref.read(gameStateProvider);
@@ -220,7 +253,9 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
         Navigator.of(context).pushReplacementNamed(MimicGame.finalStandingsRoute);
       } else {
         ref.read(gameStateProvider.notifier).nextRound();
-        Navigator.of(context).pushNamed(MimicGame.wordRevealRoute);
+        // F31: replace, not push. Leaving results on the stack let the owner
+        // walk back into a finished verdict and re-run the round flow.
+        Navigator.of(context).pushReplacementNamed(MimicGame.wordRevealRoute);
       }
     }
   }
@@ -607,6 +642,12 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
   Widget _buildSurvivalStatus(GameState gameState) {
     final survivorsCount = gameState.players.where((p) => !p.isEliminated).length;
     final deadPlayers = gameState.players.where((p) => p.isEliminated).toList();
+    final accusedName = gameState.players
+        .firstWhere(
+          (p) => p.id == _accusedPlayerId,
+          orElse: () => Player(id: '', name: '?', color: 0),
+        )
+        .name;
 
     return Container(
       width: double.infinity,
@@ -627,6 +668,21 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
               letterSpacing: 1.0,
             ),
           ),
+          // F31: name the eliminated player and say plainly whether the vote
+          // landed. "ROUND COMPLETE" alone left the table guessing who was
+          // gone and whether it mattered.
+          if (_accusedPlayerId.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              '$accusedName was eliminated — '
+                  '${_mimicWasCaught ? "they were the Mimic" : "they were NOT the Mimic"}.',
+              style: GoogleFonts.inter(
+                color: _mimicWasCaught ? HorrorColors.crimson : HorrorColors.fogWhite,
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
           if (deadPlayers.isNotEmpty) ...[
             const SizedBox(height: 8),
             Text(
@@ -658,6 +714,22 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
             letterSpacing: 1.0,
           ),
         ),
+        // F31: the scoreboard's actual job in Survival was invisible — it is
+        // the tiebreaker when the round cap ends the game with survivors
+        // still standing. Say so, or nobody can tell what the numbers mean.
+        if (gameState.gameMode == GameMode.survival)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              'Points are the tiebreaker: if the rounds run out, the '
+                  'highest-scoring survivor wins.',
+              style: GoogleFonts.inter(
+                color: HorrorColors.ashGray,
+                fontSize: 11,
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ),
         const SizedBox(height: 8),
         Expanded(
           child: ListView.builder(

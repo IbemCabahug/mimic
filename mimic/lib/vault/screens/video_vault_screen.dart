@@ -567,8 +567,9 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     return _videos.where((v) => v.folder == _selectedFolder).toList();
   }
 
-  Widget _folderChip(String label, bool selected, VoidCallback onTap) {
-    return ChoiceChip(
+  Widget _folderChip(String label, bool selected, VoidCallback onTap,
+      {VoidCallback? onLongPress}) {
+    final chip = ChoiceChip(
       label: Text(label,
           style: TextStyle(
               fontFamily: 'Inter',
@@ -579,6 +580,9 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
       selectedColor: VaultColors.accent,
       showCheckmark: false,
     );
+    if (onLongPress == null) return chip;
+    // F31: long-press on a named folder is the remove affordance.
+    return GestureDetector(onLongPress: onLongPress, child: chip);
   }
 
   Widget _buildFolderChips() {
@@ -599,7 +603,8 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     }
     for (final f in folders) {
       chips.add(_folderChip(f, _selectedFolder == f,
-          () => setState(() => _selectedFolder = f)));
+          () => setState(() => _selectedFolder = f),
+          onLongPress: () => _removeFolder(f)));
     }
     if (chips.length == 1) return const SizedBox.shrink();
     return SizedBox(
@@ -618,10 +623,10 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
   /// Shared folder picker. Every label carries an EXPLICIT dark color: the
   /// dialog background is white, but ListTile/TextField text otherwise
   /// inherits the app's dark-theme font (white), turning invisible.
-  Future<String?> _pickFolder() async {
+  Future<String?> _pickFolder({String? exclude}) async {
     final existingFolders = _videos
         .map((v) => v.folder)
-        .where((f) => f.isNotEmpty)
+        .where((f) => f.isNotEmpty && f != exclude)
         .toSet()
         .toList()
       ..sort();
@@ -698,6 +703,73 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
       await ref.read(videoVaultServiceProvider).moveVideo(video.id, chosen);
       await _loadVideos();
     }
+  }
+
+  /// F31: long-press a folder chip to remove it. Safety rule (owner's call):
+  /// a folder is removed only by moving its items OUT first — this vault has
+  /// no trash can, so a folder-and-contents wipe would be unrecoverable.
+  /// Items are re-filed (Unfiled by default, or a folder the owner picks);
+  /// nothing is deleted, and the label disappears once no item carries it.
+  Future<void> _removeFolder(String folder) async {
+    final count = _videos.where((v) => v.folder == folder).length;
+    final action = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: Colors.white,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Remove folder "$folder"?',
+            style: const TextStyle(
+                color: VaultColors.textPrimary,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'Inter')),
+        content: Text(
+          '$count ${count == 1 ? 'item' : 'items'} will be moved out first — '
+              'removing a folder never deletes anything. Where should they go?',
+          style: const TextStyle(
+              fontFamily: 'Inter', color: VaultColors.textPrimary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(null),
+            child: const Text('Cancel',
+                style: TextStyle(color: VaultColors.textTertiary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop('unfiled'),
+            child: const Text('Move to Unfiled',
+                style: TextStyle(color: VaultColors.textSecondary)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop('choose'),
+            child: const Text('Choose folder...',
+                style: TextStyle(
+                    color: VaultColors.accent, fontWeight: FontWeight.w600)),
+          ),
+        ],
+      ),
+    );
+    if (action == null || !mounted) return;
+
+    String target = '';
+    if (action == 'choose') {
+      final picked = await _pickFolder(exclude: folder);
+      if (picked == null || !mounted) return;
+      if (picked == folder) return; // moving into itself changes nothing
+      target = picked;
+    }
+
+    final service = ref.read(videoVaultServiceProvider);
+    for (final video in _videos.where((v) => v.folder == folder).toList()) {
+      await service.moveVideo(video.id, target);
+    }
+    await _loadVideos();
+    if (!mounted) return;
+    setState(() {
+      if (_selectedFolder == folder) _selectedFolder = null;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Folder "$folder" removed — items are safe in '
+            '${target.isEmpty ? 'Unfiled' : target}')));
   }
 
   // ── Multi-select batch operations ────────────────────────────────────

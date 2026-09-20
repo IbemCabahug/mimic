@@ -129,7 +129,14 @@ void main() {
     fakePlatform = FakePlatformService();
     fakeCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
     secureFlagsList.clear();
-    SharedPreferences.setMockInitialValues(<String, Object>{});
+    SharedPreferences.setMockInitialValues(<String, Object>{
+      // F30: pretend an owner who already read the field manual. The manual
+      // introduces itself once, on the first arrival at the vault home, so
+      // unacknowledged it would sit on top of the route these security tests
+      // assert against. Its own first-run behaviour is covered by
+      // vault_screens_test.dart group '10 · Field Manual (F30)'.
+      'field_manual_seen': true,
+    });
   });
 
   /// Build the integration test app environment with Riverpod overrides.

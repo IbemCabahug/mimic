@@ -81,6 +81,10 @@ class GameSync {
           ? {
               'realWord': state.currentWordPair!.realWord,
               'mimicWord': state.currentWordPair!.mimicWord,
+              'realWordContext': state.currentWordPair!.realWordContext,
+              'mimicWordContext': state.currentWordPair!.mimicWordContext,
+              'realWordProContext': state.currentWordPair!.realWordProContext,
+              'mimicWordProContext': state.currentWordPair!.mimicWordProContext,
             }
           : null,
       'secondMimicWord': state.secondMimicWord,
@@ -126,6 +130,15 @@ class GameSync {
         wordPair = WordPair(
           realWord: wpMap['realWord'] as String? ?? '',
           mimicWord: wpMap['mimicWord'] as String? ?? '',
+          // Older peers may not send the describing-angles contexts at all;
+          // empty simply hides the info button on the receiving device.
+          // Peers from before the Pro split carry only the free (generalized)
+          // fields, so the pro tiers just stay empty and the fallback in
+          // GameState.getContextForPlayer shows the free angles.
+          realWordContext: wpMap['realWordContext'] as String? ?? '',
+          mimicWordContext: wpMap['mimicWordContext'] as String? ?? '',
+          realWordProContext: wpMap['realWordProContext'] as String? ?? '',
+          mimicWordProContext: wpMap['mimicWordProContext'] as String? ?? '',
         );
       }
 

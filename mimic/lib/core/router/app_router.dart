@@ -38,6 +38,7 @@ import 'package:mimic/vault/screens/import_vault_screen.dart';
 import 'package:mimic/vault/screens/set_duress_pin_screen.dart';
 import 'package:mimic/vault/screens/video_vault_screen.dart';
 import 'package:mimic/vault/screens/vault_diagnostics_screen.dart';
+import 'package:mimic/vault/screens/vault_manual_screen.dart';
 import '../../vault/security/secure_screen.dart';
 
 // Multiplayer screens
@@ -91,6 +92,7 @@ class AppRouter {
   static const String vaultImportRoute = '/vault-import';
   static const String vaultVideosRoute = '/vault-videos';
   static const String vaultDiagnosticsRoute = '/vault-diagnostics';
+  static const String vaultManualRoute = '/vault-manual';
 
   // Multiplayer route names
   static const String multiplayerHostRoute = '/multiplayer/host';
@@ -343,6 +345,17 @@ class AppRouter {
             guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
             redirectRoute: homeRoute,
             child: const SecureGuard(child: VaultDiagnosticsScreen()),
+          ),
+          settings: settings,
+        );
+      case vaultManualRoute:
+        // F30: the field manual is an owner-only document, so it carries the
+        // same guard as every other vault screen — no route, no manual.
+        return MaterialPageRoute(
+          builder: (_) => RouteGuard(
+            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
+            redirectRoute: homeRoute,
+            child: const SecureGuard(child: VaultManualScreen()),
           ),
           settings: settings,
         );
