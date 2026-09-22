@@ -13,6 +13,7 @@ import '../../vault/trigger/gesture_store.dart';
 import '../../vault/trigger/vault_entrance.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/game/game.dart';
+import '../../vault/security/secret_entry_trail.dart';
 
 class VotingScreen extends ConsumerStatefulWidget {
   const VotingScreen({super.key});
@@ -348,6 +349,10 @@ class _VotingScreenState extends ConsumerState<VotingScreen> {
               },
               verifyLength: GestureStore.requiredGestureLength,
               onTrigger: () {
+                // Anchor the secret entry to this screen, so the duress
+                // panel's RETURN TO GAME returns the mimic to the live
+                // voting round instead of a rebuilt game home.
+                SecretEntryTrail.setOrigin(MimicGame.votingRoute);
                 Navigator.of(context).pushNamed(MimicGame.vaultPinRoute);
               },
             ),

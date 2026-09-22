@@ -1221,6 +1221,49 @@ void main() {
       verifyNoPlaintextWritten(fakePlatform, ['My secret note']);
     });
 
+    testWidgets('Clear All Data dialog runs the full wipe and confirms', (WidgetTester tester) async {
+      // The Danger Zone row sits at the bottom of a long settings list; build
+      // at full height so the tap does not depend on scrolling (same reason
+      // as the render test above).
+      tester.view.physicalSize = const Size(800, 4200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Clear All Data'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Clear All Vault Data'), findsOneWidget);
+      expect(find.text('Delete Everything'), findsOneWidget);
+
+      // Seed the legacy/web photo index key the wipe service owns. The
+      // injected fake services inherit the real `wipeAllData()` bodies, so
+      // this key disappearing proves the screen actually ran the wipe.
+      fakePlatform.secureStore['vault_photos_meta'] = 'legacy-photo-index';
+
+      // The handler awaits a real wipe (file + SQLite I/O), and those futures
+      // never complete while the widget test drives a fake clock — the same
+      // reason the PIN-change test above runs its tap inside `runAsync`.
+      await tester.runAsync(() async {
+        await tester.tap(find.text('Delete Everything'));
+        final deadline = DateTime.now().add(const Duration(seconds: 20));
+        while (find.text('All vault data cleared').evaluate().isEmpty &&
+            DateTime.now().isBefore(deadline)) {
+          await tester.pump(const Duration(milliseconds: 50));
+          await Future<void>.delayed(const Duration(milliseconds: 20));
+        }
+      });
+      await tester.pump();
+
+      expect(fakePlatform.secureStore['vault_photos_meta'], isNull,
+          reason: 'Clear All Data must delete the stored content metadata');
+      expect(find.text('All vault data cleared'), findsOneWidget,
+          reason: 'The dialog must confirm the wipe to the user');
+    });
+
     testWidgets('G1: the settings screen renders a row titled Unlock Gesture, and tapping it shows GestureSetupScreen', (WidgetTester tester) async {
       await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
       await tester.pumpAndSettle();

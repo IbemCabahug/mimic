@@ -10,6 +10,7 @@ import 'package:mimic/multiplayer/network/network_service.dart';
 import 'package:mimic/game/data/language_store.dart';
 import 'package:mimic/vault/services/pro_status_service.dart';
 import 'package:mimic/vault/services/quick_entry_service.dart';
+import 'package:mimic/vault/security/secret_entry_trail.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -102,6 +103,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> with TickerProviderStat
         .read(quickEntryServiceProvider)
         .shouldOpenEntry(isPro: isPro);
     if (!allowed || !mounted) return;
+    // Anchor the secret entry to this screen, so the duress panel's
+    // RETURN TO GAME (and the PIN screen's close arrow) returns the mimic
+    // here — the game home the shortcut was used on.
+    SecretEntryTrail.setOrigin(MimicGame.homeRoute);
     Navigator.of(context).pushNamed(MimicGame.vaultPinRoute);
   }
 

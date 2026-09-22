@@ -9,7 +9,7 @@ import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/core/animations/horror_animations.dart';
 import '../state/game_state.dart';
 import '../../vault/trigger/trigger_detector.dart';
-import '../../vault/screens/pin_screen.dart';
+import '../../vault/security/secret_entry_trail.dart';
 import 'package:mimic/game/game.dart';
 import 'package:mimic/multiplayer/network/network_service.dart';
 import 'package:mimic/multiplayer/state/game_state_sync_notifier.dart';
@@ -310,11 +310,17 @@ class _ResultsScreenState extends ConsumerState<ResultsScreen> with TickerProvid
               onTrigger: () {
                 final net = ref.read(networkServiceProvider);
                 if (isMultiplayerSessionActive(net)) return;
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => const PinScreen(),
-                  ),
-                );
+                // Anchor the secret entry to THIS screen — the verdict the
+                // mimic is looking at — so the duress panel's RETURN TO GAME
+                // resumes the finished round here instead of tearing the
+                // session down to the game home. Without this the trail is
+                // empty and the exit can only fall back to the root.
+                SecretEntryTrail.setOrigin(MimicGame.resultsRoute);
+                // Push the vault PIN ROUTE, not a bare PinScreen(): the named
+                // route carries RouteGuard (web and multiplayer refusal) and
+                // SecureGuard (FLAG_SECURE, so the PIN screen never lands in
+                // a recents thumbnail), which a raw MaterialPageRoute skips.
+                Navigator.of(context).pushNamed(MimicGame.vaultPinRoute);
               },
             ),
           ],

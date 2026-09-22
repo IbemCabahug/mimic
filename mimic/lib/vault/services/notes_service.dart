@@ -1,5 +1,6 @@
 // lib/vault/services/notes_service.dart
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:path/path.dart' as p;
@@ -154,6 +155,45 @@ class NotesService {
 
     await _ensureDb();
     await _db!.delete('notes', where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// Closes the cached SQLite connection and resets the lazy-open state, so
+  /// the next call reopens a fresh database instead of serving rows from a
+  /// file that no longer exists. Mirrors FileVaultService.closeDatabase —
+  /// this is what made notes survive Clear All Data in-session (the old
+  /// dialog deleted the WEB-ONLY `vault_notes` key, while the device notes
+  /// live in `vault_notes.db`).
+  Future<void> closeDatabase() async {
+    final db = _db;
+    _db = null;
+    _openDbFuture = null;
+    if (db != null && db.isOpen) {
+      try {
+        await db.close();
+      } catch (_) {}
+    }
+  }
+
+  /// Danger Zone → Clear All Data support. Removes the notes store: on mobile
+  /// the `vault_notes.db` database and every SQLite sidecar file, and the
+  /// `vault_notes` metadata key everywhere (web store / legacy key). Notes
+  /// have no blob files. Access state is never touched.
+  Future<void> wipeAllData() async {
+    if (!kIsWeb) {
+      await closeDatabase();
+      try {
+        final dbPath = p.join(await getDatabasesPath(), 'vault_notes.db');
+        for (final suffix in const ['', '-journal', '-wal', '-shm']) {
+          final artifact = File('$dbPath$suffix');
+          if (await artifact.exists()) {
+            await artifact.delete();
+          }
+        }
+      } catch (_) {}
+    }
+    try {
+      await _platformService.secureDelete(_webKey);
+    } catch (_) {}
   }
 
   Future<List<Note>> getAllNotes() async {

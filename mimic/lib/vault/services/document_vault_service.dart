@@ -409,6 +409,32 @@ class DocumentVaultService {
     await _saveMeta(existing);
   }
 
+  /// Danger Zone → Clear All Data support. Removes the document store: the
+  /// `vault_documents_meta` key from BOTH stores that hold it on mobile
+  /// (secure storage and the SharedPreferences redundancy copy — the old
+  /// Clear All Data deleted neither, so documents survived), plus the per-id
+  /// web blob entries. Documents on mobile are stored in the shared
+  /// `vault_files/` directory, purged by [VaultWipeService]. Access state is
+  /// never touched.
+  Future<void> wipeAllData() async {
+    if (kIsWeb) {
+      try {
+        for (final doc in await listDocuments()) {
+          try {
+            await _platformService.deleteFile(doc.id);
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
+    try {
+      await _platformService.secureDelete(_storageKey);
+    } catch (_) {}
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_storageKey);
+    } catch (_) {}
+  }
+
   Future<void> moveDocument(String id, String folder) async {
     final existing = await listDocuments();
     final index = existing.indexWhere((d) => d.id == id);

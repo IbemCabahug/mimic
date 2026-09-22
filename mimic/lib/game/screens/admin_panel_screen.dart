@@ -5,12 +5,57 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/game/state/game_state.dart';
 import 'package:mimic/game/services/stats_service.dart';
+import 'package:mimic/vault/security/secret_entry_trail.dart';
 
-class AdminPanelScreen extends ConsumerWidget {
+class AdminPanelScreen extends ConsumerStatefulWidget {
   const AdminPanelScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<AdminPanelScreen> createState() => _AdminPanelScreenState();
+}
+
+class _AdminPanelScreenState extends ConsumerState<AdminPanelScreen> {
+  /// One-shot latch, the same shape as ResultsScreen's `_continueHandled`:
+  /// every way out of this decoy — the leading tile, the bottom Exit tile,
+  /// the app-bar back arrow, system BACK — funnels through one exit, and a
+  /// second call while the first exit is still animating out would pop one
+  /// route PAST the origin. A panicking bystander double-taps a "leave"
+  /// button, and landing a screen further back than the entry point is the
+  /// very symptom this exit exists to fix. Only the first call runs; a new
+  /// panel instance starts unlatched.
+  bool _exiting = false;
+
+  @override
+  Widget build(BuildContext context) {
+    // `canPop: false` is deliberate: the exit decides where to land, and
+    // whatever route happens to sit below, a bystander must never fall
+    // through to the vault and a back press must never look like the app
+    // crashed.
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _exitToGame(context);
+      },
+      child: _buildPanel(context),
+    );
+  }
+
+  /// The single exit this screen has: return to the game screen the
+  /// secret entry was opened from — the live voting round (voting-screen
+  /// gesture), the verdict screen (results-screen sequence) or the game
+  /// home (quick-entry long-press). With no usable origin — AutoLock and
+  /// Settings → Lock Vault leave this panel as the ONLY route — it rebuilds
+  /// the game home fresh. Either way nothing vault-side survives: popping
+  /// only removes routes above the origin, and the fallback is always a
+  /// game screen, never the vault.
+  void _exitToGame(BuildContext context) {
+    if (_exiting) return;
+    _exiting = true;
+    exitSecretScreenToOrigin(context);
+  }
+
+  Widget _buildPanel(BuildContext context) {
     final gameState = ref.watch(gameStateProvider);
     final gameNotifier = ref.read(gameStateProvider.notifier);
     final stats = ref.read(statsServiceProvider);
@@ -33,6 +78,27 @@ class AdminPanelScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // The duress PIN and the biometric decoy both replace the PIN route
+          // (pushReplacementNamed), so what sits under this screen depends on
+          // how the vault was opened: coming from the game home or the voting
+          // screen leaves that live game route below, and the exit POPS back
+          // to it (the voting round resumes). AutoLock, the vault lock button
+          // and Settings → Lock Vault push '/vault-pin' with
+          // pushNamedAndRemoveUntil — the panel is then the ONLY route, and
+          // the exit rebuilds the game home on a cleared stack. Either way no
+          // vault route is ever exposed. Someone handed the phone must not
+          // have to scroll to the bottom of a long cheat list to leave, so
+          // lead with the exit, loudly, before any game intel. The PopScope
+          // above sends system BACK through the same exit.
+          _buildActionTile(
+            context,
+            icon: Icons.sports_esports,
+            title: 'RETURN TO GAME',
+            subtitle: 'Leave the admin panel and return to the game',
+            onTap: () => _exitToGame(context),
+          ),
+
+          const SizedBox(height: 24),
           _buildSectionHeader('GAME INTEL'),
           _buildActionTile(
             context,
@@ -214,7 +280,11 @@ class AdminPanelScreen extends ConsumerWidget {
             icon: Icons.exit_to_app,
             title: 'Exit',
             subtitle: 'Return to game seamlessly',
-            onTap: () => Navigator.of(context).pushNamedAndRemoveUntil('/', (route) => false),
+            // The second way out of the decoy, on the SAME exit as the
+            // leading RETURN TO GAME tile: whoever reads the panel from top to
+            // bottom must not have a live round torn down to the game home
+            // just because they left from the bottom.
+            onTap: () => _exitToGame(context),
             iconColor: HorrorColors.crimson,
           ),
 
@@ -246,42 +316,49 @@ class AdminPanelScreen extends ConsumerWidget {
     required VoidCallback onTap,
     Color iconColor = HorrorColors.crimson,
   }) {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 4),
-      decoration: BoxDecoration(
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      // A Material, not a colour-decorated Container: ListTile paints its
+      // background and ink splash on the nearest Material ancestor, so a
+      // Container with a colour between the Scaffold and the tile both hid
+      // the tap ripple (bad for someone poking at a decoy panel) and tripped
+      // Flutter's "ListTile background color or ink splashes may be invisible"
+      // assertion on every build.
+      child: Material(
         color: HorrorColors.cardSurface,
         borderRadius: BorderRadius.circular(12),
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-        leading: Container(
-          width: 40,
-          height: 40,
-          decoration: BoxDecoration(
-            color: iconColor.withValues(alpha: 0.15),
-            shape: BoxShape.circle,
+        clipBehavior: Clip.antiAlias,
+        child: ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          leading: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.15),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: iconColor, size: 20),
           ),
-          child: Icon(icon, color: iconColor, size: 20),
-        ),
-        title: Text(
-          title,
-          style: const TextStyle(
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-            color: HorrorColors.fogWhite,
-            fontFamily: 'Inter',
+          title: Text(
+            title,
+            style: const TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w600,
+              color: HorrorColors.fogWhite,
+              fontFamily: 'Inter',
+            ),
           ),
-        ),
-        subtitle: Text(
-          subtitle,
-          style: const TextStyle(
-            fontSize: 12,
-            color: HorrorColors.ashGray,
-            fontFamily: 'Inter',
+          subtitle: Text(
+            subtitle,
+            style: const TextStyle(
+              fontSize: 12,
+              color: HorrorColors.ashGray,
+              fontFamily: 'Inter',
+            ),
           ),
+          trailing: const Icon(Icons.chevron_right, color: HorrorColors.ashGray, size: 18),
+          onTap: onTap,
         ),
-        trailing: const Icon(Icons.chevron_right, color: HorrorColors.ashGray, size: 18),
-        onTap: onTap,
       ),
     );
   }

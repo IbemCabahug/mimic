@@ -1,5 +1,6 @@
 // mimic/lib/vault/services/file_vault_service.dart
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -320,6 +321,55 @@ class FileVaultService {
         PhotoMeta.fromMap(maps.single).copyWith(folder: folder);
     await _db!.update(_tableName, updated.toMap(),
         where: 'id = ?', whereArgs: [id]);
+  }
+
+  /// Closes the cached SQLite connection and resets the lazy-open state, so
+  /// the next call reopens a fresh database instead of serving rows from a
+  /// file that no longer exists (an open SQLite handle keeps serving the
+  /// deleted content for the rest of the session — this is what made photos
+  /// survive Clear All Data even after the store itself was removed).
+  Future<void> closeDatabase() async {
+    final db = _db;
+    _db = null;
+    _openDbFuture = null;
+    if (db != null && db.isOpen) {
+      try {
+        await db.close();
+      } catch (_) {}
+    }
+  }
+
+  /// Danger Zone → Clear All Data support. Removes THIS vault's photo store:
+  /// on mobile the metadata database and every SQLite sidecar file, on web the
+  /// per-blob entries plus the metadata key. The mobile encrypted blobs in the
+  /// shared `vault_files/` directory are purged by [VaultWipeService], which
+  /// owns the directory; web blobs live behind the platform service and must
+  /// be deleted per id here. Access state (PIN, keystore, recovery, duress) is
+  /// never touched — the vault must stay unlockable afterwards.
+  Future<void> wipeAllData() async {
+    if (kIsWeb) {
+      try {
+        for (final meta in await getAllPhotos()) {
+          try {
+            await _platformService.deleteFile(meta.id);
+          } catch (_) {}
+        }
+      } catch (_) {}
+    } else {
+      await closeDatabase();
+      try {
+        final dbPath = p.join(await getDatabasesPath(), _dbName);
+        for (final suffix in const ['', '-journal', '-wal', '-shm']) {
+          final artifact = File('$dbPath$suffix');
+          if (await artifact.exists()) {
+            await artifact.delete();
+          }
+        }
+      } catch (_) {}
+    }
+    try {
+      await _platformService.secureDelete('vault_photos_meta');
+    } catch (_) {}
   }
 
   Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptImage(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed, bool Function()? isCancelled}) async {
