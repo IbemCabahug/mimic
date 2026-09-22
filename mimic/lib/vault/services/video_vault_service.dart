@@ -222,26 +222,79 @@ class VideoVaultService {
     }
   }
 
+  /// Imports a video from an in-memory byte list.
+  ///
+  /// Streams through a temp file into the c2 (CTR) media format, so a fresh
+  /// import is born streamable: ExoPlayer can range-request it on the very
+  /// first play, with no CBC→CTR conversion wait (the low-end-device
+  /// first-play stall). The temp plaintext is securely deleted on every path;
+  /// a failed import leaves no orphan blob.
   Future<String> saveVideo(Uint8List bytes, String mimeType, int durationS, {String? originalName}) async {
     final id = const Uuid().v4();
     final now = DateTime.now();
 
-    final encrypted = await _crypto.encryptSystem(bytes);
-    await _platformService.saveEncryptedFile(id, encrypted);
+    final dest = await _platformService.resolveVaultFile(id);
+    final stamp = now.millisecondsSinceEpoch;
+    final plainTemp = File(p.join(dest.parent.path, '${id}_import_plain_$stamp'));
+    final ctrTemp = File(p.join(dest.parent.path, '${id}_import_ctr_$stamp'));
+    await dest.parent.create(recursive: true);
 
-    final meta = VideoMeta(
-      id: id,
-      mimeType: mimeType,
-      size: bytes.length,
-      durationS: durationS,
-      createdAt: now,
-      originalName: originalName,
-    );
+    bool writeSucceeded = false;
+    try {
+      await plainTemp.writeAsBytes(bytes, flush: true);
+      await _crypto.encryptStreamSystemCtr(plainTemp, ctrTemp);
+      // Atomic swap in the same directory — a crash mid-import can never
+      // leave a half-written blob at the final path.
+      await ctrTemp.rename(dest.path);
 
-    await _saveMeta(meta);
-    return id;
+      final meta = VideoMeta(
+        id: id,
+        mimeType: mimeType,
+        size: bytes.length,
+        durationS: durationS,
+        createdAt: now,
+        originalName: originalName,
+      );
+
+      await _saveMeta(meta);
+      writeSucceeded = true;
+      return id;
+    } finally {
+      // The import plaintext must never survive, success or failure.
+      try {
+        if (await plainTemp.exists()) {
+          await AutoLock.secureDeleteFile(plainTemp);
+        }
+      } catch (e) {
+        debugPrint('Failed to clean up import plaintext temp $id: $e');
+      }
+      try {
+        if (await ctrTemp.exists()) {
+          await ctrTemp.delete();
+        }
+      } catch (e) {
+        debugPrint('Failed to clean up import ctr temp $id: $e');
+      }
+      if (!writeSucceeded) {
+        // A failed import must not leave an orphan blob behind.
+        try {
+          if (await dest.exists()) {
+            await dest.delete();
+          }
+        } catch (e) {
+          debugPrint('Failed to clean up orphan video file $id: $e');
+        }
+      }
+    }
   }
 
+  /// Imports a video from a plaintext file on disk (gallery picker, batch import).
+  ///
+  /// Encrypts directly to the c2 (CTR) media format, so a fresh import is born
+  /// streamable: ExoPlayer can range-request it on the very first play, with
+  /// no CBC→CTR conversion wait (the low-end-device first-play stall). The
+  /// source is never the destination, and a failed import leaves no orphan
+  /// blob at the final path.
   Future<String> saveVideoFromFile(File src, String mimeType, int? durationS, {String? originalName}) async {
     final id = const Uuid().v4();
     final now = DateTime.now();
@@ -249,7 +302,7 @@ class VideoVaultService {
     final dest = await _platformService.resolveVaultFile(id);
     bool writeSucceeded = false;
     try {
-      await _crypto.encryptStreamSystem(src, dest);
+      await _crypto.encryptStreamSystemCtr(src, dest);
 
       final size = await src.length();
 
