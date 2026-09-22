@@ -1,4 +1,6 @@
 // lib/game/game.dart
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
@@ -8,6 +10,7 @@ import 'package:mimic/multiplayer/network/network_service.dart';
 import 'package:mimic/core/providers/provider_registration.dart'
     show vaultConcealServiceProvider, disconnectHandlerProvider, networkServiceProvider;
 import 'package:mimic/vault/security/vault_conceal_service.dart';
+import 'package:mimic/vault/services/billing_service.dart';
 
 
 
@@ -78,6 +81,12 @@ class _VaultConcealWrapperState extends ConsumerState<_VaultConcealWrapper> {
         _concealService.start();
       }
     });
+
+    // Phase 2P: subscribe to Play Billing purchase updates so grants and
+    // refunds land in the entitlement cache as they happen. Fire-and-forget:
+    // init never throws (a device without Play is a normal state), and with
+    // kBillingEnforced still false nothing gates on the result yet.
+    unawaited(ref.read(billingServiceProvider).init());
   }
 
   @override
