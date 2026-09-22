@@ -4,7 +4,7 @@
 ## Download
 - [Download Latest APK](../../releases/latest)
 - Enable "Install from unknown sources" on Android when prompted
-- Minimum Android version: 6.0+
+- Minimum Android version: 7.0+
 
 ## The Game
 
@@ -75,7 +75,7 @@ Mix and match from five unsettling packs, each containing 20 unique word pairs:
 ### Prerequisites
 - Flutter SDK 3.x+
 - Android Studio or VS Code
-- Android device or emulator (API 23+)
+- Android device or emulator (API 24+)
 
 ### Steps
 ```bash
@@ -85,10 +85,14 @@ flutter pub get
 flutter run
 ```
 
-### Build Release APK
+### Build Release APK (universal — one file, any supported phone)
 ```bash
-flutter build apk --release --split-per-abi
+flutter build apk --release
 ```
+> The version code comes from `pubspec.yaml` (`version: x.y.z+N`). It must only
+> ever rise — a lower build number cannot install over a distributed one, and
+> uninstalling Mimic permanently destroys its hardware-bound encryption keys
+> and everything the vault protects. See the project's M33 record.
 
 ### Known Build Notes
 - `file_picker` pinned to `10.3.10` due to v11 Android build bug
