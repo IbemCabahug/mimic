@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/theme/app_theme.dart';
+import '../crypto/legacy_blob_migration.dart';
 import '../crypto/vault_crypto.dart';
 import '../services/file_vault_service.dart';
 import '../services/notes_service.dart';
@@ -29,6 +30,7 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
   late AnimationController _fadeController;
   late final ShakeWipeService _shakeWipeService;
   Timer? _reminderTimer;
+  Timer? _migrationTimer;
   int _photoCount = 0;
   int _noteCount = 0;
   int _videoCount = 0;
@@ -51,6 +53,24 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
       if (mounted) {
         BackupReminderService.checkAndShowReminder(context);
       }
+    });
+
+    // F24: migrate legacy (system-key) blobs to c2 while the device key can
+    // still read them. Deliberately silent, deferred, and fire-and-forget —
+    // the owner must never wait on housekeeping, and a failed run retries on
+    // the next unlock. Every converted file is verified before its original
+    // is replaced, so a failed run leaves the vault exactly as it was.
+    _migrationTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      final crypto = ref.read(vaultCryptoProvider);
+      if (!crypto.isUnlocked) return;
+      unawaited(() async {
+        try {
+          await LegacyBlobMigration(crypto: crypto).migrateAll();
+        } catch (_) {
+          // A failed run retries on the next unlock; nothing to surface.
+        }
+      }());
     });
   }
 
@@ -109,6 +129,7 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
   @override
   void dispose() {
     _reminderTimer?.cancel();
+    _migrationTimer?.cancel();
     _shakeWipeService.stopListening();
     _fadeController.dispose();
     super.dispose();

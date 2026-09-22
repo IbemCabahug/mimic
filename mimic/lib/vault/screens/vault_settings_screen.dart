@@ -2,10 +2,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:sqflite/sqflite.dart';
-import 'package:path/path.dart' as p;
 import '../crypto/vault_crypto.dart';
 import '../crypto/keystore_service.dart';
 import '../../core/services/platform_service.dart';
@@ -23,6 +20,8 @@ import '../widgets/vault_scaffold.dart';
 import 'gesture_setup_screen.dart';
 import '../services/pro_status_service.dart';
 import '../services/quick_entry_service.dart';
+import '../services/vault_wipe_service.dart';
+import '../services/video_thumbnail_service.dart';
 import '../trigger/gesture_store.dart';
 
 class VaultSettingsScreen extends ConsumerStatefulWidget {
@@ -676,20 +675,23 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           TextButton(
             onPressed: () async {
               Navigator.of(dialogContext).pop();
-              final platformService = ref.read(platformServiceProvider);
-              await platformService.secureDelete('break_in_logs');
-              await platformService.secureDelete('vault_photos_meta');
-              await platformService.secureDelete('vault_audio_meta');
-              await platformService.secureDelete('vault_notes');
-
+              // One owner for the whole content wipe: closes the services'
+              // open SQLite connections (a live handle keeps serving deleted
+              // rows), drops every content database + sidecar, purges the
+              // shared blob directory, intruder evidence, decrypted temp
+              // dirs, and every content metadata key — while leaving the
+              // PIN/keystore/recovery/duress/gesture state alone so the
+              // vault still unlocks (r28 Phase 10.1). The old handler only
+              // deleted web-only meta keys, which is why photos, videos,
+              // documents, notes and thumbnails survived on the device.
               try {
-                final dbPath = p.join(await getDatabasesPath(), 'breakin_logs.db');
-                final file = File(dbPath);
-                if (await file.exists()) {
-                  await file.delete();
-                }
+                await ref.read(vaultWipeServiceProvider).wipeAllContent();
               } catch (_) {}
-
+              // Drop any decrypted video frames still held in memory for
+              // this unlock (thumbnails are memory-only by design, F23).
+              try {
+                ref.read(videoThumbnailCacheProvider.notifier).wipe();
+              } catch (_) {}
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(

@@ -24,6 +24,7 @@ import 'package:mimic/game/screens/word_reveal_screen.dart';
 import 'package:mimic/game/screens/voting_screen.dart';
 import 'package:mimic/game/screens/final_standings_screen.dart';
 import 'package:mimic/game/screens/results_screen.dart';
+import 'package:mimic/game/screens/admin_panel_screen.dart';
 import 'package:mimic/game/state/game_state.dart';
 import 'package:mimic/vault/trigger/trigger_detector.dart';
 import 'package:mimic/core/theme/horror_theme.dart';
@@ -32,6 +33,8 @@ import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/multiplayer/network/network_service.dart';
 import 'package:mimic/vault/services/pro_status_service.dart';
 import 'package:mimic/vault/services/quick_entry_service.dart';
+import 'package:mimic/vault/security/secret_entry_trail.dart';
+import 'package:mimic/game/game.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helper / Utility Functions
@@ -804,6 +807,470 @@ void main() {
       expect(find.byType(ResultsScreen), findsNothing);
       expect(container.read(gameStateProvider).players.length, 0,
           reason: 'End Game must clear/reset all players from state');
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // 5b · AdminPanelScreen — the duress decoy must be escapable
+  // ═══════════════════════════════════════════════════════════════════════
+  group('5b · AdminPanelScreen exit', () {
+    // The trail is process-wide static state; every case must start from a
+    // clean slate so test order can never decide where the exit lands.
+    setUp(() {
+      SecretEntryTrail.clear();
+    });
+
+    testWidgets(
+        'the duress decoy shows a leading RETURN TO GAME tile that returns to the game',
+        (WidgetTester tester) async {
+      // Taller viewport so the first two tiles are laid out (the exit must be
+      // reachable without scrolling — that is the whole point of leading
+      // with it).
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final container = ProviderContainer();
+      // Home is the REAL HomeScreen so leaving the panel via '/' lands here.
+      await tester.pumpWidget(buildGameTestApp(
+        home: const HomeScreen(),
+        container: container,
+      ));
+      await pumpScreen(tester);
+
+      // Enter the duress path the way PIN entry does: the decoy is pushed by
+      // name and replaces the PIN screen, so it has NO app-bar back arrow —
+      // this tile is the only way out.
+      final navigator =
+          tester.state<NavigatorState>(find.byType(Navigator).first);
+      navigator.push(MaterialPageRoute(
+        builder: (_) => const AdminPanelScreen(),
+      ));
+      await pumpScreen(tester);
+
+      expect(find.text('ADMIN PANEL'), findsOneWidget,
+          reason: 'The duress PIN must land on the harmless decoy panel');
+
+      // The exit exists, sits above every piece of game intel, and is the
+      // first thing a confused bystander sees.
+      expect(find.text('RETURN TO GAME'), findsOneWidget,
+          reason: 'The decoy panel must offer a visible way back to the game');
+      expect(
+        tester.getTopLeft(find.text('RETURN TO GAME')).dy,
+        lessThan(tester.getTopLeft(find.text('Reveal Mimic')).dy),
+        reason: 'The exit must lead the list, before any cheat tile',
+      );
+
+      // Tapping it leaves the panel and lands on the game home screen — and
+      // never in the vault.
+      await tester.tap(find.text('RETURN TO GAME'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(AdminPanelScreen), findsNothing,
+          reason: 'RETURN TO GAME must remove the decoy panel from the stack');
+      expect(find.text('MIMIC'), findsOneWidget,
+          reason: 'RETURN TO GAME must land on the game home screen');
+      expect(find.text('VAULT_PIN_SCREEN'), findsNothing,
+          reason: 'The duress exit must never lead into the real vault');
+    });
+
+    testWidgets(
+        'system BACK on the decoy lands on the game even when nothing sits below it',
+        (WidgetTester tester) async {
+      final container = ProviderContainer();
+      await tester.pumpWidget(buildGameTestApp(
+        home: const HomeScreen(),
+        container: container,
+      ));
+      await pumpScreen(tester);
+
+      // The harsh shape: AutoLock / the vault lock button / Settings → Lock
+      // Vault all push '/vault-pin' with pushNamedAndRemoveUntil, so entering
+      // duress there replaces the ONLY route. This mirrors it.
+      final navigator =
+          tester.state<NavigatorState>(find.byType(Navigator).first);
+      navigator.pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AdminPanelScreen()),
+        (route) => false,
+      );
+      await pumpScreen(tester);
+      expect(find.byType(AdminPanelScreen), findsOneWidget);
+
+      // Android system BACK, the way a bystander leaves without reading.
+      final dynamic widgetsAppState = tester.state(find.byType(WidgetsApp));
+      await widgetsAppState.didPopRoute();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(AdminPanelScreen), findsNothing,
+          reason: 'System BACK must not leave the decoy panel on screen');
+      expect(find.text('MIMIC'), findsOneWidget,
+          reason: 'System BACK must land on the game home screen, '
+              'not a vault route and not a closing app');
+      expect(find.text('VAULT_PIN_SCREEN'), findsNothing,
+          reason: 'System BACK must never lead into the real vault');
+    });
+
+    testWidgets(
+        'every tile paints on its own Material, so a tap still ripples',
+        (WidgetTester tester) async {
+      // ListTile paints its background and ink splash on the nearest Material
+      // ancestor. The tiles sit inside a rounded surface, and a
+      // colour-decorated Container in that position hides the ripple (on a
+      // decoy panel a curious bystander is meant to poke at) and reports
+      // "ListTile background color or ink splashes may be invisible" on every
+      // build — an uncaught FlutterError that fails any widget test which
+      // renders this screen.
+      final container = ProviderContainer();
+      await tester.pumpWidget(buildGameTestApp(
+        home: const AdminPanelScreen(),
+        container: container,
+      ));
+      await pumpScreen(tester);
+
+      expect(find.byType(ListTile), findsWidgets,
+          reason: 'The decoy panel is built out of ListTiles');
+      expect(tester.takeException(), isNull,
+          reason: 'No tile may report the ListTile ink/background assertion');
+    });
+
+    // Named-route harness for the origin tests: mirrors the real stack the
+    // duress flow builds — game home ('/'), the voting screen, a vault
+    // route and the admin panel, all pushed by name.
+    Widget buildOriginTestApp(ProviderContainer container) {
+      return UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: HorrorTheme.themeData,
+          initialRoute: '/',
+          routes: {
+            '/': (_) => const Scaffold(body: Text('GAME_HOME')),
+            '/voting': (_) => const Scaffold(body: Text('VOTING_SCREEN')),
+            '/results': (_) => const Scaffold(body: Text('RESULTS_SCREEN')),
+            '/vault-home': (_) => const Scaffold(body: Text('VAULT_HOME')),
+            '/vault-pin': (_) => const Scaffold(body: Text('VAULT_PIN_SCREEN')),
+            '/admin-panel': (_) => const AdminPanelScreen(),
+          },
+        ),
+      );
+    }
+
+    testWidgets(
+        'quick-entry origin: RETURN TO GAME returns to the game home the shortcut was used on',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      // Exactly what the quick-entry long-press hook does before it pushes
+      // the PIN route.
+      SecretEntryTrail.setOrigin(MimicGame.homeRoute);
+
+      final container = ProviderContainer();
+      await tester.pumpWidget(buildOriginTestApp(container));
+      await pumpScreen(tester);
+
+      final navigator =
+          tester.state<NavigatorState>(find.byType(Navigator).first);
+      navigator.pushNamed('/admin-panel');
+      await pumpScreen(tester);
+
+      await tester.tap(find.text('RETURN TO GAME'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(AdminPanelScreen), findsNothing,
+          reason: 'RETURN TO GAME must remove the decoy panel from the stack');
+      expect(find.text('GAME_HOME'), findsOneWidget,
+          reason: 'Shortcut entry must return to the game home it left');
+    });
+
+    testWidgets(
+        'voting-gesture origin: RETURN TO GAME returns to the live voting round',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      // Exactly what the voting-screen TriggerDetector does before it pushes
+      // the PIN route.
+      SecretEntryTrail.setOrigin(MimicGame.votingRoute);
+
+      final container = ProviderContainer();
+      await tester.pumpWidget(buildOriginTestApp(container));
+      await pumpScreen(tester);
+
+      final navigator =
+          tester.state<NavigatorState>(find.byType(Navigator).first);
+      navigator.pushNamed('/voting');
+      await pumpScreen(tester);
+      // The duress PIN replaces the PIN route, so the panel sits directly on
+      // top of the still-live voting screen.
+      navigator.pushNamed('/admin-panel');
+      await pumpScreen(tester);
+
+      await tester.tap(find.text('RETURN TO GAME'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(AdminPanelScreen), findsNothing,
+          reason: 'RETURN TO GAME must remove the decoy panel from the stack');
+      expect(find.text('VOTING_SCREEN'), findsOneWidget,
+          reason:
+              'Gateway entry must resume the round it was opened from, '
+              'not rebuild the game home');
+    });
+
+    testWidgets(
+        'verdict-screen origin: RETURN TO GAME resumes the finished round instead of the game home',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      // Exactly what the results-screen detector does before it pushes the
+      // PIN route. The voting screen replaced ITSELF with '/results' when the
+      // round was revealed, so the verdict screen is the only game route
+      // left below the panel — the mimic entered from there and must come
+      // back to there.
+      SecretEntryTrail.setOrigin(MimicGame.resultsRoute);
+
+      final container = ProviderContainer();
+      await tester.pumpWidget(buildOriginTestApp(container));
+      await pumpScreen(tester);
+
+      final navigator =
+          tester.state<NavigatorState>(find.byType(Navigator).first);
+      navigator.pushNamed('/results');
+      await pumpScreen(tester);
+      navigator.pushNamed('/admin-panel');
+      await pumpScreen(tester);
+
+      await tester.tap(find.text('RETURN TO GAME'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(AdminPanelScreen), findsNothing,
+          reason: 'RETURN TO GAME must remove the decoy panel from the stack');
+      expect(find.text('RESULTS_SCREEN'), findsOneWidget,
+          reason: 'The verdict screen the entry was made from must resume — '
+              'a 3-player survival game ends on that screen');
+      expect(find.text('GAME_HOME'), findsNothing,
+          reason: 'Regression: the results-screen entry used to record no '
+              'origin, so the exit rebuilt the game home instead');
+    });
+
+    testWidgets(
+        'vault PIN route as the stack ROOT: RETURN TO GAME exits to the game, never onto the vault prompt',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      // AutoLock and Settings → Lock Vault push '/vault-pin' with
+      // pushNamedAndRemoveUntil, which makes the vault PIN route the
+      // navigator's FIRST route. A walk that stops on `route.isFirst` then
+      // legally lands on the vault's own PIN prompt, so the exit has to
+      // replace that root instead of leaving the mimic on it.
+      SecretEntryTrail.clear();
+
+      final container = ProviderContainer();
+      await tester.pumpWidget(buildOriginTestApp(container));
+      await pumpScreen(tester);
+
+      final navigator =
+          tester.state<NavigatorState>(find.byType(Navigator).first);
+      navigator.pushNamedAndRemoveUntil('/vault-pin', (route) => false);
+      await pumpScreen(tester);
+      expect(find.text('VAULT_PIN_SCREEN'), findsOneWidget);
+
+      // The duress PIN replaces the PIN route, so the panel sits directly on
+      // top of the vault root.
+      navigator.pushNamed('/admin-panel');
+      await pumpScreen(tester);
+
+      await tester.tap(find.text('RETURN TO GAME'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(AdminPanelScreen), findsNothing);
+      expect(find.text('VAULT_PIN_SCREEN'), findsNothing,
+          reason: 'The exit must never leave the mimic on the vault PIN '
+              'prompt — that is the leak the decoy exists to prevent');
+      expect(find.text('GAME_HOME'), findsOneWidget,
+          reason: 'A vault root is replaced by the game home on a cleared '
+              'stack');
+    });
+
+    testWidgets(
+        "the panel's bottom Exit tile takes the same exit as RETURN TO GAME",
+        (WidgetTester tester) async {
+      // The SYSTEM section sits at the very bottom of a long decoy list, so
+      // the whole list has to lay out for the tile to exist on screen.
+      tester.view.physicalSize = const Size(800, 3200);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      SecretEntryTrail.setOrigin(MimicGame.votingRoute);
+
+      final container = ProviderContainer();
+      await tester.pumpWidget(buildOriginTestApp(container));
+      await pumpScreen(tester);
+
+      final navigator =
+          tester.state<NavigatorState>(find.byType(Navigator).first);
+      navigator.pushNamed('/voting');
+      await pumpScreen(tester);
+      navigator.pushNamed('/admin-panel');
+      await pumpScreen(tester);
+
+      await tester.tap(find.text('Exit'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(AdminPanelScreen), findsNothing,
+          reason: 'The bottom Exit tile must also leave the decoy panel');
+      expect(find.text('VOTING_SCREEN'), findsOneWidget,
+          reason: 'Both exits must return the mimic to the screen the '
+              'secret entry was made from');
+      expect(find.text('GAME_HOME'), findsNothing,
+          reason: 'Regression: Exit used to clear the stack to the game home '
+              'and destroy the live round');
+    });
+
+    testWidgets(
+        'a double tap on RETURN TO GAME cannot pop past the origin',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      SecretEntryTrail.setOrigin(MimicGame.votingRoute);
+
+      final container = ProviderContainer();
+      await tester.pumpWidget(buildOriginTestApp(container));
+      await pumpScreen(tester);
+
+      final navigator =
+          tester.state<NavigatorState>(find.byType(Navigator).first);
+      navigator.pushNamed('/voting');
+      await pumpScreen(tester);
+      navigator.pushNamed('/admin-panel');
+      await pumpScreen(tester);
+
+      // Two taps inside one frame: the second lands while the first exit is
+      // still animating out (a panicking bystander double-taps a leave
+      // button). Without the one-shot latch the trail would already have been
+      // consumed, so the second call could only pop the live round as well
+      // and drop the mimic on the game home.
+      await tester.tap(find.text('RETURN TO GAME'));
+      await tester.tap(find.text('RETURN TO GAME'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(AdminPanelScreen), findsNothing);
+      expect(find.text('VOTING_SCREEN'), findsOneWidget,
+          reason: 'The second tap must not pop the live round as well');
+      expect(find.text('GAME_HOME'), findsNothing,
+          reason: 'A double tap must still land on the entry screen, not a '
+              'rebuild of the game home');
+    });
+
+    test('the trail is single-use: every exit consumes the entry it belongs to', () {
+      SecretEntryTrail.setOrigin(MimicGame.votingRoute);
+
+      expect(SecretEntryTrail.consume(), MimicGame.votingRoute);
+      expect(SecretEntryTrail.consume(), isNull,
+          reason: 'A later exit must fall back to a game route rather than '
+              'replay a destination from an entry that already ended');
+    });
+
+    testWidgets(
+        'the real results-screen sequence records its origin and pushes the named vault PIN route',
+        (WidgetTester tester) async {
+      final (:container, :voteCounts) = await buildResultsState();
+
+      await tester.pumpWidget(buildGameTestApp(
+        home: ResultsScreen(voteCounts: voteCounts),
+        container: container,
+      ));
+      await pumpScreen(tester);
+
+      // The scoreboard's score number is the hidden hotspot (recordTap(0)),
+      // and the results screen's own sequence is three of those taps. This
+      // drives the real screen, so it is the regression guard for the report
+      // "the gesture from the scores screen sends me to the game home".
+      TriggerCallbackRegistry().recordTap(0);
+      TriggerCallbackRegistry().recordTap(0);
+      TriggerCallbackRegistry().recordTap(0);
+
+      await tester.pump();
+      // The hidden flash overlay holds 300 ms + 300 ms before the trigger
+      // fires, and the results screen's own timeline (2 s accusation + 1.5 s
+      // judgment) then has to be drained or flutter_test fails the case on a
+      // pending timer. Fixed pumps only — this screen animates forever.
+      await tester.pump(const Duration(milliseconds: 700));
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 3600));
+      await tester.pump(const Duration(milliseconds: 200));
+
+      expect(SecretEntryTrail.consume(), MimicGame.resultsRoute,
+          reason: 'The entry must anchor the exit to the verdict screen it '
+              'was made from');
+      expect(find.text('VAULT_PIN_SCREEN'), findsOneWidget,
+          reason: 'The results-screen sequence must still open the vault PIN '
+              'route (a real named route, so RouteGuard and SecureGuard apply)');
+    });
+
+    testWidgets(
+        'stale origin: RETURN TO GAME never lands on a vault route — it falls back to the game home',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      // An origin left over from an earlier round that no longer exists on
+      // the stack: the mimic entered duress from a vault lock screen.
+      SecretEntryTrail.setOrigin(MimicGame.votingRoute);
+
+      final container = ProviderContainer();
+      await tester.pumpWidget(buildOriginTestApp(container));
+      await pumpScreen(tester);
+
+      final navigator =
+          tester.state<NavigatorState>(find.byType(Navigator).first);
+      navigator.pushNamed('/vault-home');
+      await pumpScreen(tester);
+      navigator.pushNamed('/admin-panel');
+      await pumpScreen(tester);
+
+      await tester.tap(find.text('RETURN TO GAME'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(AdminPanelScreen), findsNothing);
+      expect(find.text('VAULT_HOME'), findsNothing,
+          reason: 'The exit must close the vault, never land in it');
+      expect(find.text('GAME_HOME'), findsOneWidget,
+          reason: 'A stale origin falls back to the root game screen');
     });
   });
 

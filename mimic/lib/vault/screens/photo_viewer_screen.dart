@@ -1,4 +1,5 @@
 // lib/vault/screens/photo_viewer_screen.dart
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -30,11 +31,56 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
   int _currentIndex = 0;
   bool _isZoomed = false;
 
+  /// F8: one cached load future per photo id.
+  ///
+  /// The future used to be created inside itemBuilder, so it was rebuilt on
+  /// every parent setState. A double-tap zoom calls onZoomChanged, which calls
+  /// setState on this screen, which handed FutureBuilder a *new* future — the
+  /// builder dropped to ConnectionState.waiting, tore _ZoomablePhoto down and
+  /// threw away its TransformationController. The photo visibly bounced back
+  /// to scale 1.0, so the first double-tap looked like it did nothing and only
+  /// the second one stuck (the second finds _isZoomed already true, so no
+  /// rebuild happens). Caching the future keeps the widget alive across
+  /// rebuilds and the zoom now engages on the first tap.
+  final Map<String, Future<Uint8List?>> _bytesFutures = {};
+
   @override
   void initState() {
     super.initState();
     _pageController = PageController(initialPage: widget.initialIndex);
     _currentIndex = widget.initialIndex;
+  }
+
+  @override
+  void didUpdateWidget(covariant PhotoViewerScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // A delete or restore changes the list. Drop the entries that are gone so
+    // a removed photo's bytes are not held for the rest of the session, and so
+    // a photo re-added later reloads instead of replaying a stale result.
+    if (!identical(oldWidget.photos, widget.photos)) {
+      final liveIds = widget.photos.map((p) => p.id).toSet();
+      _bytesFutures.removeWhere((id, _) => !liveIds.contains(id));
+    }
+  }
+
+  /// Returns the cached future for [photo], starting the decrypt on first use.
+  ///
+  /// A failed load is deliberately NOT cached: the broken-image placeholder
+  /// must be retryable by leaving and returning, rather than becoming
+  /// permanent for the rest of the session.
+  Future<Uint8List?> _bytesFor(PhotoMeta photo) {
+    return _bytesFutures.putIfAbsent(photo.id, () {
+      final future = widget.loadBytes(photo.id);
+      unawaited(
+        future.then((bytes) {
+          if (bytes == null) _bytesFutures.remove(photo.id);
+        }).catchError((Object _) {
+          _bytesFutures.remove(photo.id);
+          return null;
+        }),
+      );
+      return future;
+    });
   }
 
   @override
@@ -159,7 +205,7 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
               itemBuilder: (context, index) {
                 final photo = widget.photos[index];
                 return FutureBuilder<Uint8List?>(
-                  future: widget.loadBytes(photo.id),
+                  future: _bytesFor(photo),
                   builder: (context, snapshot) {
                     if (snapshot.connectionState == ConnectionState.waiting) {
                       return const Center(child: CircularProgressIndicator(color: Colors.white));

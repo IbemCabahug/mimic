@@ -32,8 +32,13 @@ class IntruderEntry {
 }
 
 class IntruderService {
-  static const _prefix = 'intruder_';
-  static const _extension = '.enc';
+  /// Public so the Danger Zone wipe (VaultWipeService) can target these files
+  /// without duplicating the naming scheme here.
+  static const String filePrefix = 'intruder_';
+  static const String fileExtension = '.enc';
+
+  static const _prefix = filePrefix;
+  static const _extension = fileExtension;
 
   Future<void> captureIntruder(VaultCrypto crypto) async {
     if (kIsWeb) return;

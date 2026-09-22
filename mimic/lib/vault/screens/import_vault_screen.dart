@@ -176,8 +176,27 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
 
       if (success) {
         if (mounted) {
+          // F9: the restored vault is unlocked in memory (recovered from the
+          // 12-word phrase), but the wrapped master key that came inside the
+          // backup belongs to the EXPORTING device's hardware keystore and can
+          // never be unwrapped here. Sending the owner to the PIN screen would
+          // loop them through recovery on every launch. The reset-PIN flow
+          // performs the complete local re-wrap (new salt, new verifier, and a
+          // hardware wrap made by THIS device), so the restored vault unlocks
+          // with a PIN like any native one.
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text(
+                'Vault restored. Now choose a PIN for it on this phone.',
+                style: TextStyle(fontFamily: 'Inter'),
+              ),
+              backgroundColor: VaultColors.success,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          );
           Navigator.of(context).pushNamedAndRemoveUntil(
-            '/vault-pin',
+            '/vault-reset-pin',
             (route) => false,
           );
         }
