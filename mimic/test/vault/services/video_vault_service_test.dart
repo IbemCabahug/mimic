@@ -67,6 +67,22 @@ class _NoDeleteVideoVaultService extends VideoVaultService {
       throw Exception('simulated vault delete failure');
 }
 
+/// Writes a v1 blob (AES-CBC under the master DEK, media-magic prefixed),
+/// reproducing the format imports produced before saveVideo was switched to
+/// born-c2, so the v1→c2 migration path stays tested from a known start point.
+Future<void> writeV1CbcBlob({
+  required Uint8List plaintext,
+  required File blobFile,
+  required VaultCrypto crypto,
+}) async {
+  final encrypted = crypto.encrypt(plaintext);
+  final blob = Uint8List(kMediaMagicV1.length + encrypted.length);
+  blob.setRange(0, kMediaMagicV1.length, kMediaMagicV1);
+  blob.setRange(kMediaMagicV1.length, blob.length, encrypted);
+  await blobFile.parent.create(recursive: true);
+  await blobFile.writeAsBytes(blob);
+}
+
 /// Writes a c1 blob (AES-CTR under the device-local system key) at [blobFile],
 /// reproducing the format the pre-c2 code produced, so the rescue path and its
 /// container gate can be tested from a known starting point.
@@ -255,7 +271,7 @@ void main() {
       }
       await srcFile.writeAsBytes(bytes);
 
-      // 2. Call NEW saveVideoFromFile
+      // 2. Import: born-c2, streamable on first play
       final id = await videoVaultService.saveVideoFromFile(
         srcFile,
         'video/mp4',
@@ -263,7 +279,13 @@ void main() {
         originalName: 'my_video.mp4',
       );
 
-      // 3. Verify bytes via getVideo
+      // 3. Verify the blob on disk is already c2 (CTR), not CBC v1
+      final blobFile = await platformService.resolveVaultFile(id);
+      final onDisk = await blobFile.readAsBytes();
+      expect(onDisk.sublist(0, 8), equals(kMediaMagicCtrV2),
+          reason: 'imports must be born streamable (c2), with no conversion wait');
+
+      // 4. Verify bytes via getVideo
       final decryptedBytes = await videoVaultService.getVideo(id);
       expect(decryptedBytes, isNotNull);
       expect(decryptedBytes, equals(bytes));
@@ -297,13 +319,16 @@ void main() {
       }
       await srcFile.writeAsBytes(plaintext);
 
-      // 2. Save as CBC-encrypted video
-      final id = await videoVaultService.saveVideoFromFile(
-        srcFile, 'video/mp4', 10,
+      // 2. Write the blob as v1 CBC, the format imports used before born-c2
+      const id = 'migrate-v1-src';
+      final blobFile = await platformService.resolveVaultFile(id);
+      await writeV1CbcBlob(
+        plaintext: plaintext,
+        blobFile: blobFile,
+        crypto: crypto,
       );
 
       // 3. Verify it starts with CBC magic "MVKEYv1\0"
-      final blobFile = await platformService.resolveVaultFile(id);
       final cbcMagic = kMediaMagicV1;
       final originalBytes = await blobFile.readAsBytes();
       for (int i = 0; i < 8; i++) {
@@ -347,7 +372,7 @@ void main() {
         srcFile, 'video/mp4', 5,
       );
 
-      // First migration
+      // Born-c2: first call finds an already-streamable blob, no-op
       await videoVaultService.ensureVideoStreamable(id);
       final blobFile = await platformService.resolveVaultFile(id);
       final afterFirst = await blobFile.readAsBytes();
@@ -385,19 +410,17 @@ void main() {
       await crypto.initialize('1234');
       final videoVaultService = VideoVaultService(platformService, crypto);
 
-      final srcFile = File('${tempDir.path}/fail_src.mp4');
       final plaintext = Uint8List(20000);
       final random = Random.secure();
       for (var i = 0; i < plaintext.length; i++) {
         plaintext[i] = random.nextInt(256);
       }
-      await srcFile.writeAsBytes(plaintext);
 
-      final id = await videoVaultService.saveVideoFromFile(
-        srcFile, 'video/mp4', 3,
-      );
-
+      // Imports are born-c2 now; plant a v1 blob so the migration genuinely
+      // runs and its ordering is what gets verified.
+      const id = 'structural-v1-preserved';
       final blobFile = await platformService.resolveVaultFile(id);
+      await writeV1CbcBlob(plaintext: plaintext, blobFile: blobFile, crypto: crypto);
       final originalBytes = await blobFile.readAsBytes();
 
       // Call ensureVideoStreamable on a VALID blob — it should succeed
@@ -413,7 +436,10 @@ void main() {
       // Verify original CBC bytes are no longer on disk (replaced by CTR)
       expect(newBytes.length != originalBytes.length || newBytes[5] != originalBytes[5], isTrue);
 
-      await srcFile.delete();
+      // And the conversion must not have corrupted the content.
+      final decryptedTmp = File('${tempDir.path}/structural_dec.bin');
+      await crypto.decryptStreamSystem(blobFile, decryptedTmp);
+      expect(await decryptedTmp.readAsBytes(), equals(plaintext));
     });
 
     test('T3 — rescue: create a c1 blob, run ensureVideoStreamable, assert file starts with c2 magic and decrypts', () async {
@@ -850,9 +876,14 @@ void main() {
       final srcFile = File('${tempDir.path}/t9_random_src.bin');
       await srcFile.writeAsBytes(plaintext);
 
-      // Save as v1 CBC video
-      final id = await videoVaultService.saveVideoFromFile(srcFile, 'video/mp4', 10);
+      // Import must be born-c2; to test a v1 source we plant one explicitly.
+      const id = 't9-v1-random-src';
       final blobFile = await platformService.resolveVaultFile(id);
+      await writeV1CbcBlob(
+        plaintext: plaintext,
+        blobFile: blobFile,
+        crypto: crypto,
+      );
 
       // Verify it is v1
       final preBytes = await blobFile.readAsBytes();
@@ -1167,15 +1198,16 @@ void main() {
       await crypto.initialize('1234');
       final videoVaultService = VideoVaultService(platformService, crypto);
 
-      final srcFile = File('${tempDir.path}/t11_src.mp4');
       final plaintext = Uint8List(8192);
       final random = Random.secure();
       for (var i = 0; i < plaintext.length; i++) {
         plaintext[i] = random.nextInt(256);
       }
-      await srcFile.writeAsBytes(plaintext);
 
-      final id = await videoVaultService.saveVideoFromFile(srcFile, 'video/mp4', 5);
+      // Imports are born-c2 now; plant a v1 blob to exercise the conversion.
+      const id = 't11-v1-claim';
+      final blobFile = await platformService.resolveVaultFile(id);
+      await writeV1CbcBlob(plaintext: plaintext, blobFile: blobFile, crypto: crypto);
 
       expect(AutoLock().isProtectedOperationInFlight, isFalse,
           reason: 'nothing may be claimed before a conversion starts');
@@ -1194,8 +1226,6 @@ void main() {
       expect(outcome.failure, VideoMigrationFailure.none);
       expect(AutoLock().isProtectedOperationInFlight, isFalse,
           reason: 'the claim must be released on the way out');
-
-      await srcFile.delete();
     });
 
     test('T12 — a v1 blob converts and the outcome says so, then reports already-c2', () async {
@@ -1204,19 +1234,20 @@ void main() {
       await crypto.initialize('1234');
       final videoVaultService = VideoVaultService(platformService, crypto);
 
-      final srcFile = File('${tempDir.path}/t12_src.mp4');
       final plaintext = Uint8List(16384);
       final random = Random.secure();
       for (var i = 0; i < plaintext.length; i++) {
         plaintext[i] = random.nextInt(256);
       }
-      await srcFile.writeAsBytes(plaintext);
 
-      final id = await videoVaultService.saveVideoFromFile(srcFile, 'video/mp4', 5);
+      // Imports are born-c2 now; plant a v1 blob so the conversion outcome
+      // reporting is exercised exactly as it always was.
+      const id = 't12-v1-outcome';
       final blobFile = await platformService.resolveVaultFile(id);
+      await writeV1CbcBlob(plaintext: plaintext, blobFile: blobFile, crypto: crypto);
 
       expect((await blobFile.readAsBytes()).sublist(0, 8), equals(kMediaMagicV1),
-          reason: 'a fresh import is still written as CBC v1');
+          reason: 'fixture: a v1 blob, the import format before born-c2');
 
       final outcome = await videoVaultService.ensureVideoStreamable(id);
 
@@ -1238,8 +1269,6 @@ void main() {
       expect(videoVaultService.migrationOutcomeFor(id)?.sourceKind, 'already-c2');
       expect(videoVaultService.lastMigrationOutcome?.videoId, id);
       expect(videoVaultService.migrationOutcomeFor('never-attempted'), isNull);
-
-      await srcFile.delete();
     });
 
     test('T13 — a c1 blob whose plaintext is not a container is refused, and the original survives', () async {
@@ -1290,16 +1319,18 @@ void main() {
       await crypto.initialize('1234');
       final videoVaultService = VideoVaultService(platformService, crypto);
 
-      final srcFile = File('${tempDir.path}/t14_src.mp4');
       final plaintext = Uint8List(8192);
       final random = Random.secure();
       for (var i = 0; i < plaintext.length; i++) {
         plaintext[i] = random.nextInt(256);
       }
-      await srcFile.writeAsBytes(plaintext);
 
-      final id = await videoVaultService.saveVideoFromFile(srcFile, 'video/mp4', 5);
+      // Imports are born-c2 now; plant a v1 blob so the migration's
+      // re-encrypt step is what hits the throwing crypto (the throw must be
+      // reported, not swallowed — and the original must survive it).
+      const id = 't14-throwing-reencrypt';
       final blobFile = await platformService.resolveVaultFile(id);
+      await writeV1CbcBlob(plaintext: plaintext, blobFile: blobFile, crypto: crypto);
       final before = await blobFile.readAsBytes();
 
       final outcome = await videoVaultService.ensureVideoStreamable(id);
@@ -1324,8 +1355,6 @@ void main() {
       expect(videoVaultService.migrationOutcomeFor(id)?.failure,
           VideoMigrationFailure.unknown);
       expect(videoVaultService.lastMigrationOutcome?.videoId, id);
-
-      await srcFile.delete();
     });
 
     test('T15 — a failure detail never leaks a filesystem path', () async {
@@ -1334,15 +1363,17 @@ void main() {
       await crypto.initialize('1234');
       final videoVaultService = VideoVaultService(platformService, crypto);
 
-      final srcFile = File('${tempDir.path}/t15_src.mp4');
       final plaintext = Uint8List(4096);
       final random = Random.secure();
       for (var i = 0; i < plaintext.length; i++) {
         plaintext[i] = random.nextInt(256);
       }
-      await srcFile.writeAsBytes(plaintext);
 
-      final id = await videoVaultService.saveVideoFromFile(srcFile, 'video/mp4', 5);
+      // Imports are born-c2 now; plant a v1 blob so the failing re-encryption
+      // is what gets recorded.
+      const id = 't15-v1-path-leak';
+      final blobFile = await platformService.resolveVaultFile(id);
+      await writeV1CbcBlob(plaintext: plaintext, blobFile: blobFile, crypto: crypto);
 
       final outcome = await videoVaultService.ensureVideoStreamable(id);
 
@@ -1354,8 +1385,6 @@ void main() {
       expect(outcome.detail, isNot(contains(tempDir.path)));
       expect(outcome.detail, isNot(contains('_do_not_leak_marker')));
       expect(outcome.detail, isNot(contains('_migrate_')));
-
-      await srcFile.delete();
     });
 
     test('T16 — a vault lock during the conversion is reported as vaultLocked', () async {
@@ -1364,16 +1393,17 @@ void main() {
       await crypto.initialize('1234');
       final videoVaultService = VideoVaultService(platformService, crypto);
 
-      final srcFile = File('${tempDir.path}/t16_src.mp4');
       final plaintext = Uint8List(8192);
       final random = Random.secure();
       for (var i = 0; i < plaintext.length; i++) {
         plaintext[i] = random.nextInt(256);
       }
-      await srcFile.writeAsBytes(plaintext);
 
-      final id = await videoVaultService.saveVideoFromFile(srcFile, 'video/mp4', 5);
+      // Imports are born-c2 now; plant a v1 blob (while unlocked) to exercise
+      // the lock-mid-conversion case.
+      const id = 't16-v1-lock-mid-migration';
       final blobFile = await platformService.resolveVaultFile(id);
+      await writeV1CbcBlob(plaintext: plaintext, blobFile: blobFile, crypto: crypto);
       final before = await blobFile.readAsBytes();
 
       final pending = videoVaultService.ensureVideoStreamable(id);
@@ -1401,8 +1431,6 @@ void main() {
               e.path.contains('_migrate_ctr_'))
           .toList();
       expect(leftovers, isEmpty, reason: 'no conversion temp may survive');
-
-      await srcFile.delete();
     });
 
     group('restoreVideoToGallery honesty contract', () {
