@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:pointycastle/export.dart';
 import 'keystore_service.dart';
+import 'hardened_verifier.dart'; // v4 verifier, for parseAnyPinVerifier's dispatch
 
 /// Public constant for the current PBKDF2 iteration count.
 const int kPbkdf2Iterations = 100000;
@@ -121,6 +122,99 @@ ParsedVerifier parseVerifier(String storedHash) {
 String formatVerifier(Uint8List key, [int iterations = kPbkdf2Iterations]) {
   final digest = SHA256Digest().process(key);
   return 'v3:$iterations:${base64Encode(digest)}';
+}
+
+/// A stored PIN verifier of ANY supported version, normalised to the two facts
+/// every caller actually needs: the iteration count to derive at, and the digest
+/// to compare against.
+///
+/// This is the type that lets v2, v3 and v4 coexist. Before this existed, every
+/// call site hand-rolled `parsed.version == 3 ? 'v3:...' : 'v2:...'`, which is
+/// correct for exactly two versions and silently WRONG the moment a third is
+/// added: a v4 record would fall into the v2 branch and build a 'v2:...' string
+/// that can never match, so the correct PIN would be rejected. Normalising the
+/// version string into the record itself removes that class of bug.
+class AnyPinVerifier {
+  /// The record's version: 2, 3 or 4.
+  final int version;
+
+  /// The iteration count this record was WRITTEN at, which is the count a
+  /// candidate PIN must be derived at to be compared against it. Never assumed,
+  /// always read back from the record.
+  final int iterations;
+
+  /// The base64 SHA-256 digest stored in the record.
+  final String digestBase64;
+
+  const AnyPinVerifier({
+    required this.version,
+    required this.iterations,
+    required this.digestBase64,
+  });
+}
+
+/// Rebuilds the canonical verifier string for [key] at [verifier]'s own version
+/// and iteration count.
+///
+/// This is the single place that knows how to spell each version. A caller gets
+/// the exact string the record should contain for a given key, so a comparison
+/// cannot drift from the format the record was written in.
+///
+/// v2 IS SPECIAL AND DELIBERATELY SO. A v2 record has NO iteration segment —
+/// it is `v2:<digest>`, two segments — because the cost was fixed at
+/// [kLegacyV2Iterations] when the format was written. Emitting
+/// `v2:100000:<digest>` would produce a string that can never match a real v2
+/// record, so every v2 vault would stop unlocking. This was a live regression
+/// caught by the round-trip test the first time this dispatcher was wired in,
+/// which is precisely why the spelling lives in ONE function guarded by a test
+/// per version instead of being re-derived at five call sites.
+///
+/// Returns null when [key] is empty, so a caller cannot accidentally compare
+/// against a digest of nothing.
+String? rebuildVerifierFor(AnyPinVerifier verifier, Uint8List key) {
+  if (key.isEmpty) return null;
+  final digest = base64Encode(SHA256Digest().process(key));
+  if (verifier.version == 2) {
+    // Two segments only. Never add an iteration count here.
+    return 'v2:$digest';
+  }
+  return 'v${verifier.version}:${verifier.iterations}:$digest';
+}
+
+/// True when the hardened (v4) verifier machinery applies to [storedHash].
+///
+/// A thin re-export so callers that already import vault_kdf do not need a
+/// second import just to ask this question. Kept here because this file is the
+/// historical home of the verifier format, and the dispatch decision belongs
+/// beside the formats it dispatches between.
+bool isHardenedPinVerifier(String storedHash) =>
+    storedHash.startsWith('v4:');
+
+/// Parses ANY supported verifier record (v2, v3 or v4) into [AnyPinVerifier].
+///
+/// This is the dispatcher that replaces the per-call-site version ternaries.
+/// It fails closed on anything unrecognised, malformed, or out of bounds, and
+/// it delegates the version-specific bounds to the parser that owns them, so v3
+/// keeps its 100,000..1,000,000 window and v4 keeps its 600,000..4,000,000 one.
+///
+/// A v4 record is validated by [parseHardenedVerifier]; a v2 or v3 record by
+/// [parseVerifier]. Neither parser can be reached for the other's version, so
+/// the stricter floor cannot leak onto legacy records and lock anyone out.
+AnyPinVerifier parseAnyPinVerifier(String storedHash) {
+  if (isHardenedPinVerifier(storedHash)) {
+    final hardened = parseHardenedVerifier(storedHash);
+    return AnyPinVerifier(
+      version: 4,
+      iterations: hardened.iterations,
+      digestBase64: hardened.digestBase64,
+    );
+  }
+  final legacy = parseVerifier(storedHash);
+  return AnyPinVerifier(
+    version: legacy.version,
+    iterations: legacy.iterations,
+    digestBase64: legacy.digestBase64,
+  );
 }
 
 /// Compares two strings in constant time to mitigate timing attacks.
