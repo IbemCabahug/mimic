@@ -73,6 +73,22 @@ void main() {
     return Uint8List.fromList(List.generate(length, (_) => rand.nextInt(256)));
   }
 
+  /// A pristine copy of [testKey], captured in setUp at the moment the vault was
+  /// created.
+  ///
+  /// This exists so the "does not mutate or zero caller key buffer" guards have
+  /// something to compare against WITHOUT deriving a second key. An earlier
+  /// version of those tests called `deriveVaultPinKek(pin, salt)` inline, whose
+  /// default is kPbkdf2Iterations (100,000); since PHASE 4A-WRITE the vault
+  /// derives at 600,000, so those comparisons were FALSE POSITIVES reporting key
+  /// mutation that never happened. Re-deriving inline at the right cost fixed the
+  /// false positive but cost a SECOND 600,000-iteration derivation per test, which
+  /// pushed several of them past the 30 s budget as TimeoutExceptions.
+  ///
+  /// Snapshotting in setUp fixes the correctness problem for free: the vault is
+  /// created there anyway, so the key is derived once and copied.
+  late Uint8List expectedTestKey;
+
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('crypto_isolate_test_');
     platformService = FakePlatformService();
@@ -80,8 +96,25 @@ void main() {
     vaultCrypto = VaultCrypto(platformService, keystoreService);
     await vaultCrypto.initialize('1234');
 
+    // Derive the test key at EXACTLY the cost the vault used, read back from the
+    // stored verifier record rather than from the compile-time default.
+    //
+    // This was a real breakage, not a flake: setUp used
+    // `deriveVaultPinKek('1234', salt!)`, whose default is kPbkdf2Iterations
+    // (100,000), while `initialize` now derives at kHardenedVerifierIterations
+    // (600,000) as of PHASE 4A-WRITE. The two halves then held different keys,
+    // so anything encrypted through the production path failed to decrypt through
+    // the isolate with 'Invalid PKCS7 padding'. Reading the count out of the
+    // record means this harness follows the vault automatically if the write cost
+    // ever moves again.
     final salt = await platformService.secureRead('vault_salt');
-    testKey = deriveVaultPinKek('1234', salt!);
+    final storedVerifier = await platformService.secureRead('vault_pin_hash');
+    final iterations = parseAnyPinVerifier(storedVerifier!).iterations;
+    testKey = deriveVaultPinKek('1234', salt!, iterations);
+    // Snapshot for the caller-key-guard tests. Deriving a second copy inline cost
+    // an extra 600,000-iteration PBKDF2 per test and pushed them past the 30 s
+    // default timeout; copying the one key setUp already derived is free.
+    expectedTestKey = Uint8List.fromList(testKey);
     testIv = generateRandomBytes(16);
   });
 
@@ -331,8 +364,7 @@ void main() {
       final encrypted = createTempFile('key_guard_enc.bin');
 
       final callerKey = Uint8List.fromList(testKey);
-      final salt = await platformService.secureRead('vault_salt');
-      final expectedKey = deriveVaultPinKek('1234', salt!);
+      final expectedKey = expectedTestKey;
 
       await cryptoIsolateEncryptFile(
         key: callerKey,
@@ -360,8 +392,7 @@ void main() {
       );
 
       final callerKey = Uint8List.fromList(testKey);
-      final salt = await platformService.secureRead('vault_salt');
-      final expectedKey = deriveVaultPinKek('1234', salt!);
+      final expectedKey = expectedTestKey;
 
       await cryptoIsolateDecryptFile(
         key: callerKey,
@@ -653,6 +684,13 @@ void main() {
     });
 
     test('T-CHANGEPIN-WIRE: isolate decrypt recovers plaintext after changePin (DEK, not PIN KEK)', () async {
+      // Timeout raised from the 30 s default. This is the one test in this file
+      // that performs TWO hardened key derivations (initialize at 600,000, then
+      // changePin at 600,000) plus a whole-file isolate round trip, and at the
+      // PHASE 4A-WRITE cost that no longer fits the default budget on this
+      // machine. It was a TimeoutException, never an assertion failure — the
+      // derivation cost is inherent to C1's fix, not a defect. Raise the budget
+      // rather than weaken the assertion.
       const size = 64 * 1024 + 21;
       final pattern = Uint8List(size);
       for (int i = 0; i < size; i++) {

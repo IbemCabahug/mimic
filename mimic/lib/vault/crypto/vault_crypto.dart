@@ -9,6 +9,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:pointycastle/export.dart';
 import 'vault_kdf.dart';
+import 'hardened_verifier.dart'; // kHardenedVerifierIterations, formatHardenedVerifier (C1 v4 write side)
 
 import '../../core/services/platform_service.dart';
 import 'recovery_phrase.dart';
@@ -117,13 +118,11 @@ class VaultCrypto extends ChangeNotifier {
         if (salt == null || salt.isEmpty || storedHash == null || storedHash.isEmpty) {
           return false;
         }
-        final parsed = parseVerifier(storedHash);
+        final parsed = parseAnyPinVerifier(storedHash);
         final candidateKey = await _deriveKey(pin, salt, parsed.iterations);
-        final digest = SHA256Digest().process(candidateKey);
-        final expectedVerifier = parsed.version == 3
-            ? 'v3:${parsed.iterations}:${base64Encode(digest)}'
-            : 'v2:${base64Encode(digest)}';
-        return _constantTimeEquals(storedHash, expectedVerifier);
+        final expectedVerifier = rebuildVerifierFor(parsed, candidateKey);
+        return expectedVerifier != null &&
+            _constantTimeEquals(storedHash, expectedVerifier);
       }
 
       final storedSalt = await _platformService.secureRead(_storageKeySalt);
@@ -135,13 +134,11 @@ class VaultCrypto extends ChangeNotifier {
         return false;
       }
 
-      final parsed = parseVerifier(storedHash);
+      final parsed = parseAnyPinVerifier(storedHash);
       final candidateKey = await _deriveKey(pin, storedSalt, parsed.iterations);
-      final digest = SHA256Digest().process(candidateKey);
-      final expectedVerifier = parsed.version == 3
-          ? 'v3:${parsed.iterations}:${base64Encode(digest)}'
-          : 'v2:${base64Encode(digest)}';
-      return _constantTimeEquals(storedHash, expectedVerifier);
+      final expectedVerifier = rebuildVerifierFor(parsed, candidateKey);
+      return expectedVerifier != null &&
+          _constantTimeEquals(storedHash, expectedVerifier);
     } catch (_) {
       return false;
     }
@@ -176,15 +173,12 @@ class VaultCrypto extends ChangeNotifier {
       if (storedHash == null) {
         throw SystemKeyMissingException('vault_pin_hash missing');
       }
-      final parsed = parseVerifier(storedHash);
+      final parsed = parseAnyPinVerifier(storedHash);
 
       final candidateKey = await _deriveKey(pin, storedSalt, parsed.iterations);
-      final digest = SHA256Digest().process(candidateKey);
-      final expectedVerifier = parsed.version == 3
-          ? 'v3:${parsed.iterations}:${base64Encode(digest)}'
-          : 'v2:${base64Encode(digest)}';
-      final ok = _constantTimeEquals(storedHash, expectedVerifier);
-      if (!ok) {
+      final expectedVerifier = rebuildVerifierFor(parsed, candidateKey);
+      if (expectedVerifier == null ||
+          !_constantTimeEquals(storedHash, expectedVerifier)) {
         throw const InvalidPinException();
       }
       final kek = _deriveKek(candidateKey);
@@ -232,7 +226,13 @@ class VaultCrypto extends ChangeNotifier {
     } else {
       final freshSalt = _generateSecureRandomBytes(16);
       final freshSaltBase64 = base64Encode(freshSalt);
-      final candidateKey = await _deriveKey(pin, freshSaltBase64);
+      // A NEW vault derives at the hardened cost AND writes a v4 verifier.
+      // These two must move together: the verifier records the count, and the
+      // candidate key below becomes the DEK itself (it is stored as the master
+      // key on first run), so deriving at 600,000 while writing a v3 record
+      // claiming 100,000 would make the vault impossible to unlock.
+      final candidateKey = await _deriveKey(
+          pin, freshSaltBase64, kHardenedVerifierIterations);
       final kek = _deriveKek(candidateKey);
 
       final innerWrapped = _wrapKey(candidateKey, kek);
@@ -248,7 +248,7 @@ class VaultCrypto extends ChangeNotifier {
       await _platformService.secureDelete('lockout_duration_ms');
 
       await _platformService.secureWrite(
-          _storageKeyPinHash, _verifierForKey(candidateKey));
+          _storageKeyPinHash, formatHardenedVerifier(candidateKey));
       await _platformService.secureWrite(
           _storageKeyMasterWrapped, 'hw1:$hwWrapped');
       await _platformService.secureWrite(_storageKeySalt, freshSaltBase64);
@@ -430,8 +430,13 @@ class VaultCrypto extends ChangeNotifier {
 
     final salt = _generateSecureRandomBytes(16);
     final saltBase64 = base64Encode(salt);
-    final newCandidateKey = await _deriveKey(newPin, saltBase64);
-    final hashVerifier = _verifierForKey(newCandidateKey);
+    // Same coupling as vault creation: derive at the hardened cost AND write a
+    // v4 verifier. Note this re-wraps the EXISTING dek under a new KEK — the data
+    // key never changes on a PIN change, only the key that protects it — so this
+    // is safe for a vault that already holds files.
+    final newCandidateKey = await _deriveKey(
+        newPin, saltBase64, kHardenedVerifierIterations);
+    final hashVerifier = formatHardenedVerifier(newCandidateKey);
     final newKek = _deriveKek(newCandidateKey);
     final innerWrapped = _wrapKey(dek, newKek);
 
@@ -459,12 +464,11 @@ class VaultCrypto extends ChangeNotifier {
       throw StateError('Failed to verify staged vault triple');
     }
 
-    final parsedStaged = parseVerifier(readHash);
-    final verifyDigest = SHA256Digest().process(newCandidateKey);
-    final expectedStagedVerifier = parsedStaged.version == 3
-        ? 'v3:${parsedStaged.iterations}:${base64Encode(verifyDigest)}'
-        : 'v2:${base64Encode(verifyDigest)}';
-    if (!_constantTimeEquals(readHash, expectedStagedVerifier)) {
+    final parsedStaged = parseAnyPinVerifier(readHash);
+    final expectedStagedVerifier =
+        rebuildVerifierFor(parsedStaged, newCandidateKey);
+    if (expectedStagedVerifier == null ||
+        !_constantTimeEquals(readHash, expectedStagedVerifier)) {
       await _cleanupTempKeys();
       throw StateError('Staged verifier mismatch');
     }

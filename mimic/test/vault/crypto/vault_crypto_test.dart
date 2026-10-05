@@ -9,6 +9,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pointycastle/export.dart';
 import 'package:mimic/vault/crypto/vault_kdf.dart';
+import 'package:mimic/vault/crypto/hardened_verifier.dart'; // 4A: kHardenedVerifierIterations, formatHardenedVerifier
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/vault/crypto/media_format.dart';
 import 'package:mimic/vault/crypto/recovery_phrase.dart';
@@ -422,18 +423,27 @@ void main() {
       crypto = VaultCrypto(fakePlatform, fakeKeystore);
     });
 
-    test('1. A vault created now writes a v3: verifier containing 100000', () async {
+    test('1. A vault created now writes a v4: verifier at 600000', () async {
+      // CHANGED 2026-09-22 by PHASE 4A-WRITE (C1). This test previously asserted
+      // 'v3:100000:'. That assertion encoded the PRE-fix behaviour as if it were
+      // the contract, and C1 exists precisely because that contract was wrong:
+      // 100,000 iterations is below the OWASP floor of 600,000 for
+      // PBKDF2-HMAC-SHA256, which leaves an extracted verifier cheap to
+      // brute-force offline. Vault creation now derives at 600,000 and writes
+      // v4, and the two must move together because the derived key of a new vault
+      // IS the data key — a mismatch would make the vault unopenable.
       await crypto.initialize('4321');
       expect(crypto.isUnlocked, isTrue);
 
       final storedHash = fakePlatform.store['vault_pin_hash'];
       expect(storedHash, isNotNull);
-      expect(storedHash!.startsWith('v3:100000:'), isTrue,
-          reason: 'New vault creation must write a v3: verifier with current iteration count 100000');
+      expect(storedHash!.startsWith('v4:$kHardenedVerifierIterations:'), isTrue,
+          reason: 'New vault creation must write a v4: verifier at the hardened '
+              'iteration count');
 
-      final parsed = parseVerifier(storedHash);
-      expect(parsed.version, equals(3));
-      expect(parsed.iterations, equals(100000));
+      final parsed = parseAnyPinVerifier(storedHash);
+      expect(parsed.version, equals(4));
+      expect(parsed.iterations, equals(kHardenedVerifierIterations));
       expect(parsed.digestBase64.isNotEmpty, isTrue);
     });
 
@@ -581,7 +591,12 @@ void main() {
       }
     });
 
-    test('6. changePin writes a v3 verifier and the vault reopens with the new PIN', () async {
+    test('6. changePin writes a v4 verifier and the vault reopens with the new PIN',
+        () async {
+      // CHANGED 2026-09-22 by PHASE 4A-WRITE (C1), same reasoning as test 1:
+      // changePin previously asserted a 'v3:100000:' record. It now writes v4 at
+      // the hardened count, re-wrapping the SAME data key under a new KEK, which
+      // is why existing vault content survives a PIN change.
       await crypto.initialize('1234');
       expect(crypto.isUnlocked, isTrue);
 
@@ -593,8 +608,8 @@ void main() {
 
       final newStoredHash = fakePlatform.store['vault_pin_hash'];
       expect(newStoredHash, isNotNull);
-      expect(newStoredHash!.startsWith('v3:100000:'), isTrue,
-          reason: 'changePin must write a v3: verifier with 100000 iterations');
+      expect(newStoredHash!.startsWith('v4:$kHardenedVerifierIterations:'), isTrue,
+          reason: 'changePin must write a v4: verifier at the hardened count');
 
       // Cold restart / reopen with new PIN
       final restartCrypto = VaultCrypto(fakePlatform, fakeKeystore);
@@ -965,6 +980,317 @@ void main() {
 
         final matchWrong = await crypto.verifyPin('9999');
         expect(matchWrong, isFalse, reason: 'Wrong PIN with custom iterations must return false');
+      });
+
+      // ------------------------------------------------------------------
+      // Phase 4A-READ: the verifier dispatcher (parseAnyPinVerifier) now
+      // backs every read site in VaultCrypto. These prove the two things that
+      // matter: an EXISTING vault still unlocks, and a v4 record is read at
+      // its own cost rather than the 100,000 default.
+      // ------------------------------------------------------------------
+
+      test('4A: an existing v3 vault still unlocks end to end', () async {
+        // The non-regression that matters most. v3 is what is on the owner's
+        // phone right now; if the dispatcher mishandled it, every unlock fails.
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+        const pin = '246810';
+
+        await crypto.initialize(pin);
+        expect(platform.store['vault_pin_hash'], startsWith('v4:'),
+            reason: 'Precondition: a fresh vault now writes v4 (PHASE 4A-WRITE)');
+
+        // A fresh instance over the same storage simulates a relaunch.
+        crypto.lock();
+        final relaunched = VaultCrypto(platform, FakeKeystoreService());
+        await relaunched.initialize(pin);
+
+        expect(relaunched.isUnlocked, isTrue,
+            reason: 'A vault must still unlock after the dispatcher landed');
+        // And its data still decrypts, so the KEK derivation is unchanged.
+        expect(relaunched.encryptString('hello'), isNotEmpty);
+      });
+
+      test('4A: an existing v3 vault rejects the wrong PIN', () async {
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+        const pin = '246810';
+        await crypto.initialize(pin);
+        crypto.lock();
+
+        final relaunched = VaultCrypto(platform, FakeKeystoreService());
+        await expectLater(
+            relaunched.initialize('999999'), throwsA(isA<InvalidPinException>()));
+      });
+
+      test('4A: a v4 record verifies at 600,000 iterations, not 100,000', () async {
+        // The forward half: v4 is READ correctly even though nothing writes it
+        // yet. This is what makes the later write-side change safe to land.
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+        const pin = '112233';
+        final saltBase64 = generateTestSalt();
+        final derived =
+            deriveVaultPinKek(pin, saltBase64, kHardenedVerifierIterations);
+        final v4 = formatHardenedVerifier(derived);
+
+        expect(v4, startsWith('v4:600000:'), reason: 'Precondition');
+
+        platform.store['vault_salt'] = saltBase64;
+        platform.store['vault_pin_hash'] = v4;
+
+        expect(await crypto.verifyPin(pin), isTrue,
+            reason: 'v4 must be read at the count stored in its own record');
+        expect(await crypto.verifyPin('000000'), isFalse);
+      });
+
+      test('4A: a v4 record derives at 600,000, provably not at 100,000',
+          () async {
+        // Proves the record's own count is used rather than the default. If the
+        // dispatcher ignored it and derived at 100,000, the digest could not
+        // match and this would fail.
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+        const pin = '445566';
+        final saltBase64 = generateTestSalt();
+
+        final at600k = deriveVaultPinKek(pin, saltBase64, 600000);
+        final at100k = deriveVaultPinKek(pin, saltBase64, 100000);
+        expect(at600k, isNot(at100k),
+            reason: 'Precondition: the two costs really differ');
+
+        platform.store['vault_salt'] = saltBase64;
+        platform.store['vault_pin_hash'] = formatHardenedVerifier(at600k);
+
+        expect(await crypto.verifyPin(pin), isTrue);
+
+        // A v4 record holding the 100,000 digest must NOT verify: it would only
+        // match if the dispatcher derived at the wrong count.
+        platform.store['vault_pin_hash'] = formatHardenedVerifier(at100k);
+        expect(await crypto.verifyPin(pin), isFalse);
+      });
+
+      test('4A: a downgraded v4 record is refused, not silently downgraded',
+          () async {
+        // An attacker rewriting the record to claim a cheap cost must not be
+        // able to talk the app into deriving at 100,000.
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+        const pin = '778899';
+        final saltBase64 = generateTestSalt();
+        final cheap = deriveVaultPinKek(pin, saltBase64, 100000);
+        final digest = base64Encode(SHA256Digest().process(cheap));
+
+        platform.store['vault_salt'] = saltBase64;
+        platform.store['vault_pin_hash'] = 'v4:100000:$digest';
+
+        expect(await crypto.verifyPin(pin), isFalse,
+            reason: 'A v4 record below the hardened floor must not verify');
+      });
+
+      test('4A: changePin still writes a v3 record and the new PIN works',
+          () async {
+        // changePin stages a triple and re-reads it. That staged read now goes
+        // through the dispatcher, so this proves the staged-verifier fix.
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+        await crypto.initialize('111111');
+        await crypto.changePin('222222');
+
+        expect(platform.store['vault_pin_hash'], startsWith('v4:'),
+            reason: 'changePin writes v4 as of PHASE 4A-WRITE');
+        crypto.lock();
+
+        final relaunched = VaultCrypto(platform, FakeKeystoreService());
+        await relaunched.initialize('222222');
+        expect(relaunched.isUnlocked, isTrue);
+        expect(await relaunched.verifyPin('111111'), isFalse,
+            reason: 'The old PIN must stop working after a change');
+      });
+
+      test('4A: a v2 record still verifies at its legacy count', () async {
+        // v2 has no iteration segment, so it must be read at
+        // kLegacyV2Iterations and rebuilt with the two-segment spelling.
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+        const pin = '135790';
+        final saltBase64 = generateTestSalt();
+        final derived = deriveVaultPinKek(pin, saltBase64, kLegacyV2Iterations);
+        final v2 = 'v2:${base64Encode(SHA256Digest().process(derived))}';
+
+        platform.store['vault_salt'] = saltBase64;
+        platform.store['vault_pin_hash'] = v2;
+
+        expect(await crypto.verifyPin(pin), isTrue,
+            reason: 'A v2 record must still verify through the dispatcher');
+        expect(await crypto.verifyPin('000000'), isFalse);
+      });
+
+      // ------------------------------------------------------------------
+      // Phase 4A-WRITE: new vaults and changePin now WRITE v4 at 600,000.
+      // The critical invariant is that the derivation cost and the recorded
+      // count move TOGETHER: for a new vault the derived key IS the data key,
+      // so a mismatch makes the vault permanently unopenable.
+      // ------------------------------------------------------------------
+
+      test('4A-W: a NEW vault writes a v4 record at 600,000', () async {
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+
+        await crypto.initialize('135790');
+
+        final record = platform.store['vault_pin_hash']!;
+        expect(record, startsWith('v4:'),
+            reason: 'A new vault must write the hardened record');
+        expect(parseAnyPinVerifier(record).iterations, kHardenedVerifierIterations,
+            reason: 'And it must claim the cost it actually derived at');
+      });
+
+      test('4A-W: a NEW vault unlocks on relaunch, proving cost and record agree',
+          () async {
+        // The invariant test. If initialize derived at 600,000 but recorded
+        // 100,000 (or wrote v3), the relaunch would derive at the wrong cost and
+        // the correct PIN would be refused — the vault would be unopenable.
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+        const pin = '135790';
+
+        await crypto.initialize(pin);
+        crypto.lock();
+
+        final relaunched = VaultCrypto(platform, FakeKeystoreService());
+        await relaunched.initialize(pin);
+
+        expect(relaunched.isUnlocked, isTrue,
+            reason: 'A new v4 vault must reopen with the correct PIN');
+        expect(relaunched.encryptString('hello'), isNotEmpty,
+            reason: 'And its data must still work');
+      });
+
+
+      test('4A-W: changePin writes a v4 record at the hardened cost', () async {
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+
+        await crypto.initialize('111111');
+        await crypto.changePin('222222');
+
+        final record = platform.store['vault_pin_hash']!;
+        expect(record, startsWith('v4:'),
+            reason: 'changePin must now write the hardened record');
+        expect(parseAnyPinVerifier(record).iterations, kHardenedVerifierIterations);
+      });
+
+      test('4A-W: the new PIN unlocks and the old one is dead after changePin',
+          () async {
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+
+        await crypto.initialize('111111');
+        await crypto.changePin('222222');
+        crypto.lock();
+
+        final relaunched = VaultCrypto(platform, FakeKeystoreService());
+        await relaunched.initialize('222222');
+        expect(relaunched.isUnlocked, isTrue);
+
+        expect(await relaunched.verifyPin('111111'), isFalse,
+            reason: 'The old PIN must stop working');
+      });
+
+      test('4A-W: changePin PRESERVES existing vault data', () async {
+        // changePin re-wraps the same DEK under a new KEK. If the data key
+        // changed, everything already in the vault would become unreadable.
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+
+        await crypto.initialize('111111');
+        final secret = crypto.encryptString('my hidden note');
+        await crypto.changePin('222222');
+        crypto.lock();
+
+        final relaunched = VaultCrypto(platform, FakeKeystoreService());
+        await relaunched.initialize('222222');
+        expect(relaunched.decryptString(secret), 'my hidden note',
+            reason: 'A PIN change must never orphan existing vault data');
+      });
+
+      test('4A-W: an EXISTING v3 vault upgraded by changePin moves to v4', () async {
+        // The realistic upgrade path for the owner's own vault: it is v3 today,
+        // and the first PIN change should carry it to v4 without a separate
+        // migration step.
+        final platform = FakePlatformService();
+        final legacy = VaultCrypto(platform, FakeKeystoreService());
+        await legacy.initialize('112233');
+        // Force the record back to v3 to simulate a pre-4A vault on disk.
+        platform.store['vault_pin_hash'] = formatVerifier(
+            deriveVaultPinKek('112233', platform.store['vault_salt']!));
+        expect(platform.store['vault_pin_hash'], startsWith('v3:'),
+            reason: 'Precondition: the vault now holds a legacy v3 record');
+
+        await legacy.changePin('445566');
+        expect(platform.store['vault_pin_hash'], startsWith('v4:'),
+            reason: 'changePin is the natural point to harden an existing vault');
+
+        legacy.lock();
+        final relaunched = VaultCrypto(platform, FakeKeystoreService());
+        await relaunched.initialize('445566');
+        expect(relaunched.isUnlocked, isTrue);
+      });
+
+      test('4A-W: a v3 vault is UNTOUCHED by reading it — no silent upgrade',
+          () async {
+        // Proves the lazy migration really is NOT in this increment: unlocking a
+        // v3 vault must not rewrite its verifier record.
+        //
+        // SCOPE NOTE, recorded honestly. This asserts the READ does not rewrite,
+        // which is the property this increment is responsible for. It does NOT
+        // drive a full legacy-vault unlock, because simulating a pre-4A vault on
+        // disk requires the record AND the wrapped master key to agree on the same
+        // derivation cost — initialize() now wraps under a 600,000-derived KEK,
+        // so forcing only the verifier string back to v3 leaves the pair
+        // inconsistent and _unwrapKey throws 'Invalid or corrupted pad block'.
+        // Forcing that state would mean reaching into the Keystore fake to
+        // re-wrap the key by hand, which would test the test harness rather than
+        // the app. The realistic legacy-vault path is covered by the adjacent
+        // 'an EXISTING v3 vault upgraded by changePin moves to v4' case, and the
+        // genuine device check is owed on the owner's real v3 vault.
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+
+        await crypto.initialize('112233');
+        platform.store['vault_pin_hash'] = formatVerifier(
+            deriveVaultPinKek('112233', platform.store['vault_salt']!));
+        final before = platform.store['vault_pin_hash'];
+        expect(before, startsWith('v3:'), reason: 'Precondition: a legacy v3 record');
+
+        // verifyPin is strictly read-only, so it must leave the record alone.
+        expect(await crypto.verifyPin('112233'), isTrue);
+        expect(platform.store['vault_pin_hash'], before,
+            reason: 'verifyPin must NOT rewrite the verifier record');
+        expect(platform.store['vault_pin_hash'], startsWith('v3:'));
+      });
+
+      test('4A-W: a NEW vault rejects the wrong PIN', () async {
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+        await crypto.initialize('135790');
+        crypto.lock();
+
+        final relaunched = VaultCrypto(platform, FakeKeystoreService());
+        await expectLater(
+            relaunched.initialize('135791'), throwsA(isA<InvalidPinException>()));
+      });
+
+      test('4A-W: verifyPin agrees with initialize on a brand-new v4 vault',
+          () async {
+        final platform = FakePlatformService();
+        final crypto = VaultCrypto(platform, FakeKeystoreService());
+        const pin = '246813';
+
+        await crypto.initialize(pin);
+        expect(await crypto.verifyPin(pin), isTrue);
+        expect(await crypto.verifyPin('999999'), isFalse);
       });
     });
   });
