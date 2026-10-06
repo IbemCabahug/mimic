@@ -784,7 +784,7 @@ void main() {
       await srcFile.writeAsBytes(plaintext);
 
       // Encrypt with c2
-      await crypto.encryptStreamSystemCtr(srcFile, encFile);
+      await crypto.encryptStreamSystemCtr(srcFile, encFile, writeC3: false);
 
       // Assert first 8 bytes match kMediaMagicCtrV2
       final encBytes = await encFile.readAsBytes();
@@ -873,7 +873,7 @@ void main() {
       await srcFile.writeAsBytes(plaintext);
 
       // Encrypt as c2
-      await crypto.encryptStreamSystemCtr(srcFile, encFile);
+      await crypto.encryptStreamSystemCtr(srcFile, encFile, writeC3: false);
 
       // Range read starting at offset 37 (not a 16-byte boundary) with length 83
       const rangeOffset = 37;
@@ -1088,7 +1088,7 @@ void main() {
             reason: 'A v4 record below the hardened floor must not verify');
       });
 
-      test('4A: changePin still writes a v3 record and the new PIN works',
+      test('4A: changePin writes a v4 record and the new PIN works',
           () async {
         // changePin stages a triple and re-reads it. That staged read now goes
         // through the dispatcher, so this proves the staged-verifier fix.

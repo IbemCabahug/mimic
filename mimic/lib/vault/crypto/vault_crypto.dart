@@ -1423,9 +1423,9 @@ class VaultCrypto extends ChangeNotifier {
   }
 
   /// Encrypts [src] to [dest] using AES-CTR keyed by the master DEK (_derivedKey).
-  /// If [writeC3] is true (or when using [encryptStreamSystemCtrV3]), writes authenticated
-  /// "MVKEYc3\0" format with HMAC-SHA256 authentication. Otherwise writes "MVKEYc2\0".
-  Future<void> encryptStreamSystemCtr(File src, File dest, {bool writeC3 = false}) async {
+  /// Defaults to writing authenticated "MVKEYc3\0" format with HMAC-SHA256 authentication (writeC3: true).
+  /// Setting [writeC3] to false writes legacy unauthenticated "MVKEYc2\0".
+  Future<void> encryptStreamSystemCtr(File src, File dest, {bool writeC3 = true}) async {
     if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
     final iv = _generateSecureRandomBytes(16);
     // The c3/c2 write runs in a background isolate (H15): a whole-file CTR pass
