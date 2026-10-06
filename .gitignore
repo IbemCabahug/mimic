@@ -3,6 +3,8 @@
 /docs/
 
 # Internal planning documents - never commit (repo was public until 2026-08-07)
+check-project.md
+docs/check-project.md
 docs/future_feature.md
 docs/PROJECT_STATUS.md
 f27_notes.md
