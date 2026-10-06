@@ -1311,7 +1311,7 @@ void main() {
         final salt = generateTestSalt();
         final candidateKey = deriveVaultPinKek(pin, salt, iterations);
         final hashVerifier = version == 'v2'
-            ? 'v2:$iterations:${base64Encode(SHA256Digest().process(candidateKey))}'
+            ? 'v2:${base64Encode(SHA256Digest().process(candidateKey))}'
             : formatVerifier(candidateKey, iterations);
 
         final dek = explicitDek ??
@@ -1455,7 +1455,8 @@ void main() {
           keystore: keystore,
         );
 
-        expect(platform.store['vault_pin_hash'], startsWith('v2:100000:'));
+        expect(platform.store['vault_pin_hash'], startsWith('v2:'));
+        expect(platform.store['vault_pin_hash']!.split(':').length, equals(2));
 
         final crypto = VaultCrypto(platform, keystore);
         await crypto.initialize(pin);
