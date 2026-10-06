@@ -1,5 +1,8 @@
 // lib/vault/crypto/media_format.dart
 
+import 'authenticated_blob_format.dart' show kMediaMagicCtrV3;
+export 'authenticated_blob_format.dart' show kMediaMagicCtrV3;
+
 /// AES-CBC media streaming magic header: "MVKEYv1\0" (keyed by master DEK).
 const List<int> kMediaMagicV1 = [0x4D, 0x56, 0x4B, 0x45, 0x59, 0x76, 0x31, 0x00];
 
@@ -52,6 +55,8 @@ enum MediaBlobFormat {
   ctrV1,
   /// MVKEYc2\0 — AES-CTR under the master vault key.
   ctrV2,
+  /// MVKEYc3\0 — Authenticated AES-CTR with HMAC-SHA256 tag under the master vault key.
+  ctrV3,
   /// No recognised magic header. Very old blobs that begin with a raw IV.
   legacyNoHeader,
 }
@@ -64,13 +69,16 @@ MediaBlobFormat classifyMediaHeader(List<int> head) {
   bool isV1 = true;
   bool isCtrV1 = true;
   bool isCtrV2 = true;
+  bool isCtrV3 = true;
 
   for (int i = 0; i < 8; i++) {
     if (head[i] != kMediaMagicV1[i]) isV1 = false;
     if (head[i] != kMediaMagicCtrV1[i]) isCtrV1 = false;
     if (head[i] != kMediaMagicCtrV2[i]) isCtrV2 = false;
+    if (head[i] != kMediaMagicCtrV3[i]) isCtrV3 = false;
   }
 
+  if (isCtrV3) return MediaBlobFormat.ctrV3;
   if (isCtrV2) return MediaBlobFormat.ctrV2;
   if (isCtrV1) return MediaBlobFormat.ctrV1;
   if (isV1) return MediaBlobFormat.cbcV1;

@@ -8,6 +8,7 @@ import 'dart:typed_data';
 import 'package:pointycastle/export.dart';
 import 'media_format.dart';
 import 'vault_exceptions.dart';
+import 'authenticated_blob_format.dart';
 
 class RangeDecryptWorkerInit {
   final Uint8List masterKey;
@@ -161,6 +162,44 @@ Future<void> rangeDecryptWorkerEntry(RangeDecryptWorkerInit init) async {
           ? classifyMediaHeader(head)
           : MediaBlobFormat.legacyNoHeader;
 
+      if (format == MediaBlobFormat.ctrV3) {
+        if (fileLength < kAuthHeaderLength) throw const CorruptedMediaFileException();
+        final iv = await readExact(raf, 16);
+        final tag = await readExact(raf, 32);
+        final payloadLength = fileLength - kAuthHeaderLength;
+        if (payloadLength == 0) return Uint8List(0);
+        final encrypted = await readExact(raf, payloadLength);
+
+        final macKey = deriveMacKey(masterKey);
+        try {
+          final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(macKey));
+          hmac.update(Uint8List.fromList(kMediaMagicCtrV3), 0, kMediaMagicCtrV3.length);
+          hmac.update(iv, 0, iv.length);
+          hmac.update(encrypted, 0, encrypted.length);
+          final computedTag = Uint8List(kAuthTagLength);
+          hmac.doFinal(computedTag, 0);
+
+          if (!constantTimeBytesEqual(tag, computedTag)) {
+            throw const BlobAuthenticationException(
+              'Authentication tag does not match the blob contents.',
+              isTamperSuspected: true,
+            );
+          }
+        } finally {
+          macKey.fillRange(0, macKey.length, 0);
+        }
+
+        final out = ctrDecryptRange(
+          key: masterKey,
+          iv: iv,
+          encrypted: encrypted,
+          offset: 0,
+          length: payloadLength,
+        );
+        encrypted.fillRange(0, encrypted.length, 0);
+        return out;
+      }
+
       if (format == MediaBlobFormat.ctrV1 || format == MediaBlobFormat.ctrV2) {
         if (fileLength < 24) throw const CorruptedMediaFileException();
         final iv = await readExact(raf, 16);
@@ -250,7 +289,7 @@ Future<void> rangeDecryptWorkerEntry(RangeDecryptWorkerInit init) async {
         // while reading a whole file can only be "System key is missing"
         // (the master key is non-null by construction for cmd:'file'), and
         // reporting it as 'locked' would misdescribe it to any future caller.
-        final kind = e is UnsupportedMediaFormatException ? 'unsupportedFormat' : e is CorruptedMediaFileException ? 'corrupted' : e is StateError ? 'systemKeyMissing' : 'unknown';
+        final kind = e is BlobAuthenticationException ? 'authentication' : e is UnsupportedMediaFormatException ? 'unsupportedFormat' : e is CorruptedMediaFileException ? 'corrupted' : e is StateError ? 'systemKeyMissing' : 'unknown';
         responsePort.send(<String, dynamic>{'id': fileId, 'error': e.toString(), 'kind': kind});
       }
       continue;
@@ -266,20 +305,22 @@ Future<void> rangeDecryptWorkerEntry(RangeDecryptWorkerInit init) async {
       try {
         final magic = Uint8List(8);
         if (await raf.readInto(magic) != 8) throw const CorruptedMediaFileException();
+        final bool isC3 = ctrEquals(magic, kMediaMagicCtrV3);
         final bool isC2 = ctrEquals(magic, kMediaMagicCtrV2);
         final bool isC1 = ctrEquals(magic, kMediaMagicCtrV1);
-        if (!isC1 && !isC2) throw UnsupportedMediaFormatException('range worker serves CTR blobs only');
+        if (!isC1 && !isC2 && !isC3) throw UnsupportedMediaFormatException('range worker serves CTR blobs only');
         final iv = Uint8List(16);
         if (await raf.readInto(iv) != 16) throw const CorruptedMediaFileException();
         Uint8List key;
-        if (isC2) {
+        if (isC2 || isC3) {
           key = masterKey;
         } else {
           final sys = systemKey;
           if (sys == null) throw StateError('System key is missing');
           key = sys;
         }
-        await raf.setPosition(24 + offset);
+        final int headerLength = isC3 ? kAuthHeaderLength : 24;
+        await raf.setPosition(headerLength + offset);
         final encrypted = Uint8List(length);
         int got = 0;
         while (got < length) {
@@ -354,7 +395,8 @@ class RangeDecryptWorker {
     } else {
       final kind = message['kind'] as String? ?? 'unknown';
       final text = message['error'] as String? ?? 'Range decrypt failed';
-      if (kind == 'unsupportedFormat') { completer.completeError(UnsupportedMediaFormatException(text)); }
+      if (kind == 'authentication') { completer.completeError(BlobAuthenticationException(text, isTamperSuspected: true)); }
+      else if (kind == 'unsupportedFormat') { completer.completeError(UnsupportedMediaFormatException(text)); }
       else if (kind == 'corrupted') { completer.completeError(CorruptedMediaFileException(text)); }
       else if (kind == 'locked') { completer.completeError(StateError(text)); }
       else if (kind == 'systemKeyMissing') { completer.completeError(StateError(text)); }

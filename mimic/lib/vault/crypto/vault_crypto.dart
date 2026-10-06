@@ -15,11 +15,11 @@ import '../../core/services/platform_service.dart';
 import 'recovery_phrase.dart';
 import 'keystore_service.dart';
 import 'media_format.dart';
-import 'vault_exceptions.dart';
 import 'crypto_isolate.dart';
 import 'range_decrypt_isolate.dart';
 
 export 'vault_exceptions.dart';
+export 'authenticated_blob_format.dart';
 
 class InvalidPinException implements Exception {
   final String message;
@@ -51,6 +51,7 @@ class VaultCrypto extends ChangeNotifier {
   static const List<int> _mediaMagic = kMediaMagicV1;
   static const List<int> _mediaMagicCtr = kMediaMagicCtrV1;
   static const List<int> _mediaMagicCtrV2 = kMediaMagicCtrV2;
+  static const List<int> _mediaMagicCtrV3 = kMediaMagicCtrV3;
 
   static VaultCrypto? _instance;
   static VaultCrypto get instance {
@@ -745,10 +746,43 @@ class VaultCrypto extends ChangeNotifier {
 
   Future<Uint8List> encryptSystem(Uint8List plaintext) async {
     if (plaintext.isEmpty) return Uint8List(0);
-    final encrypted = encrypt(plaintext);
-    final result = Uint8List(_mediaMagic.length + encrypted.length);
-    result.setRange(0, _mediaMagic.length, _mediaMagic);
-    result.setRange(_mediaMagic.length, result.length, encrypted);
+    if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+    final iv = _generateSecureRandomBytes(_ivLength);
+    final aes = AESEngine()..init(true, KeyParameter(_derivedKey!));
+    final counter = Uint8List.fromList(iv);
+    final ksBlock = Uint8List(16);
+    final encrypted = Uint8List(plaintext.length);
+    int offset = 0;
+    while (offset + 16 <= plaintext.length) {
+      aes.processBlock(counter, 0, ksBlock, 0);
+      for (int i = 0; i < 16; i++) {
+        encrypted[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+      }
+      _ctrIncrement(counter);
+      offset += 16;
+    }
+    if (offset < plaintext.length) {
+      aes.processBlock(counter, 0, ksBlock, 0);
+      final remaining = plaintext.length - offset;
+      for (int i = 0; i < remaining; i++) {
+        encrypted[offset + i] = plaintext[offset + i] ^ ksBlock[i];
+      }
+      _ctrIncrement(counter);
+    }
+
+    final macKey = deriveMacKey(_derivedKey!);
+    final Uint8List tag;
+    try {
+      tag = computeAuthTag(macKey: macKey, iv: iv, ciphertext: encrypted);
+    } finally {
+      macKey.fillRange(0, macKey.length, 0);
+    }
+
+    final result = Uint8List(kAuthHeaderLength + encrypted.length);
+    result.setRange(0, 8, _mediaMagicCtrV3);
+    result.setRange(8, 24, iv);
+    result.setRange(24, 56, tag);
+    result.setRange(56, result.length, encrypted);
     return result;
   }
 
@@ -774,10 +808,17 @@ class VaultCrypto extends ChangeNotifier {
 
   bool isLegacySystemBlob(Uint8List cipher) {
     if (cipher.length < _mediaMagic.length) return true;
+    bool isV1 = true;
+    bool isC1 = true;
+    bool isC2 = true;
+    bool isC3 = true;
     for (int i = 0; i < _mediaMagic.length; i++) {
-      if (cipher[i] != _mediaMagic[i]) return true;
+      if (cipher[i] != _mediaMagic[i]) isV1 = false;
+      if (cipher[i] != _mediaMagicCtr[i]) isC1 = false;
+      if (cipher[i] != _mediaMagicCtrV2[i]) isC2 = false;
+      if (cipher[i] != _mediaMagicCtrV3[i]) isC3 = false;
     }
-    return false;
+    return !isV1 && !isC1 && !isC2 && !isC3;
   }
 
   Future<void> encryptStream(File src, File dest) async {
@@ -978,14 +1019,22 @@ class VaultCrypto extends ChangeNotifier {
         bool isV1 = true;
         bool isC1 = true;
         bool isC2 = true;
+        bool isC3 = true;
         for (int i = 0; i < _mediaMagic.length; i++) {
           if (magicBuffer[i] != _mediaMagic[i]) isV1 = false;
           if (magicBuffer[i] != _mediaMagicCtr[i]) isC1 = false;
           if (magicBuffer[i] != _mediaMagicCtrV2[i]) isC2 = false;
+          if (magicBuffer[i] != _mediaMagicCtrV3[i]) isC3 = false;
         }
-        if (isV1) magicType = 1;
-        else if (isC1) magicType = 2;
-        else if (isC2) magicType = 3;
+        if (isV1) {
+          magicType = 1;
+        } else if (isC1) {
+          magicType = 2;
+        } else if (isC2) {
+          magicType = 3;
+        } else if (isC3) {
+          magicType = 4;
+        }
       }
 
       if (magicType == 1) {
@@ -1009,7 +1058,7 @@ class VaultCrypto extends ChangeNotifier {
           destPath: dest.path,
           shouldAbort: shouldAbort,
         );
-      } else if (magicType == 3) {
+      } else if (magicType == 3 || magicType == 4) {
         if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
         await cryptoIsolateDecryptFile(
           key: Uint8List.fromList(_derivedKey!),
@@ -1045,14 +1094,22 @@ class VaultCrypto extends ChangeNotifier {
       bool isV1 = true;
       bool isC1 = true;
       bool isC2 = true;
+      bool isC3 = true;
       for (int i = 0; i < _mediaMagic.length; i++) {
         if (ciphertext[i] != _mediaMagic[i]) isV1 = false;
         if (ciphertext[i] != _mediaMagicCtr[i]) isC1 = false;
         if (ciphertext[i] != _mediaMagicCtrV2[i]) isC2 = false;
+        if (ciphertext[i] != _mediaMagicCtrV3[i]) isC3 = false;
       }
-      if (isV1) magicType = 1;
-      else if (isC1) magicType = 2;
-      else if (isC2) magicType = 3;
+      if (isV1) {
+        magicType = 1;
+      } else if (isC1) {
+        magicType = 2;
+      } else if (isC2) {
+        magicType = 3;
+      } else if (isC3) {
+        magicType = 4;
+      }
     }
 
     if (magicType == 1) {
@@ -1060,8 +1117,6 @@ class VaultCrypto extends ChangeNotifier {
       try {
         return decrypt(actualCiphertext);
       } on ArgumentError {
-        throw const CorruptedMediaFileException();
-      } on RangeError {
         throw const CorruptedMediaFileException();
       } catch (e) {
         if (e is SystemKeyMissingException || e is StateError) rethrow;
@@ -1126,6 +1181,40 @@ class VaultCrypto extends ChangeNotifier {
         }
       }
       return outBuffer;
+    } else if (magicType == 4) {
+      if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+      final macKey = deriveMacKey(_derivedKey!);
+      final Uint8List rawCiphertext;
+      final AuthenticatedBlobHeader header;
+      try {
+        header = parseAuthHeader(ciphertext);
+        rawCiphertext = authenticateBlob(blob: ciphertext, macKey: macKey);
+      } finally {
+        macKey.fillRange(0, macKey.length, 0);
+      }
+
+      final aes = AESEngine()..init(true, KeyParameter(_derivedKey!));
+      final counter = Uint8List.fromList(header.iv);
+      final ksBlock = Uint8List(16);
+
+      final outBuffer = Uint8List(rawCiphertext.length);
+      int offset = 0;
+      while (offset + 16 <= rawCiphertext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        for (int i = 0; i < 16; i++) {
+          outBuffer[offset + i] = rawCiphertext[offset + i] ^ ksBlock[i];
+        }
+        _ctrIncrement(counter);
+        offset += 16;
+      }
+      if (offset < rawCiphertext.length) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        final remaining = rawCiphertext.length - offset;
+        for (int i = 0; i < remaining; i++) {
+          outBuffer[offset + i] = rawCiphertext[offset + i] ^ ksBlock[i];
+        }
+      }
+      return outBuffer;
     } else {
       if (ciphertext.length < 32 || ciphertext.length % 16 != 0) {
         throw const CorruptedMediaFileException();
@@ -1145,8 +1234,6 @@ class VaultCrypto extends ChangeNotifier {
       return cipher.process(encrypted);
     } on ArgumentError {
       throw const CorruptedMediaFileException();
-    } on RangeError {
-      throw const CorruptedMediaFileException();
     } catch (e) {
       if (e is SystemKeyMissingException || e is StateError) rethrow;
       if (e.toString().contains('Vault is locked')) rethrow;
@@ -1154,7 +1241,7 @@ class VaultCrypto extends ChangeNotifier {
     }
   }
 
-  /// Generates the versioned PIN verifier string ('v3:<iterations>:<base64(SHA256(key))>')
+  /// Generates the versioned PIN verifier string (`v3:<iterations>:<base64(SHA256(key))>`)
   String _verifierForKey(Uint8List key, [int iterations = kPbkdf2Iterations]) {
     return formatVerifier(key, iterations);
   }
@@ -1287,12 +1374,6 @@ class VaultCrypto extends ChangeNotifier {
     return result == 0;
   }
 
-  String _hashPin(String pin) {
-    final bytes = Uint8List.fromList(utf8.encode(pin));
-    final digest = SHA256Digest().process(bytes);
-    return base64Encode(digest);
-  }
-
   String _generateRandomSalt() {
     return base64Encode(_generateSecureRandomBytes(16));
   }
@@ -1341,22 +1422,29 @@ class VaultCrypto extends ChangeNotifier {
     return counter;
   }
 
-  /// Encrypts [src] to [dest] using AES-CTR with magic "MVKEYc2\0" keyed by the master DEK (_derivedKey).
-  /// Files written in this format are fully recoverable from the 12-word recovery phrase upon reinstall.
-  Future<void> encryptStreamSystemCtr(File src, File dest) async {
+  /// Encrypts [src] to [dest] using AES-CTR keyed by the master DEK (_derivedKey).
+  /// If [writeC3] is true (or when using [encryptStreamSystemCtrV3]), writes authenticated
+  /// "MVKEYc3\0" format with HMAC-SHA256 authentication. Otherwise writes "MVKEYc2\0".
+  Future<void> encryptStreamSystemCtr(File src, File dest, {bool writeC3 = false}) async {
     if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
     final iv = _generateSecureRandomBytes(16);
-    // The c2 write runs in a background isolate (H15): a whole-file CTR pass
+    // The c3/c2 write runs in a background isolate (H15): a whole-file CTR pass
     // on the UI isolate froze playback for the entire conversion. The worker
-    // writes the c2 header (magic + IV) itself, byte-for-byte as the inline
-    // implementation did. The key is copied because the worker zeroes its copy.
+    // writes the authenticated header (magic + IV + HMAC tag) itself.
+    // The key is copied because the worker zeroes its copy.
     await cryptoIsolateEncryptFileCtr(
       key: Uint8List.fromList(_derivedKey!),
       iv: iv,
       srcPath: src.path,
       destPath: dest.path,
+      writeC3: writeC3,
     );
   }
+
+  /// Encrypts [src] to [dest] using authenticated AES-CTR with magic "MVKEYc3\0" keyed by the master DEK.
+  /// Files written in this format are authenticated via HMAC-SHA256 and fully recoverable from the 12-word recovery phrase upon reinstall.
+  Future<void> encryptStreamSystemCtrV3(File src, File dest) =>
+      encryptStreamSystemCtr(src, dest, writeC3: true);
 
   Future<RangeDecryptWorker?> _ensureRangeWorker() {
     final existing = _rangeWorker;
@@ -1480,19 +1568,28 @@ class VaultCrypto extends ChangeNotifier {
         bool isV1 = true;
         bool isC1 = true;
         bool isC2 = true;
+        bool isC3 = true;
         for (int i = 0; i < 8; i++) {
           if (magicBuffer[i] != _mediaMagic[i]) isV1 = false;
           if (magicBuffer[i] != _mediaMagicCtr[i]) isC1 = false;
           if (magicBuffer[i] != _mediaMagicCtrV2[i]) isC2 = false;
+          if (magicBuffer[i] != _mediaMagicCtrV3[i]) isC3 = false;
         }
-        if (isV1) magicType = 1;
-        else if (isC1) magicType = 2;
-        else if (isC2) magicType = 3;
+        if (isV1) {
+          magicType = 1;
+        } else if (isC1) {
+          magicType = 2;
+        } else if (isC2) {
+          magicType = 3;
+        } else if (isC3) {
+          magicType = 4;
+        }
       }
 
-      if (magicType == 2 || magicType == 3) {
+      if (magicType == 2 || magicType == 3 || magicType == 4) {
+        final int headerLength = (magicType == 4) ? kAuthHeaderLength : 24;
         final fileLength = await src.length();
-        final maxReadable = fileLength - 24;
+        final maxReadable = fileLength - headerLength;
         if (offset >= maxReadable || offset < 0) return Uint8List(0);
         
         int actualLength = length;
@@ -1502,7 +1599,7 @@ class VaultCrypto extends ChangeNotifier {
         if (actualLength <= 0) return Uint8List(0);
 
         final Uint8List key;
-        if (magicType == 3) {
+        if (magicType == 3 || magicType == 4) {
           if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
           key = _derivedKey!;
         } else {
@@ -1527,7 +1624,7 @@ class VaultCrypto extends ChangeNotifier {
         final rangeCounter = _ctrCounterAt(iv, blockIndex);
         final ksBlock = Uint8List(16);
 
-        await raf.setPosition(24 + offset);
+        await raf.setPosition(headerLength + offset);
         final ciphertext = Uint8List(actualLength);
         await raf.readInto(ciphertext);
 

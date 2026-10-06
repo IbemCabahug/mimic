@@ -9,6 +9,7 @@ class CategoryFormatCounts {
   final int cbcV1;
   final int ctrV1;
   final int ctrV2;
+  final int ctrV3;
   final int legacyNoHeader;
   final int missingFile; // metadata exists but no file on disk
 
@@ -17,6 +18,7 @@ class CategoryFormatCounts {
     required this.cbcV1,
     required this.ctrV1,
     required this.ctrV2,
+    this.ctrV3 = 0,
     required this.legacyNoHeader,
     required this.missingFile,
   });
@@ -58,6 +60,7 @@ Future<CategoryFormatCounts> _countCategory(
   int cbcV1 = 0;
   int ctrV1 = 0;
   int ctrV2 = 0;
+  int ctrV3 = 0;
   int legacyNoHeader = 0;
   int missingFile = 0;
 
@@ -86,6 +89,9 @@ Future<CategoryFormatCounts> _countCategory(
           case MediaBlobFormat.ctrV2:
             ctrV2++;
             break;
+          case MediaBlobFormat.ctrV3:
+            ctrV3++;
+            break;
           case MediaBlobFormat.legacyNoHeader:
             legacyNoHeader++;
             break;
@@ -104,13 +110,14 @@ Future<CategoryFormatCounts> _countCategory(
     }
   }
 
-  // Invariant: total == cbcV1 + ctrV1 + ctrV2 + legacyNoHeader + missingFile
+  // Invariant: total == cbcV1 + ctrV1 + ctrV2 + ctrV3 + legacyNoHeader + missingFile
   final total = ids.length;
   return CategoryFormatCounts(
     total: total,
     cbcV1: cbcV1,
     ctrV1: ctrV1,
     ctrV2: ctrV2,
+    ctrV3: ctrV3,
     legacyNoHeader: legacyNoHeader,
     missingFile: missingFile,
   );
