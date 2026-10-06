@@ -168,7 +168,6 @@ class VaultCrypto extends ChangeNotifier {
 
     final storedSalt = await _platformService.secureRead(_storageKeySalt);
     if (storedSalt != null) {
-      final salt = base64Decode(storedSalt);
       final storedHash = await _platformService.secureRead(_storageKeyPinHash);
       if (storedHash == null) {
         throw SystemKeyMissingException('vault_pin_hash missing');
