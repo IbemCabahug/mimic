@@ -205,11 +205,24 @@ class VaultCrypto extends ChangeNotifier {
         }
       }
       if (_lockEpoch == capturedEpoch) {
+        if (parsed.version < 4) {
+          try {
+            await _commitStagedTriple(pin, dek, markerPrefix: 'upgrade');
+            needsHwMigration = false;
+          } catch (e) {
+            debugPrint('Lazy verifier upgrade failed: $e');
+            // Do not lock out user if background upgrade fails; canonical keys remain intact.
+          }
+        }
+      }
+      if (_lockEpoch == capturedEpoch) {
         _derivedKey = dek;
         _isUnlocked = true;
         _needsHardwareMigration = needsHwMigration;
         if (needsHwMigration) {
           _temporaryKek = kek;
+        } else {
+          kek.fillRange(0, kek.length, 0);
         }
         notifyListeners();
       } else {
@@ -423,100 +436,119 @@ class VaultCrypto extends ChangeNotifier {
     return _synchronized(() => _changePinInternal(newPin, capturedDek, epoch));
   }
 
-  Future<void> _changePinInternal(String newPin, Uint8List capturedDek, int capturedEpoch) async {
-    final dek = capturedDek;
-
+  Future<void> _commitStagedTriple(
+    String pin,
+    Uint8List dek, {
+    required String markerPrefix,
+  }) async {
     await _recoverSwapIfNeeded();
 
     final salt = _generateSecureRandomBytes(16);
     final saltBase64 = base64Encode(salt);
-    // Same coupling as vault creation: derive at the hardened cost AND write a
-    // v4 verifier. Note this re-wraps the EXISTING dek under a new KEK — the data
-    // key never changes on a PIN change, only the key that protects it — so this
-    // is safe for a vault that already holds files.
+    // Derive at the hardened cost AND write a v4 verifier.
+    // Note this re-wraps the EXISTING dek under a new KEK — the data key
+    // never changes, only the key that protects it — so this is safe for
+    // a vault that already holds files.
     final newCandidateKey = await _deriveKey(
-        newPin, saltBase64, kHardenedVerifierIterations);
-    final hashVerifier = formatHardenedVerifier(newCandidateKey);
+        pin, saltBase64, kHardenedVerifierIterations);
     final newKek = _deriveKek(newCandidateKey);
-    final innerWrapped = _wrapKey(dek, newKek);
-
-    await _keystoreService.ensureKey();
-    final hwWrapped = await _keystoreService.wrap(innerWrapped);
-    final wrappedValue = 'hw1:$hwWrapped';
-
-    await _platformService.secureWrite(_tmpSalt, saltBase64);
-    await _platformService.secureWrite(_tmpPinHash, hashVerifier);
-    await _platformService.secureWrite(_tmpMasterWrapped, wrappedValue);
-
-    final readSalt = await _platformService.secureRead(_tmpSalt);
-    final readHash = await _platformService.secureRead(_tmpPinHash);
-    final readWrapped = await _platformService.secureRead(_tmpMasterWrapped);
-
-    if (readSalt == null || readHash == null || readWrapped == null) {
-      await _cleanupTempKeys();
-      throw StateError('Failed to verify staged vault triple');
-    }
-
-    if (readSalt != saltBase64 ||
-        readHash != hashVerifier ||
-        readWrapped != wrappedValue) {
-      await _cleanupTempKeys();
-      throw StateError('Failed to verify staged vault triple');
-    }
-
-    final parsedStaged = parseAnyPinVerifier(readHash);
-    final expectedStagedVerifier =
-        rebuildVerifierFor(parsedStaged, newCandidateKey);
-    if (expectedStagedVerifier == null ||
-        !_constantTimeEquals(readHash, expectedStagedVerifier)) {
-      await _cleanupTempKeys();
-      throw StateError('Staged verifier mismatch');
-    }
-    final verifyKek = newKek;
-    if (!readWrapped.startsWith('hw1:')) {
-      await _cleanupTempKeys();
-      throw StateError('Staged wrapped key missing hw1 prefix');
-    }
     try {
-      final verifyInner = await _keystoreService.unwrap(readWrapped.substring(4));
-      if (verifyInner == 'KEY_INVALID') {
+      final hashVerifier = formatHardenedVerifier(newCandidateKey);
+      final innerWrapped = _wrapKey(dek, newKek);
+
+      await _keystoreService.ensureKey();
+      final hwWrapped = await _keystoreService.wrap(innerWrapped);
+      final wrappedValue = 'hw1:$hwWrapped';
+
+      await _platformService.secureWrite(_tmpSalt, saltBase64);
+      await _platformService.secureWrite(_tmpPinHash, hashVerifier);
+      await _platformService.secureWrite(_tmpMasterWrapped, wrappedValue);
+
+      final readSalt = await _platformService.secureRead(_tmpSalt);
+      final readHash = await _platformService.secureRead(_tmpPinHash);
+      final readWrapped = await _platformService.secureRead(_tmpMasterWrapped);
+
+      if (readSalt == null || readHash == null || readWrapped == null) {
         await _cleanupTempKeys();
-        throw StateError('Staged wrapped key failed hardware unwrap');
+        throw StateError('Failed to verify staged vault triple');
       }
-      final verifyDek = _unwrapKey(verifyInner, verifyKek);
-      if (!_constantTimeBytesEqual(verifyDek, dek)) {
+
+      if (readSalt != saltBase64 ||
+          readHash != hashVerifier ||
+          readWrapped != wrappedValue) {
         await _cleanupTempKeys();
-        throw StateError('Staged DEK does not match current DEK');
+        throw StateError('Failed to verify staged vault triple');
       }
+
+      final parsedStaged = parseAnyPinVerifier(readHash);
+      final expectedStagedVerifier =
+          rebuildVerifierFor(parsedStaged, newCandidateKey);
+      if (expectedStagedVerifier == null ||
+          !_constantTimeEquals(readHash, expectedStagedVerifier)) {
+        await _cleanupTempKeys();
+        throw StateError('Staged verifier mismatch');
+      }
+      final verifyKek = newKek;
+      if (!readWrapped.startsWith('hw1:')) {
+        await _cleanupTempKeys();
+        throw StateError('Staged wrapped key missing hw1 prefix');
+      }
+      try {
+        final verifyInner =
+            await _keystoreService.unwrap(readWrapped.substring(4));
+        if (verifyInner == 'KEY_INVALID') {
+          await _cleanupTempKeys();
+          throw StateError('Staged wrapped key failed hardware unwrap');
+        }
+        final verifyDek = _unwrapKey(verifyInner, verifyKek);
+        if (!_constantTimeBytesEqual(verifyDek, dek)) {
+          await _cleanupTempKeys();
+          throw StateError('Staged DEK does not match current DEK');
+        }
+      } catch (e) {
+        await _cleanupTempKeys();
+        if (e is StateError) rethrow;
+        throw StateError('Staged wrapped key failed verification: $e');
+      }
+
+      final canonSalt = await _platformService.secureRead(_storageKeySalt);
+      final canonHash = await _platformService.secureRead(_storageKeyPinHash);
+      final canonWrapped =
+          await _platformService.secureRead(_storageKeyMasterWrapped);
+      if (canonSalt != null) {
+        await _platformService.secureWrite(_bakSalt, canonSalt);
+      }
+      if (canonHash != null) {
+        await _platformService.secureWrite(_bakPinHash, canonHash);
+      }
+      if (canonWrapped != null) {
+        await _platformService.secureWrite(_bakMasterWrapped, canonWrapped);
+      }
+
+      await _platformService.secureWrite(_swapMarker, '$markerPrefix:staged');
+
+      await _platformService.secureWrite(_storageKeySalt, saltBase64);
+      await _platformService.secureWrite(_storageKeyPinHash, hashVerifier);
+      await _platformService.secureWrite(_storageKeyMasterWrapped, wrappedValue);
+
+      await _platformService.secureWrite(_swapMarker, '$markerPrefix:swapped');
+
+      await _cleanupSwapArtifacts();
     } catch (e) {
-      await _cleanupTempKeys();
-      if (e is StateError) rethrow;
-      throw StateError('Staged wrapped key failed verification: $e');
+      try {
+        await _recoverSwapIfNeeded();
+      } catch (_) {}
+      rethrow;
+    } finally {
+      newCandidateKey.fillRange(0, newCandidateKey.length, 0);
+      newKek.fillRange(0, newKek.length, 0);
     }
+  }
 
-    final canonSalt = await _platformService.secureRead(_storageKeySalt);
-    final canonHash = await _platformService.secureRead(_storageKeyPinHash);
-    final canonWrapped =
-        await _platformService.secureRead(_storageKeyMasterWrapped);
-    if (canonSalt != null) {
-      await _platformService.secureWrite(_bakSalt, canonSalt);
-    }
-    if (canonHash != null) {
-      await _platformService.secureWrite(_bakPinHash, canonHash);
-    }
-    if (canonWrapped != null) {
-      await _platformService.secureWrite(_bakMasterWrapped, canonWrapped);
-    }
+  Future<void> _changePinInternal(String newPin, Uint8List capturedDek, int capturedEpoch) async {
+    final dek = capturedDek;
 
-    await _platformService.secureWrite(_swapMarker, 'pin:staged');
-
-    await _platformService.secureWrite(_storageKeySalt, saltBase64);
-    await _platformService.secureWrite(_storageKeyPinHash, hashVerifier);
-    await _platformService.secureWrite(_storageKeyMasterWrapped, wrappedValue);
-
-    await _platformService.secureWrite(_swapMarker, 'pin:swapped');
-
-    await _cleanupSwapArtifacts();
+    await _commitStagedTriple(newPin, dek, markerPrefix: 'pin');
 
     if (!kIsWeb) {
       await _platformService.secureWrite('wrong_attempts', '0');
@@ -1211,8 +1243,8 @@ class VaultCrypto extends ChangeNotifier {
       );
     }
 
-    // 3. For 'pin:staged', legacy literal 'true', or any unrecognised marker:
-    // treat as staged full PIN swap.
+    // 3. For 'pin:staged', 'upgrade:staged', legacy literal 'true', or any unrecognised marker:
+    // treat as staged full PIN/upgrade swap.
     final bakSaltVal = await _platformService.secureRead(_bakSalt);
     final bakHashVal = await _platformService.secureRead(_bakPinHash);
     final bakWrappedVal =

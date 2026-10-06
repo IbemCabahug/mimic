@@ -1293,5 +1293,297 @@ void main() {
         expect(await crypto.verifyPin('999999'), isFalse);
       });
     });
+
+    // -------------------------------------------------------------------------
+    // Group 14: Phase 4A increment 4 — lazy PBKDF2 verifier upgrade on unlock
+    // -------------------------------------------------------------------------
+    group('Group 14: Phase 4A increment 4 — lazy PBKDF2 verifier upgrade on unlock', () {
+      /// Helper to build a pre-4A legacy vault directly in storage.
+      Future<Uint8List> seedLegacyVault({
+        required FakePlatformService platform,
+        required String pin,
+        String version = 'v3',
+        int iterations = 100000,
+        Uint8List? explicitDek,
+        bool withHwBinding = false,
+        KeystoreService? keystore,
+      }) async {
+        final salt = generateTestSalt();
+        final candidateKey = deriveVaultPinKek(pin, salt, iterations);
+        final hashVerifier = version == 'v2'
+            ? 'v2:$iterations:${base64Encode(SHA256Digest().process(candidateKey))}'
+            : formatVerifier(candidateKey, iterations);
+
+        final dek = explicitDek ??
+            Uint8List.fromList(List.generate(32, (i) => (i * 7 + 13) % 256));
+
+        final kekInput = Uint8List.fromList([
+          ...candidateKey,
+          ...utf8.encode('mimic-kek-v1'),
+        ]);
+        final kek = SHA256Digest().process(kekInput);
+
+        final iv = Uint8List.fromList(List.generate(16, (i) => (i * 3 + 1) % 256));
+        final cipher = PaddedBlockCipherImpl(
+          PKCS7Padding(),
+          CBCBlockCipher(AESEngine()),
+        )..init(
+            true,
+            PaddedBlockCipherParameters<CipherParameters, CipherParameters>(
+              ParametersWithIV<KeyParameter>(KeyParameter(kek), iv),
+              null,
+            ),
+          );
+        final enc = cipher.process(dek);
+        final blob = Uint8List(iv.length + enc.length);
+        blob.setRange(0, iv.length, iv);
+        blob.setRange(iv.length, blob.length, enc);
+        final innerWrapped = base64Encode(blob);
+
+        String finalWrapped;
+        if (withHwBinding && keystore != null) {
+          final hwWrapped = await keystore.wrap(innerWrapped);
+          finalWrapped = 'hw1:$hwWrapped';
+        } else {
+          finalWrapped = innerWrapped;
+        }
+
+        platform.store['vault_salt'] = salt;
+        platform.store['vault_pin_hash'] = hashVerifier;
+        platform.store['master_key_wrapped'] = finalWrapped;
+        platform.store['vault_setup_completed'] = 'true';
+        return dek;
+      }
+
+      test('4A-X: a legacy v3 vault (100,000 iterations) automatically upgrades to v4 (600,000 iterations) on unlock', () async {
+        final platform = FakePlatformService();
+        final keystore = FakeKeystoreService();
+        const pin = '345678';
+
+        await seedLegacyVault(
+          platform: platform,
+          pin: pin,
+          version: 'v3',
+          iterations: 100000,
+          keystore: keystore,
+        );
+
+        expect(platform.store['vault_pin_hash'], startsWith('v3:100000:'));
+        final oldSalt = platform.store['vault_salt'];
+
+        final crypto = VaultCrypto(platform, keystore);
+        await crypto.initialize(pin);
+
+        expect(crypto.isUnlocked, isTrue);
+        expect(platform.store['vault_pin_hash'], startsWith('v4:600000:'));
+        expect(platform.store['master_key_wrapped'], startsWith('hw1:'));
+        expect(platform.store['_swap_in_progress'], isNull);
+        expect(platform.store['vault_salt'], isNot(equals(oldSalt)),
+            reason: 'Salt is refreshed on atomic upgrade');
+
+        crypto.lock();
+        expect(crypto.isUnlocked, isFalse);
+
+        final relaunched = VaultCrypto(platform, keystore);
+        await relaunched.initialize(pin);
+        expect(relaunched.isUnlocked, isTrue);
+        expect(platform.store['vault_pin_hash'], startsWith('v4:600000:'));
+      });
+
+      test('4A-X: pre-existing encrypted file data is preserved and decryptable after lazy upgrade', () async {
+        final platform = FakePlatformService();
+        final keystore = FakeKeystoreService();
+        const pin = '112244';
+        final originalDek = Uint8List.fromList(List.generate(32, (i) => (i * 11 + 5) % 256));
+
+        await seedLegacyVault(
+          platform: platform,
+          pin: pin,
+          version: 'v3',
+          iterations: 100000,
+          explicitDek: originalDek,
+          keystore: keystore,
+        );
+
+        final iv = Uint8List.fromList(List.generate(16, (i) => (i * 5 + 9) % 256));
+        final cipher = PaddedBlockCipherImpl(
+          PKCS7Padding(),
+          CBCBlockCipher(AESEngine()),
+        )..init(
+            true,
+            PaddedBlockCipherParameters<CipherParameters, CipherParameters>(
+              ParametersWithIV<KeyParameter>(KeyParameter(originalDek), iv),
+              null,
+            ),
+          );
+        final plaintext = Uint8List.fromList(utf8.encode('Secret legacy data pre-v4'));
+        final enc = cipher.process(plaintext);
+        final ciphertext = Uint8List(iv.length + enc.length);
+        ciphertext.setRange(0, iv.length, iv);
+        ciphertext.setRange(iv.length, ciphertext.length, enc);
+
+        final crypto = VaultCrypto(platform, keystore);
+        await crypto.initialize(pin);
+
+        expect(crypto.isUnlocked, isTrue);
+        expect(platform.store['vault_pin_hash'], startsWith('v4:600000:'));
+
+        final decrypted = crypto.decrypt(ciphertext);
+        expect(utf8.decode(decrypted), equals('Secret legacy data pre-v4'));
+
+        final newPlaintext = Uint8List.fromList(utf8.encode('Brand new data encrypted under v4'));
+        final newCiphertext = crypto.encrypt(newPlaintext);
+        expect(crypto.decrypt(newCiphertext), equals(newPlaintext));
+
+        crypto.lock();
+        final relaunched = VaultCrypto(platform, keystore);
+        await relaunched.initialize(pin);
+        expect(relaunched.decrypt(ciphertext), equals(plaintext));
+        expect(relaunched.decrypt(newCiphertext), equals(newPlaintext));
+      });
+
+      test('4A-X: a legacy v2 vault seamlessly upgrades to v4 on unlock', () async {
+        final platform = FakePlatformService();
+        final keystore = FakeKeystoreService();
+        const pin = '556677';
+
+        await seedLegacyVault(
+          platform: platform,
+          pin: pin,
+          version: 'v2',
+          iterations: 100000,
+          keystore: keystore,
+        );
+
+        expect(platform.store['vault_pin_hash'], startsWith('v2:100000:'));
+
+        final crypto = VaultCrypto(platform, keystore);
+        await crypto.initialize(pin);
+
+        expect(crypto.isUnlocked, isTrue);
+        expect(platform.store['vault_pin_hash'], startsWith('v4:600000:'));
+        expect(platform.store['master_key_wrapped'], startsWith('hw1:'));
+        expect(platform.store['_swap_in_progress'], isNull);
+
+        crypto.lock();
+        final relaunched = VaultCrypto(platform, keystore);
+        await relaunched.initialize(pin);
+        expect(relaunched.isUnlocked, isTrue);
+      });
+
+      test('4A-X: an existing v4 vault is not re-written or re-swapped on unlock', () async {
+        final platform = FakePlatformService();
+        final keystore = FakeKeystoreService();
+        const pin = '998877';
+
+        final crypto = VaultCrypto(platform, keystore);
+        await crypto.initialize(pin);
+        expect(crypto.isUnlocked, isTrue);
+        expect(platform.store['vault_pin_hash'], startsWith('v4:600000:'));
+
+        final canonicalSalt = platform.store['vault_salt'];
+        final canonicalHash = platform.store['vault_pin_hash'];
+        final canonicalWrapped = platform.store['master_key_wrapped'];
+
+        crypto.lock();
+
+        final relaunched = VaultCrypto(platform, keystore);
+        await relaunched.initialize(pin);
+        expect(relaunched.isUnlocked, isTrue);
+
+        expect(platform.store['vault_salt'], equals(canonicalSalt));
+        expect(platform.store['vault_pin_hash'], equals(canonicalHash));
+        expect(platform.store['master_key_wrapped'], equals(canonicalWrapped));
+        expect(platform.store['_swap_in_progress'], isNull);
+      });
+
+      test('4A-X: wrong PIN on a legacy v3 vault rejects without modifying storage', () async {
+        final platform = FakePlatformService();
+        final keystore = FakeKeystoreService();
+        const pin = '123123';
+
+        await seedLegacyVault(
+          platform: platform,
+          pin: pin,
+          version: 'v3',
+          iterations: 100000,
+          keystore: keystore,
+        );
+
+        final initialHash = platform.store['vault_pin_hash'];
+        final initialSalt = platform.store['vault_salt'];
+
+        final crypto = VaultCrypto(platform, keystore);
+        await expectLater(
+          crypto.initialize('999999'),
+          throwsA(isA<InvalidPinException>()),
+        );
+
+        expect(crypto.isUnlocked, isFalse);
+        expect(platform.store['vault_pin_hash'], equals(initialHash));
+        expect(platform.store['vault_salt'], equals(initialSalt));
+        expect(platform.store['_swap_in_progress'], isNull);
+      });
+
+      test('4A-X: recovery from interrupted upgrade:staged swap restores canonical keys', () async {
+        final platform = FakePlatformService();
+        final keystore = FakeKeystoreService();
+        const pin = '778899';
+
+        await seedLegacyVault(
+          platform: platform,
+          pin: pin,
+          version: 'v3',
+          iterations: 100000,
+          keystore: keystore,
+        );
+
+        final originalSalt = platform.store['vault_salt']!;
+        final originalHash = platform.store['vault_pin_hash']!;
+        final originalWrapped = platform.store['master_key_wrapped']!;
+
+        // Simulate a crash during upgrade swap after writing backup and staging marker
+        platform.store['_bak_vault_salt'] = originalSalt;
+        platform.store['_bak_vault_pin_hash'] = originalHash;
+        platform.store['_bak_master_key_wrapped'] = originalWrapped;
+        platform.store['_swap_in_progress'] = 'upgrade:staged';
+        // Simulate corrupted canonical keys during crash
+        platform.store['vault_salt'] = 'corrupted_salt';
+        platform.store['vault_pin_hash'] = 'corrupted_hash';
+
+        final crypto = VaultCrypto(platform, keystore);
+        await crypto.initialize(pin);
+
+        expect(crypto.isUnlocked, isTrue);
+        expect(platform.store['vault_pin_hash'], startsWith('v4:600000:'));
+        expect(platform.store['_swap_in_progress'], isNull);
+      });
+
+      test('4A-X: verifyPin remains strictly read-only and does NOT trigger lazy upgrade', () async {
+        final platform = FakePlatformService();
+        final keystore = FakeKeystoreService();
+        const pin = '443322';
+
+        await seedLegacyVault(
+          platform: platform,
+          pin: pin,
+          version: 'v3',
+          iterations: 100000,
+          keystore: keystore,
+        );
+
+        final initialHash = platform.store['vault_pin_hash'];
+        final initialSalt = platform.store['vault_salt'];
+
+        final crypto = VaultCrypto(platform, keystore);
+        final isValid = await crypto.verifyPin(pin);
+
+        expect(isValid, isTrue);
+        expect(platform.store['vault_pin_hash'], equals(initialHash));
+        expect(platform.store['vault_salt'], equals(initialSalt));
+        expect(platform.store['vault_pin_hash'], startsWith('v3:100000:'));
+        expect(platform.store['_swap_in_progress'], isNull);
+      });
+    });
   });
 }
