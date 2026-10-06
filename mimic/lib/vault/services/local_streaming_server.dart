@@ -10,7 +10,7 @@ import '../crypto/media_format.dart';
 /// seekable streaming playback.
 ///
 /// Security: binds ONLY to 127.0.0.1, requires a per-session random token,
-/// rejects path traversal, and serves only /media/<id>.
+/// rejects path traversal, and serves only `/media/<id>`.
 class LocalStreamingServer {
   /// Resolves a vault blob ID to its [File] path.
   final Future<File> Function(String id) resolveVaultFile;
@@ -161,20 +161,24 @@ class LocalStreamingServer {
       // Read magic to verify CTR format
       final fileLength = await file.length();
       bool isCtr = false;
+      bool isC3 = false;
       if (fileLength >= 8) {
         final raf = await file.open(mode: FileMode.read);
         try {
           final magic = Uint8List(8);
           await raf.readInto(magic);
-          // C10: accept c2 ONLY. Legacy c1 blobs are keyed by the device-local
+          // C10: accept c2 and c3 ONLY. Legacy c1 blobs are keyed by the device-local
           // system key, which stays readable while the vault is locked, so
           // serving a c1 blob here would leak plaintext from a locked vault.
           // A c1 blob falls through to the non-CTR rejection below.
-          bool isC2 = true;
+          bool matchesC2 = true;
+          bool matchesC3 = true;
           for (int i = 0; i < 8; i++) {
-            if (magic[i] != kMediaMagicCtrV2[i]) isC2 = false;
+            if (magic[i] != kMediaMagicCtrV2[i]) matchesC2 = false;
+            if (magic[i] != kMediaMagicCtrV3[i]) matchesC3 = false;
           }
-          isCtr = isC2;
+          isCtr = matchesC2 || matchesC3;
+          isC3 = matchesC3;
         } finally {
           await raf.close();
         }
@@ -187,7 +191,8 @@ class LocalStreamingServer {
         return;
       }
 
-      final plaintextLength = fileLength - _ctrHeaderSize;
+      final headerSize = isC3 ? 56 : _ctrHeaderSize;
+      final plaintextLength = fileLength - headerSize;
       final response = request.response;
 
       // Parse Range header

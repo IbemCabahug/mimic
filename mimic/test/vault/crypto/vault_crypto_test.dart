@@ -1586,5 +1586,206 @@ void main() {
         expect(platform.store['_swap_in_progress'], isNull);
       });
     });
+
+    // -------------------------------------------------------------------------
+    // Group 15: Phase 4B / C2 ciphertext authentication & tamper detection
+    // -------------------------------------------------------------------------
+    group('Group 15: Phase 4B / C2 ciphertext authentication & tamper detection', () {
+      late Directory tempDir;
+      late FakePlatformService platform;
+      late FakeKeystoreService keystore;
+      late VaultCrypto crypto;
+
+      setUp(() async {
+        tempDir = await Directory.systemTemp.createTemp('c2_hardening_test');
+        platform = FakePlatformService();
+        keystore = FakeKeystoreService();
+        crypto = VaultCrypto(platform, keystore);
+        await crypto.initialize('pass1234');
+      });
+
+      tearDown(() async {
+        if (tempDir.existsSync()) {
+          tempDir.deleteSync(recursive: true);
+        }
+      });
+
+      test('4B-1: encryptSystem writes c3 authenticated blob with 56-byte header and round-trips through decryptSystem', () async {
+        final plaintext = Uint8List.fromList(utf8.encode('Top Secret User Document Content 1234567890!'));
+        final ciphertext = await crypto.encryptSystem(plaintext);
+
+        expect(ciphertext.length, equals(56 + plaintext.length));
+        expect(ciphertext.sublist(0, 8), equals(kMediaMagicCtrV3));
+
+        final decrypted = await crypto.decryptSystem(ciphertext);
+        expect(decrypted, equals(plaintext));
+      });
+
+      test('4B-2: C2 tamper detection: flipping 1 bit in ciphertext payload throws BlobAuthenticationException', () async {
+        final plaintext = Uint8List.fromList(utf8.encode('Sensitive Note to Be Protected Against Bit-Flips'));
+        final ciphertext = await crypto.encryptSystem(plaintext);
+
+        final tampered = Uint8List.fromList(ciphertext);
+        // Ciphertext starts at byte 56
+        tampered[56] ^= 0x01;
+
+        expect(
+          () => crypto.decryptSystem(tampered),
+          throwsA(isA<BlobAuthenticationException>().having((e) => e.isTamperSuspected, 'isTamperSuspected', isTrue)),
+        );
+      });
+
+      test('4B-3: C2 tamper detection: flipping 1 bit in IV throws BlobAuthenticationException', () async {
+        final plaintext = Uint8List.fromList(utf8.encode('Sensitive Data for IV Tamper Verification'));
+        final ciphertext = await crypto.encryptSystem(plaintext);
+
+        final tampered = Uint8List.fromList(ciphertext);
+        // IV is at bytes 8..23
+        tampered[10] ^= 0x01;
+
+        expect(
+          () => crypto.decryptSystem(tampered),
+          throwsA(isA<BlobAuthenticationException>().having((e) => e.isTamperSuspected, 'isTamperSuspected', isTrue)),
+        );
+      });
+
+      test('4B-4: C2 tamper detection: flipping 1 bit in HMAC tag throws BlobAuthenticationException', () async {
+        final plaintext = Uint8List.fromList(utf8.encode('Sensitive Data for Tag Tamper Verification'));
+        final ciphertext = await crypto.encryptSystem(plaintext);
+
+        final tampered = Uint8List.fromList(ciphertext);
+        // Tag is at bytes 24..55
+        tampered[30] ^= 0x01;
+
+        expect(
+          () => crypto.decryptSystem(tampered),
+          throwsA(isA<BlobAuthenticationException>().having((e) => e.isTamperSuspected, 'isTamperSuspected', isTrue)),
+        );
+      });
+
+      test('4B-5: Truncated c3 blob fails closed without leaking plaintext', () async {
+        final plaintext = Uint8List.fromList(utf8.encode('Data that will be truncated'));
+        final ciphertext = await crypto.encryptSystem(plaintext);
+
+        // Truncate to less than header length (56 bytes)
+        final truncatedHeader = ciphertext.sublist(0, 40);
+        expect(
+          () => crypto.decryptSystem(truncatedHeader),
+          throwsA(anyOf(isA<BlobAuthenticationException>(), isA<CorruptedMediaFileException>())),
+        );
+      });
+
+      test('4B-6: Stream file encrypt/decrypt round trip: encryptStreamSystemCtrV3 writes c3 and decryptStreamSystem restores exact bytes', () async {
+        final srcFile = File('${tempDir.path}/c3_src.bin');
+        final encFile = File('${tempDir.path}/c3_enc.bin');
+        final decFile = File('${tempDir.path}/c3_dec.bin');
+
+        final random = Random.secure();
+        final plaintext = Uint8List(128 * 1024 + 37); // Multi-chunk stream
+        for (int i = 0; i < plaintext.length; i++) {
+          plaintext[i] = random.nextInt(256);
+        }
+        await srcFile.writeAsBytes(plaintext);
+
+        await crypto.encryptStreamSystemCtrV3(srcFile, encFile);
+
+        final encBytes = await encFile.readAsBytes();
+        expect(encBytes.length, equals(56 + plaintext.length));
+        expect(encBytes.sublist(0, 8), equals(kMediaMagicCtrV3));
+
+        await crypto.decryptStreamSystem(encFile, decFile);
+        final decrypted = await decFile.readAsBytes();
+        expect(decrypted, equals(plaintext));
+      });
+
+      test('4B-7: Stream file tamper detection: flipping 1 bit in stream ciphertext causes decryptStreamSystem to fail', () async {
+        final srcFile = File('${tempDir.path}/tamper_stream_src.bin');
+        final encFile = File('${tempDir.path}/tamper_stream_enc.bin');
+        final decFile = File('${tempDir.path}/tamper_stream_dec.bin');
+
+        final plaintext = Uint8List.fromList(utf8.encode('Stream data that will be tampered during transport'));
+        await srcFile.writeAsBytes(plaintext);
+
+        await crypto.encryptStreamSystemCtrV3(srcFile, encFile);
+
+        final encBytes = await encFile.readAsBytes();
+        encBytes[60] ^= 0x04; // Flip bit in payload
+        await encFile.writeAsBytes(encBytes);
+
+        expect(
+          () => crypto.decryptStreamSystem(encFile, decFile),
+          throwsA(isA<BlobAuthenticationException>().having((e) => e.isTamperSuspected, 'isTamperSuspected', isTrue)),
+        );
+      });
+
+      test('4B-8: Seekable range decrypt on c3 video file via decryptRangeSystem returns exact slice', () async {
+        final srcFile = File('${tempDir.path}/video_stream.bin');
+        final encFile = File('${tempDir.path}/video_stream_enc.bin');
+
+        final random = Random.secure();
+        final plaintext = Uint8List(256 * 1024);
+        for (int i = 0; i < plaintext.length; i++) {
+          plaintext[i] = random.nextInt(256);
+        }
+        await srcFile.writeAsBytes(plaintext);
+
+        await crypto.encryptStreamSystemCtrV3(srcFile, encFile);
+
+        // Test range read at start
+        final chunk1 = await crypto.decryptRangeSystem(encFile, 0, 1024);
+        expect(chunk1, equals(plaintext.sublist(0, 1024)));
+
+        // Test range read across chunk boundary
+        final chunk2 = await crypto.decryptRangeSystem(encFile, 65530, 2048);
+        expect(chunk2, equals(plaintext.sublist(65530, 65530 + 2048)));
+
+        // Test range read near end
+        final chunk3 = await crypto.decryptRangeSystem(encFile, plaintext.length - 500, 500);
+        expect(chunk3, equals(plaintext.sublist(plaintext.length - 500)));
+      });
+
+      test('4B-9: Backward compatibility: decryptSystem seamlessly decrypts c2, c1, and v1 legacy formats', () async {
+        final testData = Uint8List.fromList(utf8.encode('Compat Plaintext for All Legacy Formats'));
+
+        // c2 format
+        final srcFile = File('${tempDir.path}/c2_compat_src.bin');
+        final encFileC2 = File('${tempDir.path}/c2_compat_enc.bin');
+        await srcFile.writeAsBytes(testData);
+        await crypto.encryptStreamSystemCtr(srcFile, encFileC2, writeC3: false);
+        final c2Bytes = await encFileC2.readAsBytes();
+        expect(c2Bytes.sublist(0, 8), equals(kMediaMagicCtrV2));
+        final decC2 = await crypto.decryptSystem(c2Bytes);
+        expect(decC2, equals(testData));
+
+        // v1 format (CBC)
+        final encFileV1 = File('${tempDir.path}/v1_compat_enc.bin');
+        await crypto.encryptStreamSystem(srcFile, encFileV1);
+        final v1Bytes = await encFileV1.readAsBytes();
+        expect(v1Bytes.sublist(0, 8), equals(kMediaMagicV1));
+        final decV1 = await crypto.decryptSystem(v1Bytes);
+        expect(decV1, equals(testData));
+      });
+
+      test('4B-10: Whole-file isolate decrypt (tryDecryptFileInWorker) validates c3 and refuses tampered files', () async {
+        final srcFile = File('${tempDir.path}/worker_photo_src.bin');
+        final encFile = File('${tempDir.path}/worker_photo_enc.bin');
+
+        final plaintext = Uint8List.fromList(utf8.encode('Photo data to be decrypted via background worker'));
+        await srcFile.writeAsBytes(plaintext);
+        await crypto.encryptStreamSystemCtrV3(srcFile, encFile);
+
+        // Valid c3 decrypts cleanly via worker
+        final decrypted = await crypto.tryDecryptFileInWorker(encFile);
+        expect(decrypted, equals(plaintext));
+
+        // Tampered c3 fails closed (worker catches BlobAuthenticationException and returns null)
+        final encBytes = await encFile.readAsBytes();
+        encBytes[58] ^= 0x08;
+        await encFile.writeAsBytes(encBytes);
+
+        final tamperedResult = await crypto.tryDecryptFileInWorker(encFile);
+        expect(tamperedResult, isNull);
+      });
+    });
   });
 }

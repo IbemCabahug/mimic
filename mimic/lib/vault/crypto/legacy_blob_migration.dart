@@ -189,7 +189,9 @@ class LegacyBlobMigration {
       }
 
       final format = classifyMediaHeader(head);
-      if (format == MediaBlobFormat.ctrV2 || format == MediaBlobFormat.cbcV1) {
+      if (format == MediaBlobFormat.ctrV3 ||
+          format == MediaBlobFormat.ctrV2 ||
+          format == MediaBlobFormat.cbcV1) {
         alreadyModern++;
         continue;
       }

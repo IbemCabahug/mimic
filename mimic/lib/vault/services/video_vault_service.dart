@@ -2,7 +2,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -363,10 +362,13 @@ class VideoVaultService {
       final magic = Uint8List(8);
       final bytesRead = await raf.readInto(magic);
       if (bytesRead != 8) return false;
+      bool isC2 = true;
+      bool isC3 = true;
       for (int i = 0; i < 8; i++) {
-        if (magic[i] != kMediaMagicCtrV2[i]) return false;
+        if (magic[i] != kMediaMagicCtrV2[i]) isC2 = false;
+        if (magic[i] != kMediaMagicCtrV3[i]) isC3 = false;
       }
-      return true;
+      return isC2 || isC3;
     } finally {
       await raf.close();
     }
@@ -425,17 +427,19 @@ class VideoVaultService {
       final magic = Uint8List(8);
       final bytesRead = await raf.readInto(magic);
       if (bytesRead == 8) {
+        bool isCtrV3 = true;
         bool isCtrV2 = true;
         bool isCtrV1 = true;
         bool isV1 = true;
         for (int i = 0; i < 8; i++) {
+          if (magic[i] != kMediaMagicCtrV3[i]) isCtrV3 = false;
           if (magic[i] != kMediaMagicCtrV2[i]) isCtrV2 = false;
           if (magic[i] != kMediaMagicCtrV1[i]) isCtrV1 = false;
           if (magic[i] != kMediaMagicV1[i]) isV1 = false;
         }
-        if (isCtrV2) {
-          // Already c2 (CTR under master key) — nothing to do
-          sourceKind = 'already-c2';
+        if (isCtrV3 || isCtrV2) {
+          // Already c3 or c2 (CTR under master key) — nothing to do
+          sourceKind = isCtrV3 ? 'already-c3' : 'already-c2';
           return record(converted: true, failure: VideoMigrationFailure.none);
         }
         if (isCtrV1) {

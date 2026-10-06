@@ -7,8 +7,10 @@ import 'dart:typed_data';
 import 'package:pointycastle/export.dart';
 import 'media_format.dart';
 import 'vault_exceptions.dart';
+import 'authenticated_blob_format.dart';
 
 export 'vault_exceptions.dart';
+export 'authenticated_blob_format.dart';
 
 /// Parameters passed to the crypto worker isolate for encryption.
 class CryptoIsolateEncryptParams {
@@ -29,7 +31,7 @@ class CryptoIsolateEncryptParams {
   });
 }
 
-/// Parameters passed to the crypto worker isolate for c2 (CTR) encryption.
+/// Parameters passed to the crypto worker isolate for c2/c3 (CTR) encryption.
 class CryptoIsolateEncryptCtrParams {
   final Uint8List key;
   final Uint8List iv;
@@ -37,6 +39,7 @@ class CryptoIsolateEncryptCtrParams {
   final String destPath;
   final SendPort? progressPort;
   final SendPort replyPort;
+  final bool writeC3;
 
   CryptoIsolateEncryptCtrParams({
     required this.key,
@@ -45,6 +48,7 @@ class CryptoIsolateEncryptCtrParams {
     required this.destPath,
     this.progressPort,
     required this.replyPort,
+    this.writeC3 = true,
   });
 }
 
@@ -188,11 +192,7 @@ Future<void> isolateEncryptWorker(CryptoIsolateEncryptParams params) async {
 }
 
 /// Top-level worker function running in a background isolate to encrypt a
-/// stream as c2 (AES-CTR under the passed key).
-///
-/// Writes the c2 header (kMediaMagicCtrV2 + IV) itself, then XORs the payload
-/// with the CTR keystream. Byte-for-byte identical to the inline c2 write this
-/// replaces, including the partial final-block handling.
+/// stream as c3 (authenticated AES-CTR) or c2 (legacy AES-CTR under the passed key).
 ///
 /// WARNING: Zeroes params.key in finally; must never be invoked directly with a live caller key.
 Future<void> isolateEncryptCtrWorker(CryptoIsolateEncryptCtrParams params) async {
@@ -206,15 +206,30 @@ Future<void> isolateEncryptCtrWorker(CryptoIsolateEncryptCtrParams params) async
     final destRaf = await dest.open(mode: FileMode.write);
     bool writeSucceeded = false;
     try {
-      await destRaf.writeFrom(kMediaMagicCtrV2);
-      await destRaf.writeFrom(iv);
+      if (params.writeC3) {
+        await destRaf.writeFrom(kMediaMagicCtrV3);
+        await destRaf.writeFrom(iv);
+        // 32-byte placeholder for HMAC-SHA256 tag
+        await destRaf.writeFrom(Uint8List(kAuthTagLength));
 
-      final srcRaf = await src.open(mode: FileMode.read);
-      try {
-        await _encryptStreamCtrV2(key, iv, srcRaf, destRaf, progressPort);
-        writeSucceeded = true;
-      } finally {
-        await srcRaf.close();
+        final srcRaf = await src.open(mode: FileMode.read);
+        try {
+          await _encryptStreamCtrV3(key, iv, srcRaf, destRaf, progressPort);
+          writeSucceeded = true;
+        } finally {
+          await srcRaf.close();
+        }
+      } else {
+        await destRaf.writeFrom(kMediaMagicCtrV2);
+        await destRaf.writeFrom(iv);
+
+        final srcRaf = await src.open(mode: FileMode.read);
+        try {
+          await _encryptStreamCtrV2(key, iv, srcRaf, destRaf, progressPort);
+          writeSucceeded = true;
+        } finally {
+          await srcRaf.close();
+        }
       }
     } finally {
       await destRaf.flush();
@@ -274,6 +289,7 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
       bool magicMatches = true;
       bool magicMatchesCtrV1 = true;
       bool magicMatchesCtrV2 = true;
+      bool magicMatchesCtrV3 = true;
       for (int i = 0; i < kMediaMagicV1.length; i++) {
         if (magicBuffer[i] != kMediaMagicV1[i]) {
           magicMatches = false;
@@ -284,107 +300,165 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
         if (magicBuffer[i] != kMediaMagicCtrV2[i]) {
           magicMatchesCtrV2 = false;
         }
+        if (magicBuffer[i] != kMediaMagicCtrV3[i]) {
+          magicMatchesCtrV3 = false;
+        }
       }
-      if (!magicMatches && !magicMatchesCtrV1 && !magicMatchesCtrV2) {
+      if (!magicMatches && !magicMatchesCtrV1 && !magicMatchesCtrV2 && !magicMatchesCtrV3) {
         throw const UnsupportedMediaFormatException('Unsupported media format header');
       }
 
-      final iv = Uint8List(16);
-      final ivRead = await raf.readInto(iv);
-      if (ivRead < 16) {
-        throw const CorruptedMediaFileException('Invalid ciphertext: missing IV');
-      }
+      if (magicMatchesCtrV3) {
+        final iv = Uint8List(16);
+        final ivRead = await raf.readInto(iv);
+        if (ivRead < 16) {
+          throw const CorruptedMediaFileException('Invalid ciphertext: missing IV');
+        }
+        final tag = Uint8List(kAuthTagLength);
+        final tagRead = await raf.readInto(tag);
+        if (tagRead < kAuthTagLength) {
+          throw const CorruptedMediaFileException('Invalid ciphertext: missing auth tag');
+        }
 
-      final destRaf = await dest.open(mode: FileMode.write);
-      try {
-        // c1 (CTR, system key) and c2 (CTR, master key) share the identical
-        // 24-byte header and CTR body; only the caller-supplied key differs.
-        if (magicMatchesCtrV1 || magicMatchesCtrV2) {
-          await _decryptStreamCtrV2(key, iv, raf, destRaf, progressPort);
-        } else {
-        final cipher = CBCBlockCipher(AESEngine());
-        cipher.init(false, ParametersWithIV(KeyParameter(key), iv));
+        // Authenticate ciphertext before decrypting or writing any plaintext
+        final macKey = deriveMacKey(key);
+        try {
+          final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(macKey));
+          hmac.update(Uint8List.fromList(kMediaMagicCtrV3), 0, kMediaMagicCtrV3.length);
+          hmac.update(iv, 0, iv.length);
 
-        final buffer = Uint8List(64 * 1024);
-        final outBuffer = Uint8List(64 * 1024 + 16);
-        var bytesRead = 0;
-        var totalBytesRead = 0;
-
-        var leftoverCipher = <int>[];
-        Uint8List? heldPlaintextBlock;
-
-        while ((bytesRead = await raf.readInto(buffer)) > 0) {
-          totalBytesRead += bytesRead;
-          if (progressPort != null) {
-            progressPort.send(totalBytesRead);
+          final checkBuffer = Uint8List(64 * 1024);
+          int checkRead;
+          while ((checkRead = await raf.readInto(checkBuffer)) > 0) {
+            hmac.update(checkBuffer, 0, checkRead);
           }
+          final computedTag = Uint8List(kAuthTagLength);
+          hmac.doFinal(computedTag, 0);
 
-          int offset = 0;
-          int outOffset = 0;
+          if (!constantTimeBytesEqual(tag, computedTag)) {
+            throw const BlobAuthenticationException(
+              'Authentication tag does not match the blob contents.',
+              isTamperSuspected: true,
+            );
+          }
+        } finally {
+          macKey.fillRange(0, macKey.length, 0);
+        }
 
-          if (leftoverCipher.isNotEmpty) {
-            final needed = 16 - leftoverCipher.length;
-            if (bytesRead < needed) {
-              leftoverCipher.addAll(buffer.sublist(0, bytesRead));
-              continue;
-            } else {
-              final temp = Uint8List(16);
-              temp.setRange(0, leftoverCipher.length, leftoverCipher);
-              temp.setRange(leftoverCipher.length, 16, buffer.sublist(0, needed));
+        // Rewind to ciphertext start (kAuthCiphertextOffset = 56)
+        await raf.setPosition(kAuthCiphertextOffset);
+        final destRaf = await dest.open(mode: FileMode.write);
+        try {
+          await _decryptStreamCtrV2(key, iv, raf, destRaf, progressPort);
+        } finally {
+          await destRaf.flush();
+          await destRaf.close();
+        }
+      } else if (magicMatchesCtrV1 || magicMatchesCtrV2) {
+        final iv = Uint8List(16);
+        final ivRead = await raf.readInto(iv);
+        if (ivRead < 16) {
+          throw const CorruptedMediaFileException('Invalid ciphertext: missing IV');
+        }
 
+        final destRaf = await dest.open(mode: FileMode.write);
+        try {
+          await _decryptStreamCtrV2(key, iv, raf, destRaf, progressPort);
+        } finally {
+          await destRaf.flush();
+          await destRaf.close();
+        }
+      } else {
+        final iv = Uint8List(16);
+        final ivRead = await raf.readInto(iv);
+        if (ivRead < 16) {
+          throw const CorruptedMediaFileException('Invalid ciphertext: missing IV');
+        }
+        final destRaf = await dest.open(mode: FileMode.write);
+        try {
+          final cipher = CBCBlockCipher(AESEngine());
+          cipher.init(false, ParametersWithIV(KeyParameter(key), iv));
+
+          final buffer = Uint8List(64 * 1024);
+          final outBuffer = Uint8List(64 * 1024 + 16);
+          var bytesRead = 0;
+          var totalBytesRead = 0;
+
+          var leftoverCipher = <int>[];
+          Uint8List? heldPlaintextBlock;
+
+          while ((bytesRead = await raf.readInto(buffer)) > 0) {
+            totalBytesRead += bytesRead;
+            if (progressPort != null) {
+              progressPort.send(totalBytesRead);
+            }
+
+            int offset = 0;
+            int outOffset = 0;
+
+            if (leftoverCipher.isNotEmpty) {
+              final needed = 16 - leftoverCipher.length;
+              if (bytesRead < needed) {
+                leftoverCipher.addAll(buffer.sublist(0, bytesRead));
+                continue;
+              } else {
+                final temp = Uint8List(16);
+                temp.setRange(0, leftoverCipher.length, leftoverCipher);
+                temp.setRange(leftoverCipher.length, 16, buffer.sublist(0, needed));
+
+                final tempOut = Uint8List(16);
+                cipher.processBlock(temp, 0, tempOut, 0);
+
+                if (heldPlaintextBlock != null) {
+                  outBuffer.setRange(outOffset, outOffset + 16, heldPlaintextBlock);
+                  outOffset += 16;
+                }
+                heldPlaintextBlock = tempOut;
+
+                offset = needed;
+                leftoverCipher.clear();
+              }
+            }
+
+            while (offset + 16 <= bytesRead) {
               final tempOut = Uint8List(16);
-              cipher.processBlock(temp, 0, tempOut, 0);
+              cipher.processBlock(buffer, offset, tempOut, 0);
 
               if (heldPlaintextBlock != null) {
                 outBuffer.setRange(outOffset, outOffset + 16, heldPlaintextBlock);
                 outOffset += 16;
               }
               heldPlaintextBlock = tempOut;
+              offset += 16;
+            }
 
-              offset = needed;
-              leftoverCipher.clear();
+            if (outOffset > 0) {
+              await destRaf.writeFrom(outBuffer, 0, outOffset);
+            }
+
+            if (offset < bytesRead) {
+              leftoverCipher.addAll(buffer.sublist(offset, bytesRead));
             }
           }
 
-          while (offset + 16 <= bytesRead) {
-            final tempOut = Uint8List(16);
-            cipher.processBlock(buffer, offset, tempOut, 0);
+          if (leftoverCipher.isNotEmpty) {
+            throw const CorruptedMediaFileException('Invalid ciphertext: not a multiple of block size');
+          }
 
-            if (heldPlaintextBlock != null) {
-              outBuffer.setRange(outOffset, outOffset + 16, heldPlaintextBlock);
-              outOffset += 16;
+          if (heldPlaintextBlock != null) {
+            final padLength = heldPlaintextBlock[15];
+            if (padLength > 0 && padLength <= 16) {
+              await destRaf.writeFrom(heldPlaintextBlock.sublist(0, 16 - padLength));
+            } else {
+              throw const CorruptedMediaFileException('Invalid PKCS7 padding');
             }
-            heldPlaintextBlock = tempOut;
-            offset += 16;
-          }
-
-          if (outOffset > 0) {
-            await destRaf.writeFrom(outBuffer, 0, outOffset);
-          }
-
-          if (offset < bytesRead) {
-            leftoverCipher.addAll(buffer.sublist(offset, bytesRead));
-          }
-        }
-
-        if (leftoverCipher.isNotEmpty) {
-          throw const CorruptedMediaFileException('Invalid ciphertext: not a multiple of block size');
-        }
-
-        if (heldPlaintextBlock != null) {
-          final padLength = heldPlaintextBlock[15];
-          if (padLength > 0 && padLength <= 16) {
-            await destRaf.writeFrom(heldPlaintextBlock.sublist(0, 16 - padLength));
           } else {
-            throw const CorruptedMediaFileException('Invalid PKCS7 padding');
+            throw const CorruptedMediaFileException('Invalid ciphertext: empty payload');
           }
-        } else {
-          throw const CorruptedMediaFileException('Invalid ciphertext: empty payload');
+        } finally {
+          await destRaf.flush();
+          await destRaf.close();
         }
-        }
-      } finally {
-        await destRaf.flush();
-        await destRaf.close();
       }
     } finally {
       await raf.close();
@@ -393,7 +467,12 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
   } catch (e, st) {
     final String errorKind;
     final String message;
-    if (e is CorruptedMediaFileException) {
+    bool isTamperSuspected = false;
+    if (e is BlobAuthenticationException) {
+      errorKind = 'authentication';
+      message = e.message;
+      isTamperSuspected = e.isTamperSuspected;
+    } else if (e is CorruptedMediaFileException) {
       errorKind = 'corrupted';
       message = e.message;
     } else if (e is UnsupportedMediaFormatException) {
@@ -409,6 +488,7 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
     params.replyPort.send({
       'errorKind': errorKind,
       'message': message,
+      'isTamperSuspected': isTamperSuspected,
       'stack': st.toString(),
     });
   } finally {
@@ -478,6 +558,71 @@ Future<void> _encryptStreamCtrV2(
   SendPort? progressPort,
 ) {
   return _decryptStreamCtrV2(key, iv, raf, destRaf, progressPort);
+}
+
+/// Encrypts plaintext from [srcRaf] into [destRaf] as authenticated AES-CTR (MVKEYc3\0)
+/// under [key] starting from counter block [iv], computing the HMAC-SHA256 tag
+/// concurrently and writing it back to the header at offset 24 upon EOF.
+Future<void> _encryptStreamCtrV3(
+  Uint8List key,
+  Uint8List iv,
+  RandomAccessFile srcRaf,
+  RandomAccessFile destRaf,
+  SendPort? progressPort,
+) async {
+  final macKey = deriveMacKey(key);
+  try {
+    final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(macKey));
+    hmac.update(Uint8List.fromList(kMediaMagicCtrV3), 0, kMediaMagicCtrV3.length);
+    hmac.update(iv, 0, iv.length);
+
+    final aes = AESEngine()..init(true, KeyParameter(key));
+    final counter = Uint8List.fromList(iv);
+    final ksBlock = Uint8List(16);
+
+    final buffer = Uint8List(64 * 1024);
+    final outBuffer = Uint8List(64 * 1024);
+    var bytesRead = 0;
+    var totalBytesRead = 0;
+
+    while ((bytesRead = await srcRaf.readInto(buffer)) > 0) {
+      totalBytesRead += bytesRead;
+      if (progressPort != null) {
+        progressPort.send(totalBytesRead);
+      }
+
+      int offset = 0;
+      while (offset + 16 <= bytesRead) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        for (int i = 0; i < 16; i++) {
+          outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+        }
+        _ctrIncrement(counter);
+        offset += 16;
+      }
+      if (offset < bytesRead) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        final remaining = bytesRead - offset;
+        for (int i = 0; i < remaining; i++) {
+          outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+        }
+        _ctrIncrement(counter);
+      }
+
+      hmac.update(outBuffer, 0, bytesRead);
+      await destRaf.writeFrom(outBuffer, 0, bytesRead);
+    }
+
+    final tag = Uint8List(kAuthTagLength);
+    hmac.doFinal(tag, 0);
+
+    final finalPos = await destRaf.position();
+    await destRaf.setPosition(kAuthTagOffset);
+    await destRaf.writeFrom(tag);
+    await destRaf.setPosition(finalPos);
+  } finally {
+    macKey.fillRange(0, macKey.length, 0);
+  }
 }
 
 /// Increments a 16-byte big-endian CTR counter block.
@@ -597,6 +742,7 @@ Future<void> cryptoIsolateEncryptFileCtr({
   required String srcPath,
   required String destPath,
   SendPort? progressPort,
+  bool writeC3 = true,
 }) async {
   final keyForWorker = Uint8List.fromList(key);
   final replyPort = ReceivePort();
@@ -616,6 +762,7 @@ Future<void> cryptoIsolateEncryptFileCtr({
       destPath: destPath,
       progressPort: progressPort,
       replyPort: replyPort.sendPort,
+      writeC3: writeC3,
     );
 
     isolate = await Isolate.spawn(
@@ -795,6 +942,9 @@ Future<void> cryptoIsolateDecryptFile({
       final kind = response['errorKind'] as String;
       final message = response['message'] as String? ?? 'Crypto isolate operation failed';
       switch (kind) {
+        case 'authentication':
+          final isTamper = response['isTamperSuspected'] as bool? ?? true;
+          throw BlobAuthenticationException(message, isTamperSuspected: isTamper);
         case 'corrupted':
           throw CorruptedMediaFileException(message);
         case 'unsupportedFormat':

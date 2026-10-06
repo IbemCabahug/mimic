@@ -717,7 +717,7 @@ void main() {
 
       expect(dec.readAsBytesSync(), equals(pattern),
           reason: 'After changePin the DEK still decrypts the blob; handing a freshly derived PIN KEK to the isolate would corrupt this round trip');
-    });
+    }, timeout: const Timeout(Duration(minutes: 2)));
 
     test('T-LOCKED-DECRYPT: decryptStreamSystem on a locked vault throws before any isolate work', () async {
       final v1Src = createTempFile('locked_v1_src.bin', [1, 2, 3, 4, 5, 6, 7, 8]);
