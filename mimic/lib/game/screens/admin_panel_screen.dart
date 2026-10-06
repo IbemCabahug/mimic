@@ -272,22 +272,6 @@ class _AdminPanelScreenState extends ConsumerState<AdminPanelScreen> {
             onTap: () => _showAdjustScoreDialog(context, ref, gameState),
           ),
 
-          const SizedBox(height: 24),
-          _buildSectionHeader('SYSTEM'),
-
-          _buildActionTile(
-            context,
-            icon: Icons.exit_to_app,
-            title: 'Exit',
-            subtitle: 'Return to game seamlessly',
-            // The second way out of the decoy, on the SAME exit as the
-            // leading RETURN TO GAME tile: whoever reads the panel from top to
-            // bottom must not have a live round torn down to the game home
-            // just because they left from the bottom.
-            onTap: () => _exitToGame(context),
-            iconColor: HorrorColors.crimson,
-          ),
-
           const SizedBox(height: 40),
         ],
       ),
