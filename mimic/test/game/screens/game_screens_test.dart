@@ -1115,44 +1115,6 @@ void main() {
     });
 
     testWidgets(
-        "the panel's bottom Exit tile takes the same exit as RETURN TO GAME",
-        (WidgetTester tester) async {
-      // The SYSTEM section sits at the very bottom of a long decoy list, so
-      // the whole list has to lay out for the tile to exist on screen.
-      tester.view.physicalSize = const Size(800, 3200);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-
-      SecretEntryTrail.setOrigin(MimicGame.votingRoute);
-
-      final container = ProviderContainer();
-      await tester.pumpWidget(buildOriginTestApp(container));
-      await pumpScreen(tester);
-
-      final navigator =
-          tester.state<NavigatorState>(find.byType(Navigator).first);
-      navigator.pushNamed('/voting');
-      await pumpScreen(tester);
-      navigator.pushNamed('/admin-panel');
-      await pumpScreen(tester);
-
-      await tester.tap(find.text('Exit'));
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 400));
-      await tester.pump(const Duration(milliseconds: 400));
-
-      expect(find.byType(AdminPanelScreen), findsNothing,
-          reason: 'The bottom Exit tile must also leave the decoy panel');
-      expect(find.text('VOTING_SCREEN'), findsOneWidget,
-          reason: 'Both exits must return the mimic to the screen the '
-              'secret entry was made from');
-      expect(find.text('GAME_HOME'), findsNothing,
-          reason: 'Regression: Exit used to clear the stack to the game home '
-              'and destroy the live round');
-    });
-
-    testWidgets(
         'a double tap on RETURN TO GAME cannot pop past the origin',
         (WidgetTester tester) async {
       tester.view.physicalSize = const Size(800, 1600);

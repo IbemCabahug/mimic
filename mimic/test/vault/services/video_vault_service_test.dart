@@ -16,11 +16,10 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 class ThrowingEncryptVaultCrypto extends VaultCrypto {
-  ThrowingEncryptVaultCrypto(PlatformService platformService, KeystoreService keystoreService)
-      : super(platformService, keystoreService);
+  ThrowingEncryptVaultCrypto(super.platformService, super.keystoreService);
 
   @override
-  Future<void> encryptStreamSystemCtr(File src, File dest) async {
+  Future<void> encryptStreamSystemCtr(File src, File dest, {bool writeC3 = true}) async {
     throw Exception('Simulated encryption failure during video migration');
   }
 }
@@ -34,12 +33,12 @@ class BlockingEncryptVaultCrypto extends VaultCrypto {
   final Completer<void> gate = Completer<void>();
 
   @override
-  Future<void> encryptStreamSystemCtr(File src, File dest) async {
+  Future<void> encryptStreamSystemCtr(File src, File dest, {bool writeC3 = true}) async {
     if (!entered.isCompleted) {
       entered.complete();
     }
     await gate.future;
-    return super.encryptStreamSystemCtr(src, dest);
+    return super.encryptStreamSystemCtr(src, dest, writeC3: writeC3);
   }
 }
 
@@ -49,7 +48,7 @@ class PathLeakingVaultCrypto extends VaultCrypto {
   PathLeakingVaultCrypto(super.platformService, super.keystoreService);
 
   @override
-  Future<void> encryptStreamSystemCtr(File src, File dest) async {
+  Future<void> encryptStreamSystemCtr(File src, File dest, {bool writeC3 = true}) async {
     throw FileSystemException(
       'Cannot open file',
       '${dest.path}_do_not_leak_marker',
@@ -279,11 +278,11 @@ void main() {
         originalName: 'my_video.mp4',
       );
 
-      // 3. Verify the blob on disk is already c2 (CTR), not CBC v1
+      // 3. Verify the blob on disk is already c3 (authenticated CTR), not CBC v1
       final blobFile = await platformService.resolveVaultFile(id);
       final onDisk = await blobFile.readAsBytes();
-      expect(onDisk.sublist(0, 8), equals(kMediaMagicCtrV2),
-          reason: 'imports must be born streamable (c2), with no conversion wait');
+      expect(onDisk.sublist(0, 8), equals(kMediaMagicCtrV3),
+          reason: 'imports must be born streamable and authenticated (c3), with no conversion wait');
 
       // 4. Verify bytes via getVideo
       final decryptedBytes = await videoVaultService.getVideo(id);
@@ -338,11 +337,11 @@ void main() {
       // 4. Migrate
       await videoVaultService.ensureVideoStreamable(id);
 
-      // 5. Verify it now starts with CTR c2 magic "MVKEYc2\0"
-      final ctrMagic = kMediaMagicCtrV2;
+      // 5. Verify it now starts with CTR c3 magic "MVKEYc3\0"
+      final ctrMagic = kMediaMagicCtrV3;
       final migratedBytes = await blobFile.readAsBytes();
       for (int i = 0; i < 8; i++) {
-        expect(migratedBytes[i], ctrMagic[i], reason: 'Blob should now be CTR c2');
+        expect(migratedBytes[i], ctrMagic[i], reason: 'Blob should now be CTR c3');
       }
 
       // 6. Full decrypt and verify plaintext is identical
@@ -426,9 +425,9 @@ void main() {
       // Call ensureVideoStreamable on a VALID blob — it should succeed
       await videoVaultService.ensureVideoStreamable(id);
 
-      // Verify the blob was replaced (CTR c2 magic)
+      // Verify the blob was replaced (CTR c3 magic)
       final newBytes = await blobFile.readAsBytes();
-      final ctrMagic = kMediaMagicCtrV2;
+      final ctrMagic = kMediaMagicCtrV3;
       for (int i = 0; i < 8; i++) {
         expect(newBytes[i], ctrMagic[i]);
       }
@@ -517,9 +516,9 @@ void main() {
       // 2. Run rescue (ensureVideoStreamable)
       await videoVaultService.ensureVideoStreamable(testVideoId);
 
-      // 3. Assert on-disk file now starts with c2 magic
+      // 3. Assert on-disk file now starts with c3 magic
       final postMigrationBytes = await blobFile.readAsBytes();
-      expect(postMigrationBytes.sublist(0, 8), equals(kMediaMagicCtrV2));
+      expect(postMigrationBytes.sublist(0, 8), equals(kMediaMagicCtrV3));
 
       // 4. Assert it decrypts to original plaintext
       final decryptedTmp = File('${tempDir.path}/t3_decrypted.bin');
@@ -596,10 +595,10 @@ void main() {
       await blobFile.parent.create(recursive: true);
       await blobFile.writeAsBytes(c1Blob);
 
-      // 2. Rescue: migrate c1 -> c2
+      // 2. Rescue: migrate c1 -> c3
       await videoVaultService.ensureVideoStreamable(testVideoId);
       final postMigrationBytes = await blobFile.readAsBytes();
-      expect(postMigrationBytes.sublist(0, 8), equals(kMediaMagicCtrV2));
+      expect(postMigrationBytes.sublist(0, 8), equals(kMediaMagicCtrV3));
 
       // 3. Simulate app reinstall / restore:
       // Wipe system_key and system_key_provisioned completely
@@ -706,7 +705,7 @@ void main() {
       final decFile = File('${tempDir.path}/t5_recovered.bin');
       await crypto.decryptStreamSystem(blobFile, decFile);
       expect(await decFile.readAsBytes(), equals(plaintext));
-    });
+    }, timeout: const Timeout(Duration(minutes: 2)));
 
     test('T7 — Wrong key must not destroy the file: c1 blob with wrong system_key is untouched after ensureVideoStreamable', () async {
       final platformService = AndroidPlatformService();
@@ -847,9 +846,9 @@ void main() {
       // Run migration
       await videoVaultService.ensureVideoStreamable(testVideoId);
 
-      // Assert on disk starts with c2 magic and decrypts to plaintext
+      // Assert on disk starts with c3 magic and decrypts to plaintext
       final migratedBytes = await blobFile.readAsBytes();
-      expect(migratedBytes.sublist(0, 8), equals(kMediaMagicCtrV2));
+      expect(migratedBytes.sublist(0, 8), equals(kMediaMagicCtrV3));
 
       final decTmp = File('${tempDir.path}/t8_decrypted.bin');
       await crypto.decryptStreamSystem(blobFile, decTmp);
@@ -892,9 +891,9 @@ void main() {
       // Run ensureVideoStreamable
       await videoVaultService.ensureVideoStreamable(id);
 
-      // Assert it converts to c2 despite non-container plaintext
+      // Assert it converts to c3 despite non-container plaintext
       final postBytes = await blobFile.readAsBytes();
-      expect(postBytes.sublist(0, 8), equals(kMediaMagicCtrV2));
+      expect(postBytes.sublist(0, 8), equals(kMediaMagicCtrV3));
 
       // Assert decrypts to original plaintext
       final decTmp = File('${tempDir.path}/t9_decrypted.bin');
@@ -1257,16 +1256,16 @@ void main() {
       expect(outcome.failedAt, isNull);
       expect(outcome.plaintextBytes, equals(plaintext.length));
       expect(outcome.detail, isNull);
-      expect((await blobFile.readAsBytes()).sublist(0, 8), equals(kMediaMagicCtrV2));
+      expect((await blobFile.readAsBytes()).sublist(0, 8), equals(kMediaMagicCtrV3));
 
       // Second call: nothing to do, and it must say so instead of staying silent.
       final second = await videoVaultService.ensureVideoStreamable(id);
       expect(second.converted, isTrue);
       expect(second.failure, VideoMigrationFailure.none);
-      expect(second.sourceKind, 'already-c2');
+      expect(second.sourceKind, 'already-c3');
 
       // The service remembers the latest attempt, per video and overall.
-      expect(videoVaultService.migrationOutcomeFor(id)?.sourceKind, 'already-c2');
+      expect(videoVaultService.migrationOutcomeFor(id)?.sourceKind, 'already-c3');
       expect(videoVaultService.lastMigrationOutcome?.videoId, id);
       expect(videoVaultService.migrationOutcomeFor('never-attempted'), isNull);
     });

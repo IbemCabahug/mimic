@@ -488,7 +488,7 @@ class VideoVaultService {
         }
       }
 
-      // Step 2: re-encrypt plaintext as c2 (CTR under master key) to a second temp file
+      // Step 2: re-encrypt plaintext as c3 (authenticated CTR under master key) to a second temp file
       stage = VideoMigrationStage.reencrypt;
       await _crypto.encryptStreamSystemCtr(plainTemp, ctrTemp);
 

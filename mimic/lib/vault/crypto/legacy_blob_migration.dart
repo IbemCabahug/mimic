@@ -253,7 +253,7 @@ class LegacyBlobMigration {
       //    the c2 writer (MVKEYc2\0 + IV + CTR under the DEK, run in the
       //    background isolate) — encryptStreamSystem writes the older CBC v1
       //    format, which is NOT the migration target.
-      await _crypto.encryptStreamSystemCtr(plainTmp, c2Tmp);
+      await _crypto.encryptStreamSystemCtr(plainTmp, c2Tmp, writeC3: false);
 
       // 3. Verify: decrypt the new blob back and compare digests. A migration
       //    that cannot prove itself must not replace the original.
