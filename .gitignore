@@ -7,6 +7,10 @@ docs/future_feature.md
 docs/PROJECT_STATUS.md
 f27_notes.md
 r28_device_checklist.md
+Manual_Test_Cases.xlsx
+docs/Manual_Test_Cases.xlsx
+*.xlsx
+*.xls
 
 # Moved to docs repository (mimic-docs/notes.md)
 notes.md
