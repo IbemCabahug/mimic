@@ -5,7 +5,6 @@ import '../crypto/vault_crypto.dart';
 import '../crypto/recovery_phrase.dart';
 import '../widgets/vault_scaffold.dart';
 import '../security/auto_lock.dart';
-import '../security/lockout_service.dart';
 import '../../core/theme/app_theme.dart';
 
 class RecoveryPhraseScreen extends ConsumerStatefulWidget {

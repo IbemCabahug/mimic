@@ -151,4 +151,80 @@ void main() {
     expect(isValid, isTrue);
     await raf.close();
   });
+
+  group('SEC-01: Path traversal & blob ID sanitization', () {
+    test('isValidBlobId accepts safe IDs and rejects dangerous IDs', () {
+      expect(isValidBlobId('123e4567-e89b-12d3-a456-426614174000'), isTrue);
+      expect(isValidBlobId('blob-1'), isTrue);
+      expect(isValidBlobId('blob_2'), isTrue);
+      expect(isValidBlobId('SAFE123'), isTrue);
+
+      // Traversal and injection vectors
+      expect(isValidBlobId('../../etc/passwd'), isFalse);
+      expect(isValidBlobId('..\\windows\\system32'), isFalse);
+      expect(isValidBlobId('../databases/vault_notes.db'), isFalse);
+      expect(isValidBlobId('/root/file'), isFalse);
+      expect(isValidBlobId(r'C:\Users\file'), isFalse);
+      expect(isValidBlobId('..'), isFalse);
+      expect(isValidBlobId('.'), isFalse);
+      expect(isValidBlobId('.hidden'), isFalse);
+      expect(isValidBlobId(''), isFalse);
+      expect(isValidBlobId('file with space'), isFalse);
+      expect(isValidBlobId('foo/bar'), isFalse);
+      expect(isValidBlobId('foo;rm -rf'), isFalse);
+    });
+
+    test('MimicV2Writer.writeBlob throws ArgumentError on path traversal ID', () async {
+      final file = File('${tempDir.path}/writer_test.mimic');
+      final sink = file.openWrite();
+      final writer = MimicV2Writer(sink);
+      writer.writeHeader(0, Uint8List(0));
+
+      final data = utf8.encode('evil payload');
+      expect(
+        () => writer.writeBlob('../../evil', data.length, _createStream(data)),
+        throwsA(isA<ArgumentError>()),
+      );
+      await sink.close();
+    });
+
+    test('MimicV2Reader.readBlobEntry throws FormatException on crafted traversal entry', () async {
+      final file = File('${tempDir.path}/crafted_exploit.mimic');
+      final sink = file.openWrite();
+
+      // Write header: MMIC, v2, timestamp, metadata len 0
+      sink.add(kMimicMagic);
+      sink.add([kMimicVersionV2]);
+      final ts = ByteData(8)..setInt64(0, 0, Endian.big);
+      sink.add(ts.buffer.asUint8List());
+      final metaLen = ByteData(4)..setUint32(0, 0, Endian.big);
+      sink.add(metaLen.buffer.asUint8List());
+
+      // Write crafted malicious BLOB entry with id = '../../escape_staging'
+      sink.add(kBlobMagic);
+      const evilId = '../../escape_staging';
+      final evilIdBytes = utf8.encode(evilId);
+      final idLen = ByteData(2)..setUint16(0, evilIdBytes.length, Endian.big);
+      sink.add(idLen.buffer.asUint8List());
+      sink.add(evilIdBytes);
+      final payloadLen = ByteData(8)..setUint64(0, 4, Endian.big);
+      sink.add(payloadLen.buffer.asUint8List());
+      sink.add([1, 2, 3, 4]);
+
+      await sink.close();
+
+      final raf = await file.open(mode: FileMode.read);
+      final reader = MimicV2Reader(raf);
+      await reader.readHeader();
+      await reader.readMetadata();
+
+      await expectLater(
+        reader.readBlobEntry(),
+        throwsA(isA<FormatException>()),
+      );
+
+      await raf.close();
+    });
+  });
 }
+

@@ -1,10 +1,8 @@
 // lib/core/services/platform_service.dart
-import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 
@@ -89,67 +87,49 @@ class AndroidPlatformService implements PlatformService {
 }
 
 class WebPlatformService implements PlatformService {
-  SharedPreferences? _prefs;
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage(
+    webOptions: WebOptions(
+      dbName: 'mimic_vault_secure',
+      publicKey: 'mimic_vault_pub',
+    ),
+  );
 
   @override
   bool isWeb() => true;
 
-  Future<void> _ensureInitialized() async {
-    _prefs ??= await SharedPreferences.getInstance();
-  }
-
   @override
   Future<void> secureWrite(String key, String value) async {
-    await _ensureInitialized();
-    await _prefs!.setString(key, value);
+    await _secureStorage.write(key: key, value: value);
   }
 
   @override
   Future<String?> secureRead(String key) async {
-    await _ensureInitialized();
-    return _prefs!.getString(key);
+    return _secureStorage.read(key: key);
   }
 
   @override
   Future<Map<String, String>> secureReadAll() async {
-    await _ensureInitialized();
-    final keys = _prefs!.getKeys();
-    final map = <String, String>{};
-    for (final key in keys) {
-      final val = _prefs!.getString(key);
-      if (val != null) {
-        map[key] = val;
-      }
-    }
-    return map;
+    return _secureStorage.readAll();
   }
 
   @override
   Future<void> secureDelete(String key) async {
-    await _ensureInitialized();
-    await _prefs!.remove(key);
+    await _secureStorage.delete(key: key);
   }
 
   @override
   Future<void> saveEncryptedFile(String path, Uint8List data) async {
-    await _ensureInitialized();
-    await _prefs!.setString('enc_$path', base64Encode(data));
+    throw UnsupportedError('Vault file storage is disabled on web for security guarantees');
   }
 
   @override
   Future<Uint8List?> readEncryptedFile(String path) async {
-    await _ensureInitialized();
-    final encoded = _prefs!.getString('enc_$path');
-    if (encoded != null) {
-      return base64Decode(encoded);
-    }
-    return null;
+    throw UnsupportedError('Vault file storage is disabled on web for security guarantees');
   }
 
   @override
   Future<void> deleteFile(String path) async {
-    await _ensureInitialized();
-    await _prefs!.remove('enc_$path');
+    throw UnsupportedError('Vault file storage is disabled on web for security guarantees');
   }
 
   @override

@@ -237,6 +237,15 @@ class VaultCrypto extends ChangeNotifier {
         _hasRecoveryPhrase = blob != null;
       }
     } else {
+      final isSetup = await _platformService.secureRead('vault_setup_completed');
+      final restoredPendingPin =
+          await _platformService.secureRead('vault_restored_pending_pin');
+      if (isSetup == 'true' || restoredPendingPin == 'true') {
+        throw SystemKeyMissingException(
+          'Vault backup restored without PIN setup. Please recover via phrase.',
+        );
+      }
+
       final freshSalt = _generateSecureRandomBytes(16);
       final freshSaltBase64 = base64Encode(freshSalt);
       // A NEW vault derives at the hardened cost AND writes a v4 verifier.
@@ -259,6 +268,7 @@ class VaultCrypto extends ChangeNotifier {
       await _platformService.secureDelete('lockout_set_wall');
       await _platformService.secureDelete('lockout_set_elapsed');
       await _platformService.secureDelete('lockout_duration_ms');
+      await _platformService.secureDelete('vault_restored_pending_pin');
 
       await _platformService.secureWrite(
           _storageKeyPinHash, formatHardenedVerifier(candidateKey));
@@ -1423,9 +1433,9 @@ class VaultCrypto extends ChangeNotifier {
   }
 
   /// Encrypts [src] to [dest] using AES-CTR keyed by the master DEK (_derivedKey).
-  /// Defaults to writing authenticated "MVKEYc3\0" format with HMAC-SHA256 authentication (writeC3: true).
-  /// Setting [writeC3] to false writes legacy unauthenticated "MVKEYc2\0".
-  Future<void> encryptStreamSystemCtr(File src, File dest, {bool writeC3 = true}) async {
+  /// Defaults to writing legacy unauthenticated "MVKEYc2\0" (writeC3: false).
+  /// Setting [writeC3] to true or calling [encryptStreamSystemCtrV3] writes authenticated "MVKEYc3\0" format with HMAC-SHA256 authentication.
+  Future<void> encryptStreamSystemCtr(File src, File dest, {bool writeC3 = false}) async {
     if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
     final iv = _generateSecureRandomBytes(16);
     // The c3/c2 write runs in a background isolate (H15): a whole-file CTR pass
@@ -1697,8 +1707,127 @@ class VaultCrypto extends ChangeNotifier {
       }
     }
   }
+
+  /// Verifies the structural and cryptographic integrity of [file] (F10).
+  ///
+  /// Streams large files in chunks without loading them entirely into memory,
+  /// avoiding OutOfMemory errors on multi-gigabyte videos.
+  Future<BlobIntegrityStatus> verifyFileIntegrity(File file) async {
+    try {
+      if (!await file.exists()) {
+        return BlobIntegrityStatus.fileNotFound;
+      }
+
+      final fileLen = await file.length();
+      if (fileLen < 8) {
+        return BlobIntegrityStatus.fileTooShort;
+      }
+
+      final raf = await file.open(mode: FileMode.read);
+      try {
+        final magic = Uint8List(8);
+        final magicRead = await raf.readInto(magic);
+        if (magicRead < 8) {
+          return BlobIntegrityStatus.fileTooShort;
+        }
+
+        final format = classifyMediaHeader(magic);
+
+        if (format == MediaBlobFormat.ctrV3) {
+          if (fileLen < kAuthHeaderLength) {
+            return BlobIntegrityStatus.fileTooShort;
+          }
+          final iv = Uint8List(16);
+          final ivRead = await raf.readInto(iv);
+          if (ivRead < 16) return BlobIntegrityStatus.fileTooShort;
+
+          final tag = Uint8List(kAuthTagLength);
+          final tagRead = await raf.readInto(tag);
+          if (tagRead < kAuthTagLength) return BlobIntegrityStatus.fileTooShort;
+
+          if (!_isUnlocked || _derivedKey == null) {
+            return BlobIntegrityStatus.vaultLocked;
+          }
+
+          final macKey = deriveMacKey(_derivedKey!);
+          try {
+            final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(macKey));
+            hmac.update(Uint8List.fromList(kMediaMagicCtrV3), 0, kMediaMagicCtrV3.length);
+            hmac.update(iv, 0, iv.length);
+
+            final checkBuffer = Uint8List(64 * 1024);
+            int checkRead;
+            while ((checkRead = await raf.readInto(checkBuffer)) > 0) {
+              hmac.update(checkBuffer, 0, checkRead);
+            }
+            final computedTag = Uint8List(kAuthTagLength);
+            hmac.doFinal(computedTag, 0);
+
+            if (!constantTimeBytesEqual(tag, computedTag)) {
+              return BlobIntegrityStatus.tamperedOrCorrupted;
+            }
+            return BlobIntegrityStatus.healthy;
+          } finally {
+            macKey.fillRange(0, macKey.length, 0);
+          }
+        } else if (format == MediaBlobFormat.cbcV1) {
+          if (fileLen < 24) {
+            return BlobIntegrityStatus.fileTooShort;
+          }
+          final payloadLength = fileLen - 24;
+          if (payloadLength == 0 || payloadLength % 16 != 0) {
+            return BlobIntegrityStatus.truncatedPayload;
+          }
+          // Read trailing block to confirm readability
+          await raf.setPosition(fileLen - 16);
+          final endBlock = Uint8List(16);
+          final readEnd = await raf.readInto(endBlock);
+          if (readEnd < 16) return BlobIntegrityStatus.truncatedPayload;
+          return BlobIntegrityStatus.healthy;
+        } else if (format == MediaBlobFormat.ctrV1 || format == MediaBlobFormat.ctrV2) {
+          if (fileLen < 24) {
+            return BlobIntegrityStatus.fileTooShort;
+          }
+          return BlobIntegrityStatus.healthy;
+        } else {
+          // Legacy headerless CBC blob
+          if (fileLen == 0 || fileLen % 16 != 0) {
+            return BlobIntegrityStatus.truncatedPayload;
+          }
+          return BlobIntegrityStatus.healthy;
+        }
+      } finally {
+        await raf.close();
+      }
+    } catch (_) {
+      return BlobIntegrityStatus.ioError;
+    }
+  }
 }
 
+/// The integrity status of an encrypted vault media blob (F10).
+enum BlobIntegrityStatus {
+  /// File is structurally and cryptographically intact.
+  healthy,
+
+  /// File does not exist on disk.
+  fileNotFound,
+
+  /// File is smaller than the required header size.
+  fileTooShort,
+
+  /// Ciphertext is truncated or misaligned (e.g. CBC payload not 16-byte aligned).
+  truncatedPayload,
+
+  /// Authentication failed: HMAC tag mismatch on c3 authenticated blob (tampering or bit-rot).
+  tamperedOrCorrupted,
+
+  /// Vault is locked (required for c3 HMAC derivation).
+  vaultLocked,
+
+  /// File I/O error occurred during inspection.
+  ioError,
+}
 
 final vaultCryptoProvider = ChangeNotifierProvider<VaultCrypto>((ref) {
   return VaultCrypto(ref.read(platformServiceProvider));

@@ -25,13 +25,21 @@ android {
 
     signingConfigs {
         create("release") {
-            keyAlias = keystoreProperties.getProperty("keyAlias") as String?
-            keyPassword = keystoreProperties.getProperty("keyPassword") as String?
-            val storeFilePath = keystoreProperties.getProperty("storeFile") as String?
+            keyAlias = System.getenv("MIMIC_KEY_ALIAS")
+                ?: (project.findProperty("MIMIC_KEY_ALIAS") as String?)
+                ?: (keystoreProperties.getProperty("keyAlias") as String?)
+            keyPassword = System.getenv("MIMIC_KEY_PASSWORD")
+                ?: (project.findProperty("MIMIC_KEY_PASSWORD") as String?)
+                ?: (keystoreProperties.getProperty("keyPassword") as String?)
+            val storeFilePath = System.getenv("MIMIC_STORE_FILE")
+                ?: (project.findProperty("MIMIC_STORE_FILE") as String?)
+                ?: (keystoreProperties.getProperty("storeFile") as String?)
             if (storeFilePath != null) {
                 storeFile = file(storeFilePath)
             }
-            storePassword = keystoreProperties.getProperty("storePassword") as String?
+            storePassword = System.getenv("MIMIC_STORE_PASSWORD")
+                ?: (project.findProperty("MIMIC_STORE_PASSWORD") as String?)
+                ?: (keystoreProperties.getProperty("storePassword") as String?)
         }
     }
 

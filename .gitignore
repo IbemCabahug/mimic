@@ -1,6 +1,9 @@
 
 *.apk
 /docs/
+**/key.properties
+*.jks
+*.keystore
 
 # Internal planning documents - never commit (repo was public until 2026-08-07)
 check-project.md

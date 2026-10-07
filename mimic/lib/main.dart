@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -6,6 +7,9 @@ import 'package:mimic/game/data/language_store.dart';
 import 'package:mimic/vault/security/auto_lock.dart';
 
 void main() async {
+  if (kReleaseMode) {
+    debugPrint = (String? message, {int? wrapWidth}) {};
+  }
   WidgetsFlutterBinding.ensureInitialized();
   await LanguageStore.load();
   await AutoLock.wipeTransientPlaintext();

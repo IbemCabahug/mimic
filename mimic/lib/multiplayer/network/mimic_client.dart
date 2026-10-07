@@ -39,6 +39,9 @@ class MimicClient {
   /// Delay between reconnection attempts.
   static const Duration _reconnectDelay = Duration(seconds: 1);
 
+  /// Maximum inbound payload size (32 KB) to prevent memory exhaustion DoS (SEC-11).
+  static const int maxPayloadBytes = 32 * 1024;
+
   // ─────────────────────────────────────────────────────────────────────
   // Internal state
   // ─────────────────────────────────────────────────────────────────────
@@ -52,6 +55,9 @@ class MimicClient {
 
   /// The last port used for connection (needed for reconnect).
   int? _lastPort;
+
+  /// The last handshake token used for connection (needed for reconnect, SEC-04).
+  String? _lastHandshakeToken;
 
   /// Stream controller for inbound messages from the server.
   /// Each message is a decoded JSON map.
@@ -81,10 +87,11 @@ class MimicClient {
   /// On success, begins listening for server messages. The server will
   /// send a `{"type":"welcome","playerId":"..."}` message that is
   /// automatically captured and stored in [assignedPlayerId].
-  Future<void> connect(String ip, int port) async {
+  Future<void> connect(String ip, int port, {String? handshakeToken}) async {
     // Store for potential reconnect.
     _lastIp = ip;
     _lastPort = port;
+    _lastHandshakeToken = handshakeToken;
 
     try {
       final uri = 'ws://$ip:$port';
@@ -94,6 +101,14 @@ class MimicClient {
       _connected = true;
 
       _log('Connected to $uri');
+
+      // Send handshake token immediately upon connection if provided (SEC-04)
+      if (handshakeToken != null && handshakeToken.isNotEmpty) {
+        _socket!.add(jsonEncode({
+          'type': 'handshake',
+          'token': handshakeToken,
+        }));
+      }
 
       _socket!.listen(
         _onDataReceived,
@@ -161,7 +176,7 @@ class MimicClient {
     for (int attempt = 1; attempt <= _maxReconnectAttempts; attempt++) {
       _log('Reconnect attempt $attempt/$_maxReconnectAttempts ...');
 
-      await connect(_lastIp!, _lastPort!);
+      await connect(_lastIp!, _lastPort!, handshakeToken: _lastHandshakeToken);
 
       if (_connected) {
         _log('Reconnected successfully on attempt $attempt.');
@@ -185,9 +200,17 @@ class MimicClient {
   /// [messageStream]. Automatically captures the player ID from
   /// the server's `"welcome"` message.
   void _onDataReceived(dynamic rawData) {
+    if (rawData is! String) {
+      _log('Rejected non-text frame from server');
+      return;
+    }
+    if (rawData.length > maxPayloadBytes) {
+      _log('Dropped oversized message from server (${rawData.length} > $maxPayloadBytes bytes)');
+      return;
+    }
     try {
       final Map<String, dynamic> message =
-          jsonDecode(rawData as String) as Map<String, dynamic>;
+          jsonDecode(rawData) as Map<String, dynamic>;
 
       // Capture the player ID assigned by the server.
       if (message['type'] == 'welcome' && message.containsKey('playerId')) {

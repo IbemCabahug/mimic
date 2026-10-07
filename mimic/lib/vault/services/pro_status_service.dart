@@ -26,6 +26,29 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/services/platform_service.dart';
 
+/// Target distribution channels for Mimic.
+enum AppDistributionFlavor {
+  /// Free & Open-Source distribution (F-Droid, GitHub Releases, IzzyOnDroid).
+  /// Features are fully unlocked and no proprietary billing dependencies run.
+  foss,
+
+  /// Google Play Store distribution (monetized with one-time purchase).
+  playStore,
+}
+
+/// The compile-time flavor string passed via `--dart-define=APP_FLAVOR=...`.
+const String kAppFlavorEnvironment =
+    String.fromEnvironment('APP_FLAVOR', defaultValue: 'foss');
+
+/// Resolves the active [AppDistributionFlavor].
+AppDistributionFlavor get kCurrentDistributionFlavor {
+  final flavor = kAppFlavorEnvironment.trim().toLowerCase();
+  if (flavor == 'playstore' || flavor == 'play_store' || flavor == 'play') {
+    return AppDistributionFlavor.playStore;
+  }
+  return AppDistributionFlavor.foss;
+}
+
 /// Pre-billing enforcement switch.
 ///
 /// While this is false (the current launch window), [ProStatusService.isPro]
@@ -57,7 +80,11 @@ const String proEntitlementValue = 'pro';
 /// Constructed with a [PlatformService] so tests can pass a fake and the
 /// app passes the real one via [proStatusServiceProvider] below.
 class ProStatusService {
-  ProStatusService(this._platform, {this.billingEnforced = kBillingEnforced});
+  ProStatusService(
+    this._platform, {
+    this.billingEnforced = kBillingEnforced,
+    AppDistributionFlavor? flavor,
+  }) : distributionFlavor = flavor ?? kCurrentDistributionFlavor;
 
   final PlatformService _platform;
 
@@ -65,6 +92,12 @@ class ProStatusService {
   /// true to exercise the billing-era matrix while the app still runs the
   /// launch window ([kBillingEnforced]).
   final bool billingEnforced;
+
+  /// Active distribution channel (FOSS vs Play Store).
+  final AppDistributionFlavor distributionFlavor;
+
+  /// Whether this is a FOSS (F-Droid / GitHub) build.
+  bool get isFoss => distributionFlavor == AppDistributionFlavor.foss;
 
   /// Reads the cached entitlement. Never throws: any storage error
   /// answers free, because a gate that crashes open is worse than a gate

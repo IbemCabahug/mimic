@@ -140,6 +140,25 @@ void main() {
       expect(await service.isPro(), isTrue);
     });
   });
+
+  group('distribution channels', () {
+    test('FOSS flavor is identified and unlocked by default', () async {
+      final service = ProStatusService(
+        FakePlatformService(),
+        flavor: AppDistributionFlavor.foss,
+      );
+      expect(service.isFoss, isTrue);
+      expect(await service.isPro(), isTrue);
+    });
+
+    test('PlayStore flavor is not FOSS', () async {
+      final service = ProStatusService(
+        FakePlatformService(),
+        flavor: AppDistributionFlavor.playStore,
+      );
+      expect(service.isFoss, isFalse);
+    });
+  });
 }
 
 class _ThrowingPlatformService extends FakePlatformService {

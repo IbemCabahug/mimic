@@ -241,7 +241,7 @@ class VideoVaultService {
     bool writeSucceeded = false;
     try {
       await plainTemp.writeAsBytes(bytes, flush: true);
-      await _crypto.encryptStreamSystemCtr(plainTemp, ctrTemp);
+      await _crypto.encryptStreamSystemCtrV3(plainTemp, ctrTemp);
       // Atomic swap in the same directory — a crash mid-import can never
       // leave a half-written blob at the final path.
       await ctrTemp.rename(dest.path);
@@ -301,7 +301,7 @@ class VideoVaultService {
     final dest = await _platformService.resolveVaultFile(id);
     bool writeSucceeded = false;
     try {
-      await _crypto.encryptStreamSystemCtr(src, dest);
+      await _crypto.encryptStreamSystemCtrV3(src, dest);
 
       final size = await src.length();
 
@@ -490,7 +490,7 @@ class VideoVaultService {
 
       // Step 2: re-encrypt plaintext as c3 (authenticated CTR under master key) to a second temp file
       stage = VideoMigrationStage.reencrypt;
-      await _crypto.encryptStreamSystemCtr(plainTemp, ctrTemp);
+      await _crypto.encryptStreamSystemCtrV3(plainTemp, ctrTemp);
 
       // Step 3: atomic rename of ctrTemp OVER the original blob
       stage = VideoMigrationStage.rename;
@@ -548,30 +548,79 @@ class VideoVaultService {
       final raw = await _platformService.secureRead('vault_videos_meta');
       if (raw == null || raw.isEmpty) return [];
       final List<dynamic> decoded = jsonDecode(raw);
-      return decoded
-          .map((e) => VideoMeta.fromMap(Map<String, dynamic>.from(e)))
-          .toList();
+      return decoded.map((e) {
+        final m = Map<String, dynamic>.from(e);
+        final rawName = m['originalName'] as String?;
+        if (rawName != null && rawName.isNotEmpty) {
+          try {
+            m['originalName'] = _crypto.decryptString(rawName);
+          } catch (_) {}
+        }
+        return VideoMeta.fromMap(m);
+      }).toList();
     }
 
     await _ensureDb();
-    final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
-    return maps.map((map) => VideoMeta.fromMap(map)).toList();
+    try {
+      final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
+      return maps.map((map) {
+        final m = Map<String, dynamic>.from(map);
+        final rawName = m['originalName'] as String?;
+        if (rawName != null && rawName.isNotEmpty) {
+          try {
+            m['originalName'] = _crypto.decryptString(rawName);
+          } catch (_) {}
+        }
+        return VideoMeta.fromMap(m);
+      }).toList();
+    } catch (e) {
+      if (e is DatabaseException && e.toString().contains('database_closed')) {
+        _db = null;
+        await _ensureDb();
+        final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
+        return maps.map((map) {
+          final m = Map<String, dynamic>.from(map);
+          final rawName = m['originalName'] as String?;
+          if (rawName != null && rawName.isNotEmpty) {
+            try {
+              m['originalName'] = _crypto.decryptString(rawName);
+            } catch (_) {}
+          }
+          return VideoMeta.fromMap(m);
+        }).toList();
+      }
+      rethrow;
+    }
   }
 
   Future<void> _saveMeta(VideoMeta meta) async {
+    final map = meta.toMap();
+    if (meta.originalName != null && meta.originalName!.isNotEmpty) {
+      try {
+        map['originalName'] = _crypto.encryptString(meta.originalName!);
+      } catch (_) {}
+    }
     if (kIsWeb) {
       final existing = await getAllVideos();
       existing.removeWhere((m) => m.id == meta.id);
       existing.add(meta);
       await _platformService.secureWrite(
         'vault_videos_meta',
-        jsonEncode(existing.map((m) => m.toMap()).toList()),
+        jsonEncode(existing.map((m) {
+          final em = m.toMap();
+          if (m.originalName != null && m.originalName!.isNotEmpty) {
+            try {
+              em['originalName'] = _crypto.encryptString(m.originalName!);
+            } catch (_) {}
+          }
+          return em;
+        }).toList()),
       );
       return;
     }
 
     await _ensureDb();
-    await _db!.insert(_tableName, meta.toMap());
+    await _db!.insert(_tableName, map);
   }
 
   Future<void> _deleteMeta(String id) async {
@@ -600,16 +649,36 @@ class VideoVaultService {
       existing[index] = existing[index].copyWith(folder: folder);
       await _platformService.secureWrite(
         'vault_videos_meta',
-        jsonEncode(existing.map((m) => m.toMap()).toList()),
+        jsonEncode(existing.map((m) {
+          final em = m.toMap();
+          if (m.originalName != null && m.originalName!.isNotEmpty) {
+            try {
+              em['originalName'] = _crypto.encryptString(m.originalName!);
+            } catch (_) {}
+          }
+          return em;
+        }).toList()),
       );
       return;
     }
     await _ensureDb();
     final maps = await _db!.query(_tableName, where: 'id = ?', whereArgs: [id]);
     if (maps.isEmpty) return;
+    final row = maps.single;
     final updated =
-        VideoMeta.fromMap(maps.single).copyWith(folder: folder);
-    await _db!.update(_tableName, updated.toMap(),
+        VideoMeta.fromMap(row).copyWith(folder: folder);
+    final map = updated.toMap();
+    final rawName = row['originalName'] as String?;
+    if (rawName != null && rawName.isNotEmpty) {
+      try {
+        _crypto.decryptString(rawName);
+      } catch (_) {
+        try {
+          map['originalName'] = _crypto.encryptString(rawName);
+        } catch (_) {}
+      }
+    }
+    await _db!.update(_tableName, map,
         where: 'id = ?', whereArgs: [id]);
   }
 
@@ -728,7 +797,7 @@ class VideoVaultService {
           // leak a filesystem path to the screen (see the T15 test).
           onFileFailed?.call(i, 'Import failed');
         } catch (_) {}
-        debugPrint('pickAndEncryptVideo failed on $failedFileName: $e');
+        debugPrint('pickAndEncryptVideo failed: ${e.runtimeType}');
         break;
       }
     }
@@ -952,6 +1021,16 @@ class VideoVaultService {
     await _db!.delete(_tableName);
     for (final video in decodedVideos) {
       final map = Map<String, dynamic>.from(video);
+      final rawName = map['originalName'] as String?;
+      if (rawName != null && rawName.isNotEmpty) {
+        try {
+          _crypto.decryptString(rawName);
+        } catch (_) {
+          try {
+            map['originalName'] = _crypto.encryptString(rawName);
+          } catch (_) {}
+        }
+      }
       await _db!.insert(_tableName, map, conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }

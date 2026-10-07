@@ -11,6 +11,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 import 'package:mimic/vault/services/billing_service.dart';
+import 'package:mimic/vault/services/billing_verifier.dart';
 import 'package:mimic/vault/services/pro_status_service.dart';
 
 import 'pro_status_service_test.dart' show FakePlatformService;
@@ -99,10 +100,20 @@ PurchaseDetails _purchase(
   return details;
 }
 
-BillingService _service(FakeBillingStore store, FakePlatformService platform) {
+BillingService _service(
+  FakeBillingStore store,
+  FakePlatformService platform, {
+  PurchaseVerifier? verifier,
+  AppDistributionFlavor flavor = AppDistributionFlavor.playStore,
+}) {
   return BillingService(
-    proStatus: ProStatusService(platform, billingEnforced: true),
+    proStatus: ProStatusService(
+      platform,
+      billingEnforced: true,
+      flavor: flavor,
+    ),
     store: store,
+    verifier: verifier ?? const DevelopmentPurchaseVerifier(allowAll: true),
   );
 }
 
@@ -386,6 +397,68 @@ void main() {
       await service.restore();
 
       expect(store.restoreCalled, isTrue);
+    });
+  });
+
+  group('FOSS distribution channel', () {
+    test('FOSS flavor does not subscribe to purchase stream or query store', () async {
+      final store = FakeBillingStore();
+      final service = _service(
+        store,
+        FakePlatformService(),
+        flavor: AppDistributionFlavor.foss,
+      );
+
+      await service.init();
+
+      expect(service.isListening, isFalse);
+      expect(service.proProductDetails, isNull);
+      expect(service.lastError, isNull);
+    });
+
+    test('buyPro in FOSS flavor returns false with diagnostic error', () async {
+      final store = FakeBillingStore();
+      final service = _service(
+        store,
+        FakePlatformService(),
+        flavor: AppDistributionFlavor.foss,
+      );
+
+      final result = await service.buyPro();
+      expect(result, isFalse);
+      expect(service.lastError, contains('FOSS'));
+    });
+
+    test('restore in FOSS flavor does not contact store', () async {
+      final store = FakeBillingStore();
+      final service = _service(
+        store,
+        FakePlatformService(),
+        flavor: AppDistributionFlavor.foss,
+      );
+
+      await service.restore();
+      expect(store.restoreCalled, isFalse);
+    });
+  });
+
+  group('cryptographic verifier integration', () {
+    test('purchase rejected by verifier completes but never grants Pro', () async {
+      final platform = FakePlatformService();
+      final store = FakeBillingStore();
+      final service = _service(
+        store,
+        platform,
+        verifier: const DevelopmentPurchaseVerifier(allowAll: false),
+      );
+      await service.init();
+
+      store.emit([_purchase(PurchaseStatus.purchased)]);
+      await pumpEventQueue();
+
+      expect(platform.store[proEntitlementKey], isNull);
+      expect(store.completed, hasLength(1));
+      expect(service.lastError, contains('purchase verification failed'));
     });
   });
 

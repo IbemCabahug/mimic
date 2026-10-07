@@ -124,6 +124,26 @@ class NetworkService extends ChangeNotifier {
   /// Returns `null` for hosts or when not connected.
   String? get assignedPlayerId => _client?.assignedPlayerId;
 
+  String? _sessionToken;
+  String? _handshakeToken;
+
+  /// Ephemeral session token for host-guest handshake verification (SEC-04).
+  String? get sessionToken => _server?.sessionToken ?? _sessionToken;
+  set sessionToken(String? token) {
+    _sessionToken = token;
+    if (_server != null) {
+      _server!.sessionToken = token;
+    }
+  }
+
+  /// Ephemeral handshake token transmitted by guests when connecting (SEC-04).
+  String? handshakeToken;
+
+  /// Set the active session handshake token for the host server (SEC-04).
+  void setSessionToken(String? token) {
+    sessionToken = token;
+  }
+
   // ─────────────────────────────────────────────────────────────────────
   // Host lifecycle
   // ─────────────────────────────────────────────────────────────────────
@@ -140,6 +160,9 @@ class NetworkService extends ChangeNotifier {
       }
 
       _server = MimicServer();
+      if (_sessionToken != null) {
+        _server!.sessionToken = _sessionToken;
+      }
       await _server!.start();
 
       _role = NetworkRole.host;
@@ -173,7 +196,7 @@ class NetworkService extends ChangeNotifier {
       }
 
       _client = MimicClient();
-      await _client!.connect(ip, port);
+      await _client!.connect(ip, port, handshakeToken: _handshakeToken);
 
       if (!_client!.isConnected) {
         _log('Failed to connect to $ip:$port');

@@ -12,6 +12,8 @@ import '../security/auto_lock.dart';
 import '../services/document_vault_service.dart';
 import '../services/file_vault_service.dart';
 import '../services/media_format_report.dart';
+import '../services/media_integrity_service.dart';
+import '../services/orphan_detection_service.dart';
 import '../services/video_vault_service.dart';
 import '../widgets/vault_scaffold.dart';
 import 'player_failure_text.dart';
@@ -40,6 +42,10 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
   MediaFormatReport? _formatReport;
   bool _isCheckingFormats = false;
   String? _formatError;
+  OrphanScanResult? _orphanResult;
+  bool _isPurgingOrphans = false;
+  MediaIntegritySummary? _integritySummary;
+  bool _isCheckingIntegrity = false;
 
   @override
   void initState() {
@@ -108,7 +114,7 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
           sampleSalt,
           kPbkdf2Iterations,
           kDerivedKeyLength,
-          native: (_, __, ___, ____) async => throw Exception('force fallback'),
+          native: (pass, salt, iter, keyLen) async => throw Exception('force fallback'),
         );
         swPointy.stop();
         pointyMs = swPointy.elapsedMilliseconds;
@@ -205,9 +211,12 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
         resolveBlob: platform.resolveVaultFile,
       );
 
+      final orphanResult = await ref.read(orphanDetectionServiceProvider).scanOrphans();
+
       if (mounted) {
         setState(() {
           _formatReport = report;
+          _orphanResult = orphanResult;
         });
       }
     } catch (e) {
@@ -220,6 +229,83 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
       if (mounted) {
         setState(() {
           _isCheckingFormats = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _purgeOrphans() async {
+    if (_isPurgingOrphans) return;
+    setState(() {
+      _isPurgingOrphans = true;
+    });
+
+    try {
+      final orphanService = ref.read(orphanDetectionServiceProvider);
+      final purgeResult = await orphanService.purgeOrphans();
+      final freshScan = await orphanService.scanOrphans();
+
+      if (mounted) {
+        setState(() {
+          _orphanResult = freshScan;
+        });
+        final kbReclaimed = (purgeResult.reclaimedBytes / 1024).toStringAsFixed(1);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Purged ${purgeResult.deletedCount} orphan file(s), reclaiming $kbReclaimed KB.',
+              style: const TextStyle(fontFamily: 'Inter'),
+            ),
+            backgroundColor: VaultColors.accent,
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to purge orphans: $e'),
+            backgroundColor: VaultColors.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isPurgingOrphans = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _checkMediaIntegrity() async {
+    if (_isCheckingIntegrity) return;
+    setState(() {
+      _isCheckingIntegrity = true;
+    });
+
+    try {
+      final integrityService = ref.read(mediaIntegrityServiceProvider);
+      final summary = await integrityService.verifyAllMedia();
+
+      if (mounted) {
+        setState(() {
+          _integritySummary = summary;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Integrity check failed: $e'),
+            backgroundColor: VaultColors.error,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCheckingIntegrity = false;
         });
       }
     }
@@ -476,6 +562,84 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
                 ],
               ),
             ),
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              decoration: BoxDecoration(
+                color: VaultColors.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: VaultColors.textTertiary.withValues(alpha: 0.3)),
+              ),
+              child: Column(
+                children: [
+                  _buildMetricRow(
+                    'Vault files on disk',
+                    _orphanResult != null ? '${_orphanResult!.totalFilesOnDisk}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Tracked active files',
+                    _orphanResult != null ? '${_orphanResult!.trackedFilesOnDisk}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Unreferenced ghost blobs',
+                    _orphanResult != null
+                        ? (_orphanResult!.unreferencedBlobs.isEmpty
+                            ? '0 (clean)'
+                            : '${_orphanResult!.unreferencedBlobs.length} (${(_orphanResult!.unreferencedBytes / 1024).toStringAsFixed(1)} KB)')
+                        : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Stale temporary files',
+                    _orphanResult != null
+                        ? (_orphanResult!.staleTempFiles.isEmpty
+                            ? '0 (clean)'
+                            : '${_orphanResult!.staleTempFiles.length} (${(_orphanResult!.staleTempBytes / 1024).toStringAsFixed(1)} KB)')
+                        : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Missing database files',
+                    _orphanResult != null
+                        ? (_orphanResult!.missingDatabaseIds.isEmpty
+                            ? '0 (all present)'
+                            : '${_orphanResult!.missingDatabaseIds.length} missing')
+                        : '—',
+                  ),
+                ],
+              ),
+            ),
+            if (_orphanResult?.hasOrphans == true) ...[
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _isPurgingOrphans ? null : _purgeOrphans,
+                icon: _isPurgingOrphans
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: VaultColors.accent),
+                      )
+                    : const Icon(Icons.cleaning_services_outlined, size: 18, color: VaultColors.accent),
+                label: Text(
+                  _isPurgingOrphans
+                      ? 'Purging orphans...'
+                      : 'Purge ${_orphanResult!.totalOrphansCount} orphan file(s) (${(_orphanResult!.totalReclaimableBytes / 1024).toStringAsFixed(1)} KB)',
+                  style: const TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: VaultColors.accent,
+                  ),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: VaultColors.accent),
+                  minimumSize: const Size(double.infinity, 44),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+              ),
+            ],
             if (_formatError != null) ...[
               const SizedBox(height: 16),
               Text(
@@ -521,6 +685,77 @@ class _VaultDiagnosticsScreenState extends ConsumerState<VaultDiagnosticsScreen>
                     )
                   : const Text(
                       'Check media formats',
+                      style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+            ),
+            const SizedBox(height: 24),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+              decoration: BoxDecoration(
+                color: VaultColors.surface,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: VaultColors.textTertiary.withValues(alpha: 0.3)),
+              ),
+              child: Column(
+                children: [
+                  _buildMetricRow(
+                    'Files inspected (F10)',
+                    _integritySummary != null ? '${_integritySummary!.totalChecked}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Cryptographically healthy',
+                    _integritySummary != null ? '${_integritySummary!.healthyCount}' : '—',
+                  ),
+                  divider,
+                  _buildMetricRow(
+                    'Corrupted / tampered',
+                    _integritySummary != null
+                        ? (_integritySummary!.corruptedCount == 0
+                            ? '0 (all intact)'
+                            : '${_integritySummary!.corruptedCount} corrupted')
+                        : '—',
+                  ),
+                ],
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.only(top: 16.0, bottom: 12.0),
+              child: Text(
+                'Deep integrity check. Streams every block and verifies HMAC tags without loading files into memory.',
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 12,
+                  color: VaultColors.textSecondary,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            ElevatedButton(
+              onPressed: _isCheckingIntegrity ? null : _checkMediaIntegrity,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: VaultColors.accent,
+                foregroundColor: Colors.white,
+                minimumSize: const Size(double.infinity, 48),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: _isCheckingIntegrity
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                  : const Text(
+                      'Verify file contents (F10)',
                       style: TextStyle(
                         fontFamily: 'Inter',
                         fontSize: 16,

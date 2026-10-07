@@ -89,12 +89,13 @@ class NotesService {
 
   Future<void> addNote(Note note) async {
     final encryptedBody = _crypto.encryptString(note.encryptedBody);
+    final encryptedTitle = _crypto.encryptString(note.title);
 
     if (kIsWeb) {
       final notes = await _getWebNotes();
       notes.add({
         'id': note.id,
-        'title': note.title,
+        'title': encryptedTitle,
         'encryptedBody': encryptedBody,
         'createdAt': note.createdAt.toIso8601String(),
         'updatedAt': note.updatedAt.toIso8601String(),
@@ -106,7 +107,7 @@ class NotesService {
     await _ensureDb();
     await _db!.insert('notes', {
       'id': note.id,
-      'title': note.title,
+      'title': encryptedTitle,
       'encryptedBody': encryptedBody,
       'created_at': note.createdAt.toIso8601String(),
       'updated_at': note.updatedAt.toIso8601String(),
@@ -115,6 +116,7 @@ class NotesService {
 
   Future<void> updateNote(Note note) async {
     final encryptedBody = _crypto.encryptString(note.encryptedBody);
+    final encryptedTitle = _crypto.encryptString(note.title);
 
     if (kIsWeb) {
       final notes = await _getWebNotes();
@@ -122,7 +124,7 @@ class NotesService {
       if (index != -1) {
         notes[index] = {
           'id': note.id,
-          'title': note.title,
+          'title': encryptedTitle,
           'encryptedBody': encryptedBody,
           'createdAt': note.createdAt.toIso8601String(),
           'updatedAt': note.updatedAt.toIso8601String(),
@@ -136,7 +138,7 @@ class NotesService {
     await _db!.update(
       'notes',
       {
-        'title': note.title,
+        'title': encryptedTitle,
         'encryptedBody': encryptedBody,
         'updated_at': note.updatedAt.toIso8601String(),
       },
@@ -204,9 +206,13 @@ class NotesService {
         try {
           decrypted = _crypto.decryptString(n['encryptedBody'] as String);
         } catch (_) {}
+        String decryptedTitle = n['title'] as String? ?? '';
+        try {
+          decryptedTitle = _crypto.decryptString(decryptedTitle);
+        } catch (_) {}
         return Note(
           id: n['id'] as String,
-          title: n['title'] as String,
+          title: decryptedTitle,
           encryptedBody: decrypted,
           createdAt: DateTime.parse(n['createdAt'] as String),
           updatedAt: DateTime.parse(n['updatedAt'] as String),
@@ -233,9 +239,13 @@ class NotesService {
       try {
         decrypted = _crypto.decryptString(map['encryptedBody'] as String);
       } catch (_) {}
+      String decryptedTitle = map['title'] as String? ?? '';
+      try {
+        decryptedTitle = _crypto.decryptString(decryptedTitle);
+      } catch (_) {}
       return Note(
         id: map['id'] as String,
-        title: map['title'] as String,
+        title: decryptedTitle,
         encryptedBody: decrypted,
         createdAt: DateTime.parse(map['created_at'] as String),
         updatedAt: DateTime.parse(map['updated_at'] as String),
@@ -265,9 +275,19 @@ class NotesService {
     await _db!.delete('notes');
     for (final note in decodedNotes) {
       final map = Map<String, dynamic>.from(note);
+      String title = map['title'] as String? ?? '';
+      if (title.isNotEmpty) {
+        try {
+          _crypto.decryptString(title);
+        } catch (_) {
+          try {
+            title = _crypto.encryptString(title);
+          } catch (_) {}
+        }
+      }
       final dbMap = {
         'id': map['id'],
-        'title': map['title'],
+        'title': title,
         'encryptedBody': map['encryptedBody'],
         'created_at': map['createdAt'],
         'updated_at': map['updatedAt'],

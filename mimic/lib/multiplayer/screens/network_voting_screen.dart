@@ -238,8 +238,9 @@ class _NetworkVotingScreenState extends ConsumerState<NetworkVotingScreen>
   // ─── Host-only: vote collection ───────────────────────────────────
 
   void _onHostReceiveVote(Map<String, dynamic> message) {
+    // Authenticated senderId takes strict precedence over client-supplied voterId (SEC-04)
     final voterId =
-        message['voterId'] as String? ?? message['senderId'] as String? ?? '';
+        message['senderId'] as String? ?? message['voterId'] as String? ?? '';
     final targetId = message['targetId'] as String? ?? '';
     if (voterId.isEmpty || targetId.isEmpty) return;
 

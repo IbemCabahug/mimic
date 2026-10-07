@@ -93,7 +93,8 @@ class GameStateSyncNotifier extends StateNotifier<GameSyncState> {
           }
           break;
         case 'castVote':
-          final voterId = message['voterId'] as String? ?? message['senderId'] as String?;
+          // Authenticated senderId takes strict precedence over client-supplied voterId (SEC-04)
+          final voterId = message['senderId'] as String? ?? message['voterId'] as String?;
           final targetId = message['targetId'] as String?;
           if (voterId != null && targetId != null) {
             gameStateNotifier.castVote(voterId, targetId);
@@ -233,18 +234,10 @@ class GameStateSyncNotifier extends StateNotifier<GameSyncState> {
     final guestIds = networkService.connectedPlayerIds;
 
     for (final guestId in guestIds) {
-      final isMimic = gameState.mimicIds.contains(guestId);
-      final guestWord = gameState.getWordForPlayer(guestId);
-
-      final serialized = GameSync.serializeState(gameState);
-
-      // Sanitize secrets
-      serialized['mimicIds'] = isMimic ? [guestId] : <String>[];
-      serialized['secondMimicWord'] = null;
-      serialized['currentWordPair'] = {
-        'realWord': guestWord,
-        'mimicWord': guestWord,
-      };
+      final serialized = GameSync.serializeSanitizedState(
+        gameState,
+        forPlayerId: guestId,
+      );
 
       networkService.sendTo(guestId, {
         'type': 'stateSnapshot',
@@ -342,14 +335,19 @@ class GameStateSyncNotifier extends StateNotifier<GameSyncState> {
       }
     }
 
-    // Send rejoinAccepted message directly to rejoining guest
+    // Send rejoinAccepted message directly to rejoining guest with sanitized state (SEC-03)
+    final sanitizedState = GameSync.serializeSanitizedState(
+      gameStateNotifier.state,
+      forPlayerId: newPlayerId,
+    );
+
     networkService.sendTo(newPlayerId, {
       'type': 'rejoinAccepted',
       'role': role,
       'word': word,
       'playerId': newPlayerId,
       'phase': phase,
-      'gameState': GameSync.serializeState(gameStateNotifier.state),
+      'gameState': sanitizedState,
     });
 
     broadcastGameState();

@@ -10,7 +10,6 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:pointycastle/export.dart';
-import 'package:sqflite/sqflite.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../core/services/platform_service.dart';
@@ -259,8 +258,12 @@ class VaultImporter {
       }
 
       final appDir = await getApplicationDocumentsDirectory();
+      final vaultFilesPath = p.normalize(p.join(appDir.path, 'vault_files'));
       for (final id in oldFileIds) {
-        final f = File('${appDir.path}/vault_files/$id');
+        if (!isValidBlobId(id)) continue;
+        final targetPath = p.normalize(p.join(vaultFilesPath, id));
+        if (!p.isWithin(vaultFilesPath, targetPath)) continue;
+        final f = File(targetPath);
         if (await f.exists()) {
           await f.delete();
         }
@@ -268,7 +271,7 @@ class VaultImporter {
 
       // 2. Restore new encrypted files to disk
       if (payload.containsKey('encrypted_files')) {
-        final vaultDir = Directory('${appDir.path}/vault_files');
+        final vaultDir = Directory(vaultFilesPath);
         if (!await vaultDir.exists()) {
           await vaultDir.create(recursive: true);
         }
@@ -276,14 +279,21 @@ class VaultImporter {
         final encryptedFiles = payload['encrypted_files'] as Map<String, dynamic>;
         for (final entry in encryptedFiles.entries) {
           final id = entry.key;
+          if (!isValidBlobId(id)) {
+            throw FormatException('Invalid or unsafe blob ID in V1 backup: $id');
+          }
+          final destPath = p.normalize(p.join(vaultDir.path, id));
+          if (!p.isWithin(vaultDir.path, destPath)) {
+            throw FormatException('Path traversal attempt detected in V1 import: $id');
+          }
           final base64Data = entry.value as String;
           final fileBytes = base64Decode(base64Data);
-          final f = File('${vaultDir.path}/$id');
+          final f = File(destPath);
           await f.writeAsBytes(fileBytes, flush: true);
         }
       }
 
-      // 3. Overwrite secure storage keys
+      // 3. Overwrite secure storage keys (SEC-02: exclude PIN hashes and local wraps)
       final secureKeys = [
         'vault_photos_meta',
         'vault_videos_meta',
@@ -291,8 +301,6 @@ class VaultImporter {
         'vault_notes',
         'recovery_blob',
         'recovery_salt',
-        'vault_salt',
-        'vault_pin_hash',
       ];
       for (final key in secureKeys) {
         final val = payload[key] as String?;
@@ -304,7 +312,7 @@ class VaultImporter {
           }
           if (key == 'vault_documents_meta' && !kIsWeb) {
             final prefs = await SharedPreferences.getInstance();
-            await prefs.setString(key, val);
+            await prefs.remove(key);
           }
         } else {
           await storage.delete(key: key);
@@ -314,6 +322,11 @@ class VaultImporter {
           }
         }
       }
+      // Ensure stale local PIN credentials cannot linger after restore
+      await storage.delete(key: 'vault_salt');
+      await storage.delete(key: 'vault_pin_hash');
+      await storage.delete(key: 'master_key_wrapped');
+      await storage.write(key: 'vault_restored_pending_pin', value: 'true');
 
       // 4. Overwrite SQLite databases on Android/non-web
       if (!kIsWeb) {
@@ -374,12 +387,15 @@ class VaultImporter {
       }
 
       return cryptoSuccess;
-    } catch (e, st) {
+    } catch (e) {
       // Since we got past the phrase check, any other error shouldn't report "Incorrect phrase".
       if (!phraseVerified) return false;
       debugPrint('RESTORE FAIL: $e');
+      if (e is FormatException) {
+        rethrow;
+      }
       if (e is Exception && e.toString().contains('Restore incomplete')) {
-        throw e;
+        rethrow;
       }
       throw Exception('Restore failed: $e');
     }
@@ -459,13 +475,37 @@ class VaultImporter {
           ?.map((e) => e as String)
           .toList() ?? [];
 
+      for (final id in expectedBlobIds) {
+        if (!isValidBlobId(id)) {
+          await raf.close();
+          try { await stagingDir?.delete(recursive: true); } catch (_) {}
+          stagingDir = null;
+          throw FormatException('Invalid or unsafe blob ID in backup metadata: $id');
+        }
+      }
+
       // Read all blob entries from the stream
       final stagedBlobIds = <String>[];
       for (int i = 0; i < expectedBlobIds.length; i++) {
         final entry = await reader.readBlobEntry();
+        if (!isValidBlobId(entry.id)) {
+          await raf.close();
+          try { await stagingDir?.delete(recursive: true); } catch (_) {}
+          stagingDir = null;
+          throw FormatException('Invalid or unsafe blob ID in backup entry: ${entry.id}');
+        }
         stagedBlobIds.add(entry.id);
 
-        final destFile = File(p.join(stagingDir.path, entry.id));
+        final staging = stagingDir;
+        if (staging == null) throw StateError('Staging directory missing');
+        final destPath = p.normalize(p.join(staging.path, entry.id));
+        if (!p.isWithin(staging.path, destPath)) {
+          await raf.close();
+          try { await staging.delete(recursive: true); } catch (_) {}
+          stagingDir = null;
+          throw FormatException('Path traversal attempt detected in staging: ${entry.id}');
+        }
+        final destFile = File(destPath);
         final destSink = destFile.openWrite();
         await reader.copyBlobData(entry.length, destSink);
         await destSink.flush();
@@ -478,7 +518,7 @@ class VaultImporter {
 
       if (!isValid) {
         // Delete staging and throw
-        try { await stagingDir.delete(recursive: true); } catch (_) {}
+        try { await stagingDir?.delete(recursive: true); } catch (_) {}
         stagingDir = null;
         throw Exception('Backup is corrupted or incomplete.');
       }
@@ -516,14 +556,18 @@ class VaultImporter {
         oldFileIds.addAll(_extractIds(oldDocsMeta));
       }
 
+      final vaultFilesPath = p.normalize(p.join(appDir.path, 'vault_files'));
       for (final id in oldFileIds) {
-        final f = File('${appDir.path}/vault_files/$id');
+        if (!isValidBlobId(id)) continue;
+        final targetPath = p.normalize(p.join(vaultFilesPath, id));
+        if (!p.isWithin(vaultFilesPath, targetPath)) continue;
+        final f = File(targetPath);
         if (await f.exists()) {
           await f.delete();
         }
       }
 
-      // Overwrite secure storage keys
+      // Overwrite secure storage keys (SEC-02: exclude PIN hashes and local wraps)
       final secureKeys = [
         'vault_photos_meta',
         'vault_videos_meta',
@@ -531,9 +575,6 @@ class VaultImporter {
         'vault_notes',
         'recovery_blob',
         'recovery_salt',
-        'vault_salt',
-        'vault_pin_hash',
-        'master_key_wrapped',
       ];
       for (final key in secureKeys) {
         final val = payload[key] as String?;
@@ -541,7 +582,7 @@ class VaultImporter {
           await storage.write(key: key, value: val);
           if (key == 'vault_documents_meta' && !kIsWeb) {
             final prefs = await SharedPreferences.getInstance();
-            await prefs.setString(key, val);
+            await prefs.remove(key);
           }
         } else {
           await storage.delete(key: key);
@@ -551,6 +592,10 @@ class VaultImporter {
           }
         }
       }
+      // Ensure stale local PIN credentials cannot linger after restore
+      await storage.delete(key: 'vault_salt');
+      await storage.delete(key: 'vault_pin_hash');
+      await storage.delete(key: 'master_key_wrapped');
 
       // Overwrite SQLite databases
       if (!kIsWeb) {
@@ -579,9 +624,19 @@ class VaultImporter {
         await vaultDir.create(recursive: true);
       }
 
+      final staging = stagingDir;
+      if (staging == null) throw StateError('Staging directory missing');
       for (final id in stagedBlobIds) {
-        final src = File(p.join(stagingDir!.path, id));
-        final dest = File(p.join(vaultDir.path, id));
+        if (!isValidBlobId(id)) {
+          throw FormatException('Invalid or unsafe blob ID encountered during restore: $id');
+        }
+        final srcPath = p.normalize(p.join(staging.path, id));
+        final destPath = p.normalize(p.join(vaultDir.path, id));
+        if (!p.isWithin(staging.path, srcPath) || !p.isWithin(vaultDir.path, destPath)) {
+          throw FormatException('Path traversal attempt detected during restore: $id');
+        }
+        final src = File(srcPath);
+        final dest = File(destPath);
         if (await src.exists()) {
           // Use copy + delete instead of rename (cross-device safe)
           await src.copy(dest.path);
@@ -590,7 +645,7 @@ class VaultImporter {
       }
 
       // Clean up staging
-      try { await stagingDir!.delete(recursive: true); } catch (_) {}
+      try { await staging.delete(recursive: true); } catch (_) {}
       stagingDir = null;
 
       // Load derived key into VaultCrypto singleton
@@ -627,18 +682,21 @@ class VaultImporter {
       }
 
       return cryptoSuccess;
-    } catch (e, st) {
+    } catch (e) {
       // Clean up staging on any failure
       if (stagingDir != null) {
         try { await stagingDir.delete(recursive: true); } catch (_) {}
       }
       if (!phraseVerified) return false;
       debugPrint('RESTORE FAIL: $e');
+      if (e is FormatException) {
+        rethrow;
+      }
       if (e is Exception && e.toString().contains('Restore incomplete')) {
-        throw e;
+        rethrow;
       }
       if (e is Exception && e.toString().contains('corrupted or incomplete')) {
-        throw e;
+        rethrow;
       }
       throw Exception('Restore failed: $e');
     }

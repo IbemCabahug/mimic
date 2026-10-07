@@ -115,16 +115,17 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
       return;
     }
 
-    _connectToHost(connectionData['ip'] as String, connectionData['port'] as int);
+    _connectToHost(connectionData['ip'] as String, connectionData['port'] as int, code);
   }
 
-  Future<void> _connectToHost(String ip, int port) async {
+  Future<void> _connectToHost(String ip, int port, [String? roomCode]) async {
     setState(() {
       _status = ConnectionStatus.connecting;
       _errorMessage = null;
     });
 
     final netService = ref.read(networkServiceProvider);
+    netService.handshakeToken = roomCode;
 
     try {
       await netService.joinAsGuest(ip, port);
@@ -239,7 +240,7 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
         _codeController.text = roomCode;
       });
 
-      _connectToHost(ip, port);
+      _connectToHost(ip, port, roomCode);
     } else {
       setState(() {
         _status = ConnectionStatus.failed;

@@ -106,6 +106,14 @@ class ChatService extends ChangeNotifier {
   final List<ChatMessage> _messages = [];
   int _messageCounter = 0;
 
+  /// Maximum allowed length for a single chat message (SEC-11).
+  static const int maxMessageLength = 500;
+
+  /// Rate limiting parameters: at most 5 messages per 2-second window (SEC-11).
+  static const int maxMessagesPerWindow = 5;
+  static const Duration rateLimitWindow = Duration(seconds: 2);
+  final List<DateTime> _sentTimestamps = [];
+
   // ─────────────────────────────────────────────────────────────────────
   // Getters
   // ─────────────────────────────────────────────────────────────────────
@@ -195,6 +203,19 @@ class ChatService extends ChangeNotifier {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return false;
 
+    if (trimmed.length > maxMessageLength) {
+      _log('Cannot send — message exceeds max length of $maxMessageLength chars');
+      return false;
+    }
+
+    final now = DateTime.now();
+    _sentTimestamps.removeWhere((t) => now.difference(t) > rateLimitWindow);
+    if (_sentTimestamps.length >= maxMessagesPerWindow) {
+      _log('Cannot send — chat rate limit exceeded ($maxMessagesPerWindow per 2s)');
+      return false;
+    }
+    _sentTimestamps.add(now);
+
     // Build the network message
     final networkMsg = GameSync.buildChatMessage(
       senderId: _localPlayerId,
@@ -217,7 +238,7 @@ class ChatService extends ChangeNotifier {
     );
     _messages.add(localMessage);
 
-    _log('Sent: "$trimmed"');
+    _log('Sent chat message (${trimmed.length} chars)');
     notifyListeners();
     return true;
   }
@@ -234,6 +255,12 @@ class ChatService extends ChangeNotifier {
     final parsed = GameSync.parseChatMessage(message);
     if (parsed == null) return;
 
+    // Drop oversized incoming chat messages (SEC-11)
+    if (parsed.text.length > maxMessageLength) {
+      _log('Dropped incoming chat message exceeding max length (${parsed.text.length} chars)');
+      return;
+    }
+
     // Don't duplicate our own messages (we already added them optimistically)
     if (parsed.senderId == _localPlayerId) return;
 
@@ -248,7 +275,7 @@ class ChatService extends ChangeNotifier {
     );
 
     _messages.add(chatMessage);
-    _log('Received from ${parsed.senderName}: "${parsed.text}"');
+    _log('Received chat message from ${parsed.senderName} (${parsed.text.length} chars)');
     notifyListeners();
   }
 
@@ -260,6 +287,7 @@ class ChatService extends ChangeNotifier {
   void clearMessages() {
     _messages.clear();
     _messageCounter = 0;
+    _sentTimestamps.clear();
     _log('Messages cleared');
     notifyListeners();
   }
