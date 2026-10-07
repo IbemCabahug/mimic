@@ -85,12 +85,16 @@ class BiometricUnlockStore {
   }
 
   Future<void> clearBioSecret() async {
-    await _storage.delete(key: BiometricLayer.vault.secretKey);
-    await _storage.write(key: BiometricLayer.vault.enabledKey, value: 'false');
+    try {
+      await _storage.delete(key: BiometricLayer.vault.secretKey);
+      await _storage.write(key: BiometricLayer.vault.enabledKey, value: 'false');
+    } catch (_) {}
     try {
       await _keystore.deleteBioKey();
     } on BiometricKeyInvalidatedException {
       // Key already invalidated is treated as successfully cleared.
+    } catch (_) {
+      // Best-effort cleanup for keystore key
     }
   }
 

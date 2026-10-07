@@ -40,6 +40,7 @@ class BreakInLog {
   }
 }
 
+@Deprecated('Use IntruderService instead. BreakInLogService is legacy dead code.')
 class BreakInLogService {
   static Database? _db;
 
@@ -62,7 +63,7 @@ class BreakInLogService {
   }
 
   /// Records a wrong PIN attempt. If attemptCount >= 3, captures a front-camera selfie silently,
-  /// encrypts it using VaultCrypto.encryptBytes, and saves it.
+  /// encrypts it using VaultCrypto.encryptBreakInEvidenceBytes, and saves it.
   static Future<void> recordAttempt(int attemptCount, VaultCrypto crypto) async {
     final db = await _ensureDb();
     final id = const Uuid().v4();
@@ -89,8 +90,13 @@ class BreakInLogService {
           final bytes = await image.readAsBytes();
           await controller.dispose();
 
-          // Encrypt photo bytes
-          final encryptedBytes = await crypto.encryptBytes(bytes);
+          // Encrypt photo bytes (favor asymmetric/evidence key if locked)
+          Uint8List encryptedBytes;
+          try {
+            encryptedBytes = await crypto.encryptBreakInEvidenceBytes(bytes);
+          } catch (_) {
+            encryptedBytes = await crypto.encryptBytes(bytes);
+          }
 
           // Save encrypted photo to private docs folder
           final appDir = await getApplicationDocumentsDirectory();

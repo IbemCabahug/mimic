@@ -4,6 +4,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../crypto/vault_crypto.dart';
 import '../widgets/vault_scaffold.dart';
+import '../security/duress_service.dart';
+import '../../core/providers/biometric_providers.dart';
 import '../../core/theme/app_theme.dart';
 
 class ResetPinScreen extends ConsumerStatefulWidget {
@@ -61,13 +63,18 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
     });
   }
 
-  void _handlePinSubmission() {
+  Future<void> _handlePinSubmission() async {
     if (_isLoading) return;
     if (_currentInput.length < 4) {
       setState(() => _error = 'PIN must be at least 4 digits');
       return;
     }
     if (!_isConfirmStep) {
+      final isDuressPin = await ref.read(duressServiceProvider).isFakePin(_currentInput);
+      if (isDuressPin) {
+        setState(() => _error = 'Vault PIN cannot be the same as Duress PIN');
+        return;
+      }
       // Transition to confirmation step
       setState(() {
         _firstPin = _currentInput;
@@ -101,6 +108,19 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
     });
 
     try {
+      final isDuressPin = await ref.read(duressServiceProvider).isFakePin(pin);
+      if (isDuressPin) {
+        if (mounted) {
+          setState(() {
+            _error = 'Vault PIN cannot be the same as Duress PIN';
+            _currentInput = '';
+            _firstPin = '';
+            _isConfirmStep = false;
+          });
+        }
+        return;
+      }
+
       final crypto = ref.read(vaultCryptoProvider);
       
       // Update PIN
@@ -108,6 +128,11 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
       
       // Store recovery blob with the new PIN
       await crypto.storeRecoveryBlob();
+
+      // AUDIT-04: Invalidate biometric secret on PIN reset
+      try {
+        await ref.read(biometricUnlockStoreProvider).clearBioSecret();
+      } catch (_) {}
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

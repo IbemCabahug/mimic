@@ -81,11 +81,33 @@ class FakeNetworkService extends NetworkService {
     sentToMessages.add({'playerId': playerId, 'message': message});
   }
 
+  final Map<String, String> _rejoinTokens = {};
+
+  @override
+  bool hasRejoinToken(String playerId) => _rejoinTokens.containsKey(playerId);
+
+  @override
+  bool verifyRejoinToken(String playerId, String? token) =>
+      token != null && _rejoinTokens[playerId] == token;
+
+  @override
+  void remapRejoinToken(String oldPlayerId, String newPlayerId) {
+    final token = _rejoinTokens.remove(oldPlayerId);
+    if (token != null) {
+      _rejoinTokens[newPlayerId] = token;
+    }
+  }
+
+  void registerRejoinToken(String playerId, String token) {
+    _rejoinTokens[playerId] = token;
+  }
+
   @override
   void disconnect() {
     _isConnected = false;
     _role = NetworkRole.none;
     _connectedPlayerIds.clear();
+    _rejoinTokens.clear();
     notifyListeners();
   }
 }
@@ -210,12 +232,15 @@ void main() {
       // Force instantiation of sync notifier
       container.read(gameStateSyncProvider.notifier);
 
+      fakeNetworkService.registerRejoinToken('villager_1', 'sec_rejoin_token_123');
+
       // Simulate a dropped villager reconnecting with new connection ID 'villager_1_reconnected'
       fakeNetworkService.simulateMessageReceived({
         'type': 'requestRejoin',
         'senderId': 'villager_1_reconnected',
         'playerId': 'villager_1',
         'name': 'Alice',
+        'rejoinToken': 'sec_rejoin_token_123',
       });
       await Future<void>.delayed(Duration.zero);
 

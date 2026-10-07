@@ -24,6 +24,9 @@ import 'billing_service.dart' show kProProductId;
 abstract interface class PurchaseVerifier {
   /// Returns `true` if [purchase] is cryptographically authentic and valid.
   bool verify(PurchaseDetails purchase);
+
+  /// Whether the verifier has a valid key or environment configuration to perform checks (VULN-02).
+  bool get isKeyConfigured;
 }
 
 /// Permissive verifier used exclusively in unit tests or local development fixtures.
@@ -31,6 +34,9 @@ class DevelopmentPurchaseVerifier implements PurchaseVerifier {
   const DevelopmentPurchaseVerifier({this.allowAll = true});
 
   final bool allowAll;
+
+  @override
+  bool get isKeyConfigured => true;
 
   @override
   bool verify(PurchaseDetails purchase) {
@@ -70,6 +76,9 @@ class GooglePlaySignatureVerifier implements PurchaseVerifier {
   RSAPublicKey? _cachedKey;
 
   @override
+  bool get isKeyConfigured => _cachedKey != null || allowUnverifiedWhenNoKey;
+
+  @override
   bool verify(PurchaseDetails purchase) {
     final verificationData = purchase.verificationData;
 
@@ -90,6 +99,12 @@ class GooglePlaySignatureVerifier implements PurchaseVerifier {
       if (expectedPackageName != null) {
         final pkg = decoded['packageName'] as String?;
         if (pkg != expectedPackageName) return false;
+      }
+
+      // VULN-SEC-03: Validate purchaseState (0 = Purchased, 1 = Canceled, 2 = Pending)
+      final purchaseState = decoded['purchaseState'] as int?;
+      if (purchaseState != null && purchaseState != 0) {
+        return false;
       }
     } catch (_) {
       // Malformed JSON is rejected

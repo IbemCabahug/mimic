@@ -169,13 +169,22 @@ class _NetworkVotingScreenState extends ConsumerState<NetworkVotingScreen>
     final type = message['type'] as String?;
     switch (type) {
       case 'voteResults':
-        _onVoteResults(message);
+        // VULN-SEC-02: Only guests handle voteResults broadcasted from the host
+        if (!_isHost) {
+          _onVoteResults(message);
+        }
         break;
       case 'gameOver':
-        _onGameOver(message);
+        // VULN-SEC-02: Only guests handle gameOver broadcasted from the host
+        if (!_isHost) {
+          _onGameOver(message);
+        }
         break;
       case 'nextRound':
-        _onNextRound();
+        // VULN-SEC-02: Only guests handle nextRound broadcasted from the host
+        if (!_isHost) {
+          _onNextRound();
+        }
         break;
       case 'castVote':
         // Host-only: collect incoming votes from guests
@@ -243,6 +252,15 @@ class _NetworkVotingScreenState extends ConsumerState<NetworkVotingScreen>
         message['senderId'] as String? ?? message['voterId'] as String? ?? '';
     final targetId = message['targetId'] as String? ?? '';
     if (voterId.isEmpty || targetId.isEmpty) return;
+
+    // VULN-SEC-02: Verify that the voter is an active, alive player
+    final voter = _players.cast<Player?>().firstWhere(
+          (p) => p?.id == voterId,
+          orElse: () => null,
+        );
+    if (voter == null || voter.isEliminated) {
+      return;
+    }
 
     _hostVoteCollector[voterId] = targetId;
 

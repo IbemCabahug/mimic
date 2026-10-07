@@ -82,9 +82,14 @@ const String proEntitlementValue = 'pro';
 class ProStatusService {
   ProStatusService(
     this._platform, {
-    this.billingEnforced = kBillingEnforced,
+    bool? billingEnforced,
     AppDistributionFlavor? flavor,
-  }) : distributionFlavor = flavor ?? kCurrentDistributionFlavor;
+  })  : distributionFlavor = flavor ?? kCurrentDistributionFlavor,
+        billingEnforced = billingEnforced ??
+            ((flavor ?? kCurrentDistributionFlavor) ==
+                    AppDistributionFlavor.playStore
+                ? true
+                : kBillingEnforced);
 
   final PlatformService _platform;
 

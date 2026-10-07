@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- By default, disallow cleartext HTTP traffic globally for all public internet endpoints -->
-    <base-config cleartextTrafficPermitted="false">
+    <!--
+      Mimic is a zero-knowledge, offline-first application with peer-to-peer LAN multiplayer.
+      Local multiplayer operates over local Wi-Fi / hotspot websockets (ws://<LAN-IP>:4567)
+      and internal loopback media streaming (http://127.0.0.1:<PORT>).
+      Because Android Network Security Config does not support IP addresses or subnet masks
+      in <domain> tags, base cleartext traffic is permitted so P2P LAN sockets across standard
+      Wi-Fi subnets (192.168.x.x, 10.x.x.x, 172.16.x.x) are not blocked by the platform.
+      TLS endpoints still require trusted system certificates.
+    -->
+    <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />
         </trust-anchors>
     </base-config>
-
-    <!-- Permit cleartext traffic only for local loopback and local development / hotspot endpoints -->
-    <domain-config cleartextTrafficPermitted="true">
-        <domain includeSubdomains="true">localhost</domain>
-        <domain includeSubdomains="true">127.0.0.1</domain>
-        <domain includeSubdomains="true">10.0.2.2</domain>
-        <domain includeSubdomains="true">192.168.43.1</domain>
-    </domain-config>
 </network-security-config>

@@ -310,6 +310,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
 
     final navigator = Navigator.of(context);
     setState(() => _isLoading = true);
+    int prospectiveAttempts = 0;
     try {
       final duressService = ref.read(duressServiceProvider);
       final isFakePin = await duressService.isFakePin(pin);
@@ -325,6 +326,16 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           navigator.pushReplacementNamed('/admin-panel');
         }
         return;
+      }
+
+      if (!kIsWeb) {
+        final stored = await ref
+            .read(platformServiceProvider)
+            .secureRead('wrong_attempts');
+        prospectiveAttempts = (int.tryParse(stored ?? '') ?? 0) + 1;
+        await ref
+            .read(platformServiceProvider)
+            .secureWrite('wrong_attempts', prospectiveAttempts.toString());
       }
 
       await _crypto.initialize(pin);
@@ -381,6 +392,14 @@ class _PinScreenState extends ConsumerState<PinScreen> {
         }
       }
     } on KeystoreInvalidException catch (e) {
+      if (!kIsWeb && prospectiveAttempts > 0) {
+        try {
+          await ref.read(platformServiceProvider).secureWrite(
+                'wrong_attempts',
+                (prospectiveAttempts - 1).toString(),
+              );
+        } catch (_) {}
+      }
       if (mounted) {
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -395,16 +414,12 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     } on InvalidPinException catch (_) {
       if (!kIsWeb) {
         try {
-          final stored = await ref
-              .read(platformServiceProvider)
-              .secureRead('wrong_attempts');
-          final currentCount = (int.tryParse(stored ?? '') ?? 0) + 1;
+          final currentCount = prospectiveAttempts > 0
+              ? prospectiveAttempts
+              : ((int.tryParse(await ref.read(platformServiceProvider).secureRead('wrong_attempts') ?? '') ?? 0));
           if (currentCount % 3 == 0) {
             _intruderService.captureIntruder(_crypto);
           }
-          await ref
-              .read(platformServiceProvider)
-              .secureWrite('wrong_attempts', currentCount.toString());
           await ref.read(lockoutServiceProvider).setLockout(currentCount);
           if (mounted) setState(() => _wrongAttempts = currentCount);
 
@@ -422,21 +437,31 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           }
         } catch (ex) {
           debugPrint('Failed to save wrong attempts log: $ex');
-          if (mounted)
+          if (mounted) {
             setState(() {
               _wrongAttempts++;
               _error = 'Invalid PIN';
             });
+          }
         }
       } else {
-        if (mounted)
+        if (mounted) {
           setState(() {
             _wrongAttempts++;
             _error = 'Invalid PIN';
           });
+        }
       }
     } catch (e) {
       // Operational failure (e.g. storage error, keystore wrap error, serialization wait): do not increment wrong_attempts!
+      if (!kIsWeb && prospectiveAttempts > 0) {
+        try {
+          await ref.read(platformServiceProvider).secureWrite(
+                'wrong_attempts',
+                (prospectiveAttempts - 1).toString(),
+              );
+        } catch (_) {}
+      }
       debugPrint('Operational failure during unlock: $e');
       if (mounted) {
         setState(() {

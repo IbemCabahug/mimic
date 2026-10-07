@@ -32,6 +32,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 
@@ -46,6 +47,10 @@ const String kProProductId = 'mimic_pro_lifetime';
 /// via `--dart-define=GOOGLE_PLAY_PUBLIC_KEY=...`.
 const String kGooglePlayPublicKey =
     String.fromEnvironment('GOOGLE_PLAY_PUBLIC_KEY', defaultValue: '');
+
+/// Optional expected package name passed at build-time via `--dart-define=GOOGLE_PLAY_PACKAGE_NAME=...`.
+const String kGooglePlayPackageName =
+    String.fromEnvironment('GOOGLE_PLAY_PACKAGE_NAME', defaultValue: '');
 
 /// The narrow slice of the in_app_purchase plugin this service needs,
 /// abstracted so tests can drive the purchase stream, fake products and
@@ -91,13 +96,17 @@ class BillingService {
     required ProStatusService proStatus,
     BillingStore? store,
     PurchaseVerifier? verifier,
+    bool? allowUnverifiedWhenNoKey,
+    String? expectedPackageName,
   })  : _pro = proStatus,
         _store = store ?? PlayBillingStore(),
         _verifier = verifier ??
             GooglePlaySignatureVerifier(
               base64PublicKey: kGooglePlayPublicKey,
               expectedProductId: kProProductId,
-              allowUnverifiedWhenNoKey: true,
+              expectedPackageName: expectedPackageName ??
+                  (kGooglePlayPackageName.isNotEmpty ? kGooglePlayPackageName : null),
+              allowUnverifiedWhenNoKey: allowUnverifiedWhenNoKey ?? kDebugMode,
             );
 
   final ProStatusService _pro;
@@ -217,6 +226,14 @@ class BillingService {
     switch (purchase.status) {
       case PurchaseStatus.purchased:
       case PurchaseStatus.restored:
+        if (!_verifier.isKeyConfigured) {
+          // VULN-02: If the release build lacks Google Play public key configuration,
+          // do NOT complete the purchase! Completing it would consume/acknowledge the
+          // customer's payment permanently without granting Pro. Leaving it pending
+          // allows Google Play to re-deliver the purchase once configuration is restored.
+          lastError = 'Missing public key configuration - purchase kept pending for retry';
+          return;
+        }
         if (!_verify(purchase)) {
           lastError = 'purchase verification failed';
           await _completeIfPending(purchase);

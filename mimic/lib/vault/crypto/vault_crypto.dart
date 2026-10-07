@@ -12,6 +12,8 @@ import 'vault_kdf.dart';
 import 'hardened_verifier.dart'; // kHardenedVerifierIterations, formatHardenedVerifier (C1 v4 write side)
 
 import '../../core/services/platform_service.dart';
+import '../../core/services/biometric_unlock_store.dart';
+import '../../core/providers/biometric_providers.dart';
 import 'recovery_phrase.dart';
 import 'keystore_service.dart';
 import 'media_format.dart';
@@ -63,6 +65,7 @@ class VaultCrypto extends ChangeNotifier {
 
   final PlatformService _platformService;
   final KeystoreService _keystoreService;
+  final BiometricUnlockStore? _biometricUnlockStore;
   Uint8List? _derivedKey;
   Uint8List? _temporaryKek;
   List<String>? _recoveryWords;
@@ -95,8 +98,12 @@ class VaultCrypto extends ChangeNotifier {
     });
   }
 
-  VaultCrypto(this._platformService, [KeystoreService? keystoreService]) 
-      : _keystoreService = keystoreService ?? AndroidKeystoreService() {
+  VaultCrypto(
+    this._platformService, [
+    KeystoreService? keystoreService,
+    BiometricUnlockStore? biometricUnlockStore,
+  ])  : _keystoreService = keystoreService ?? AndroidKeystoreService(),
+        _biometricUnlockStore = biometricUnlockStore {
     _instance = this;
   }
 
@@ -565,6 +572,11 @@ class VaultCrypto extends ChangeNotifier {
       await _platformService.secureWrite('vault_setup_completed', 'true');
       await _platformService.secureDelete('vault_wiped');
     }
+
+    // AUDIT-04: Invalidate biometric secret on PIN change to prevent stale key lockout & auto-wipe traps
+    try {
+      await _biometricUnlockStore?.clearBioSecret();
+    } catch (_) {}
     if (_lockEpoch == capturedEpoch) {
       _derivedKey = dek;
       _needsHardwareMigration = false;
@@ -1830,5 +1842,9 @@ enum BlobIntegrityStatus {
 }
 
 final vaultCryptoProvider = ChangeNotifierProvider<VaultCrypto>((ref) {
-  return VaultCrypto(ref.read(platformServiceProvider));
+  return VaultCrypto(
+    ref.read(platformServiceProvider),
+    null,
+    ref.read(biometricUnlockStoreProvider),
+  );
 });

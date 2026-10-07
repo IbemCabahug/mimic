@@ -23,12 +23,14 @@ class RejoinScreen extends ConsumerStatefulWidget {
   final String lastRoomCode;
   final String lastPlayerName;
   final String lastPlayerId;
+  final String? lastRejoinToken;
 
   const RejoinScreen({
     super.key,
     required this.lastRoomCode,
     required this.lastPlayerName,
     required this.lastPlayerId,
+    this.lastRejoinToken,
   });
 
   @override
@@ -115,6 +117,9 @@ class _RejoinScreenState extends ConsumerState<RejoinScreen>
     netService.handshakeToken = widget.lastRoomCode;
 
     try {
+      final prefs = await SharedPreferences.getInstance();
+      final tokenToUse = widget.lastRejoinToken ?? prefs.getString('last_rejoin_token');
+
       // 1. Join network server as guest
       await netService.joinAsGuest(ip, port);
 
@@ -131,6 +136,12 @@ class _RejoinScreenState extends ConsumerState<RejoinScreen>
         final type = message['type'] as String?;
         if (type == 'rejoinAccepted') {
           _handleRejoinAccepted(message);
+        } else if (type == 'rejoinRejected') {
+          _timeoutTimer?.cancel();
+          setState(() {
+            _status = RejoinStatus.failed;
+            _failReason = message['reason'] as String? ?? 'Rejoin rejected: unauthorized';
+          });
         } else if (type == 'disconnected') {
           setState(() {
             _status = RejoinStatus.hostGone;
@@ -138,11 +149,12 @@ class _RejoinScreenState extends ConsumerState<RejoinScreen>
         }
       });
 
-      // 3. Send rejoin request message
+      // 3. Send rejoin request message with rejoinToken (AUDIT-02)
       netService.send({
         'type': 'requestRejoin',
         'playerId': widget.lastPlayerId,
         'name': widget.lastPlayerName,
+        if (tokenToUse != null) 'rejoinToken': tokenToUse,
       });
 
       // 4. Start response timeout timer (3 seconds)
@@ -193,6 +205,10 @@ class _RejoinScreenState extends ConsumerState<RejoinScreen>
       await prefs.setString('last_player_id', newPlayerId);
       await prefs.setString('last_player_name', widget.lastPlayerName);
     }
+    final activeToken = ref.read(networkServiceProvider).rejoinToken;
+    if (activeToken != null) {
+      await prefs.setString('last_rejoin_token', activeToken);
+    }
 
     if (!mounted) return;
 
@@ -231,14 +247,16 @@ class _RejoinScreenState extends ConsumerState<RejoinScreen>
   // ─── Room Code Decode ──────────────────────────────────────────────
 
   Map<String, dynamic>? _decodeRoomCode(String code) {
-    final cleanCode = code.trim().toUpperCase();
-    if (cleanCode.length != 6) return null;
+    // Preserve case (AUDIT-03: Base62 is case-sensitive) and strip any hyphens or spaces
+    final cleanCode = code.replaceAll('-', '').trim();
+    if (cleanCode.length < 6) return null;
 
+    final ipPart = cleanCode.substring(0, 6);
     const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
     int val = 0;
 
-    for (int i = 0; i < cleanCode.length; i++) {
-      final char = cleanCode[i];
+    for (int i = 0; i < ipPart.length; i++) {
+      final char = ipPart[i];
       final index = chars.indexOf(char);
       if (index == -1) return null; // Invalid character
       val = val * 62 + index;

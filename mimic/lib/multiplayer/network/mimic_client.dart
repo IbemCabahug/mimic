@@ -49,6 +49,7 @@ class MimicClient {
   WebSocket? _socket;
   bool _connected = false;
   String? _assignedPlayerId;
+  String? _rejoinToken;
 
   /// The last IP address used for connection (needed for reconnect).
   String? _lastIp;
@@ -74,6 +75,9 @@ class MimicClient {
   /// The player ID assigned by the server via the `"welcome"` message,
   /// or `null` if not yet received.
   String? get assignedPlayerId => _assignedPlayerId;
+
+  /// The ephemeral rejoin token assigned by the server (AUDIT-02).
+  String? get rejoinToken => _rejoinToken;
 
   /// Stream of parsed JSON messages received from the server.
   Stream<Map<String, dynamic>> get messageStream => _messageController.stream;
@@ -132,6 +136,7 @@ class MimicClient {
       _socket?.close(WebSocketStatus.normalClosure, 'Client disconnecting');
       _socket = null;
       _assignedPlayerId = null;
+      _rejoinToken = null;
       _log('Disconnected.');
     } catch (e) {
       _log('Error during disconnect: $e');
@@ -212,10 +217,15 @@ class MimicClient {
       final Map<String, dynamic> message =
           jsonDecode(rawData) as Map<String, dynamic>;
 
-      // Capture the player ID assigned by the server.
-      if (message['type'] == 'welcome' && message.containsKey('playerId')) {
-        _assignedPlayerId = message['playerId'] as String;
-        _log('Assigned playerId: $_assignedPlayerId');
+      // Capture the player ID and rejoin token assigned by the server (AUDIT-02).
+      if (message['type'] == 'welcome') {
+        if (message.containsKey('playerId')) {
+          _assignedPlayerId = message['playerId'] as String?;
+          _log('Assigned playerId: $_assignedPlayerId');
+        }
+        if (message.containsKey('rejoinToken')) {
+          _rejoinToken = message['rejoinToken'] as String?;
+        }
       }
 
       _messageController.add(message);

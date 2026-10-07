@@ -101,11 +101,13 @@ class GameSync {
   static Map<String, dynamic> serializeSanitizedState(
     GameState state, {
     required String forPlayerId,
+    bool isPro = false,
   }) {
     final isMimic = state.mimicIds.contains(forPlayerId);
     final playerWord = state.getWordForPlayer(forPlayerId);
-    final context = state.getContextForPlayer(forPlayerId);
-    final proContext = state.getContextForPlayer(forPlayerId, isPro: true);
+    final context = state.getContextForPlayer(forPlayerId, isPro: false);
+    final proContext =
+        isPro ? state.getContextForPlayer(forPlayerId, isPro: true) : '';
 
     final serialized = serializeState(state);
 
