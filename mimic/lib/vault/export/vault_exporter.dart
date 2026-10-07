@@ -4,15 +4,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:sqflite/sqflite.dart';
-import '../services/file_vault_service.dart';
-import '../services/video_vault_service.dart';
-import '../services/document_vault_service.dart';
 import '../services/vault_backup_status.dart';
 import '../util/storage_space.dart';
 import 'mimic_v2_format.dart';
@@ -46,12 +43,10 @@ class VaultExporter {
     'recovery_blob',
     // Recovery phrase salt (base64-encoded salt used during recovery)
     'recovery_salt',
-    // Vault salt (base64-encoded PBKDF2 salt for key derivation)
-    'vault_salt',
-    // PIN hash (used to verify the PIN on unlock)
-    'vault_pin_hash',
-    // Wrapped data key (base64 AES-encrypted master key; useless without the PIN)
-    'master_key_wrapped',
+    // SEC-02: vault_salt, vault_pin_hash, and master_key_wrapped are intentionally
+    // EXCLUDED. Backups must only be restorable via the 12-word recovery phrase
+    // (recovery_blob + recovery_salt). Exporting numeric PIN hashes/salts exposes
+    // the user's PIN to offline brute-force / dictionary attacks.
   ];
 
   // ───────────────────────────────────────────────────────────────────
@@ -162,10 +157,13 @@ class VaultExporter {
       outputFile = File('${downloadsDir.path}/$fileName');
     }
 
-    // ── Pre-check free space ─────────────────────────────────────────
+    final vaultFilesDir = p.normalize(p.join(appDir.path, 'vault_files'));
     int estimatedBytes = 0;
     for (final id in allMediaIds) {
-      final blobFile = File('${appDir.path}/vault_files/$id');
+      if (!isValidBlobId(id)) continue;
+      final blobPath = p.normalize(p.join(vaultFilesDir, id));
+      if (!p.isWithin(vaultFilesDir, blobPath)) continue;
+      final blobFile = File(blobPath);
       if (await blobFile.exists()) {
         estimatedBytes += await blobFile.length();
       }
@@ -188,7 +186,10 @@ class VaultExporter {
       writer.writeHeader(nowMs, metadataBytes);
 
       for (final id in allMediaIds) {
-        final blobFile = File('${appDir.path}/vault_files/$id');
+        if (!isValidBlobId(id)) continue;
+        final blobPath = p.normalize(p.join(vaultFilesDir, id));
+        if (!p.isWithin(vaultFilesDir, blobPath)) continue;
+        final blobFile = File(blobPath);
         if (await blobFile.exists()) {
           final blobLength = await blobFile.length();
           await writer.writeBlob(id, blobLength, blobFile.openRead());

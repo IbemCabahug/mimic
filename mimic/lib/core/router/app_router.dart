@@ -40,6 +40,7 @@ import 'package:mimic/vault/screens/video_vault_screen.dart';
 import 'package:mimic/vault/screens/vault_diagnostics_screen.dart';
 import 'package:mimic/vault/screens/vault_manual_screen.dart';
 import '../../vault/security/secure_screen.dart';
+import 'package:mimic/vault/crypto/vault_crypto.dart';
 
 // Multiplayer screens
 import 'package:mimic/multiplayer/screens/multiplayer_menu_screen.dart';
@@ -214,137 +215,121 @@ class AppRouter {
       // ─── Vault Screens ─────────────────────────────────────────────────────
       case vaultPinRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: PinScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: false,
+            child: SecureGuard(child: PinScreen()),
           ),
           settings: settings,
         );
       case vaultHomeRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: VaultHomeScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: VaultHomeScreen()),
           ),
           settings: settings,
         );
       case vaultPhotosRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: PhotoVaultScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: PhotoVaultScreen()),
           ),
           settings: settings,
         );
       case vaultNotesRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: NotesScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: NotesScreen()),
           ),
           settings: settings,
         );
-
       case vaultDocumentsRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: DocumentVaultScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: DocumentVaultScreen()),
           ),
           settings: settings,
         );
       case vaultSettingsRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: VaultSettingsScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: VaultSettingsScreen()),
           ),
           settings: settings,
         );
       case vaultBreakinLogsRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: BreakInLogScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: BreakInLogScreen()),
           ),
           settings: settings,
         );
       case vaultRecoveryPhraseRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: RecoveryPhraseScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: RecoveryPhraseScreen()),
           ),
           settings: settings,
         );
       case vaultEnterRecoveryRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: EnterRecoveryScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: false,
+            child: SecureGuard(child: EnterRecoveryScreen()),
           ),
           settings: settings,
         );
       case vaultResetPinRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: ResetPinScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: false,
+            child: SecureGuard(child: ResetPinScreen()),
           ),
           settings: settings,
         );
       case vaultSetDuressPinRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: SetDuressPinScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: SetDuressPinScreen()),
           ),
           settings: settings,
         );
       case vaultExportRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: ExportVaultScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: ExportVaultScreen()),
           ),
           settings: settings,
         );
       case vaultImportRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: ImportVaultScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: ImportVaultScreen()),
           ),
           settings: settings,
         );
       case vaultVideosRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: VideoVaultScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: VideoVaultScreen()),
           ),
           settings: settings,
         );
       case vaultDiagnosticsRoute:
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: VaultDiagnosticsScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: VaultDiagnosticsScreen()),
           ),
           settings: settings,
         );
@@ -352,10 +337,9 @@ class AppRouter {
         // F30: the field manual is an owner-only document, so it carries the
         // same guard as every other vault screen — no route, no manual.
         return MaterialPageRoute(
-          builder: (_) => RouteGuard(
-            guard: (net) => !kIsWeb && !isMultiplayerSessionActive(net),
-            redirectRoute: homeRoute,
-            child: const SecureGuard(child: VaultManualScreen()),
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: VaultManualScreen()),
           ),
           settings: settings,
         );
@@ -436,6 +420,55 @@ class AppRouter {
         // Let the default router or next handler catch undefined routes.
         return null;
     }
+  }
+}
+
+/// A reactive route wrapper for vault screens.
+/// Enforces:
+/// 1. Vault is disabled on Web and during active multiplayer games (redirecting to [AppRouter.homeRoute]).
+/// 2. Vault screens requiring authentication redirect to [AppRouter.vaultPinRoute] if the vault is locked.
+class VaultRouteGuard extends ConsumerWidget {
+  final Widget child;
+  final bool requireUnlocked;
+
+  const VaultRouteGuard({
+    super.key,
+    required this.child,
+    this.requireUnlocked = true,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final net = ref.watch(networkServiceProvider);
+    final crypto = ref.watch(vaultCryptoProvider);
+
+    if (kIsWeb || isMultiplayerSessionActive(net)) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          AppRouter.homeRoute,
+          (route) => route.isFirst,
+        );
+      });
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: SizedBox.shrink(),
+      );
+    }
+
+    if (requireUnlocked && !crypto.isUnlocked) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          AppRouter.vaultPinRoute,
+          (route) => route.isFirst,
+        );
+      });
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: SizedBox.shrink(),
+      );
+    }
+
+    return child;
   }
 }
 

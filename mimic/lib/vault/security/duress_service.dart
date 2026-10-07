@@ -1,12 +1,9 @@
 // mimic/lib/vault/security/duress_service.dart
 import 'dart:math';
 import 'dart:convert';
-import 'dart:typed_data';
-
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:pointycastle/export.dart' as pc;
 import '../../core/services/platform_service.dart';
 import '../crypto/vault_kdf.dart';
 
@@ -17,15 +14,6 @@ class DuressService {
   final PlatformService _platformService;
 
   DuressService(this._platformService);
-
-  String _verifier(String pin, String salt) {
-    final pinBytes = Uint8List.fromList(utf8.encode(pin));
-    final saltBytes = Uint8List.fromList(utf8.encode(salt));
-    final pbkdf2 = pc.PBKDF2KeyDerivator(pc.HMac(pc.SHA256Digest(), 64))
-      ..init(pc.Pbkdf2Parameters(saltBytes, kDuressIterations, kDerivedKeyLength));
-    final derived = pbkdf2.process(pinBytes);
-    return 'v2:${base64Encode(derived)}';
-  }
 
   Future<String> _verifierAsync(String pin, String salt) async {
     final pinBytes = Uint8List.fromList(utf8.encode(pin));

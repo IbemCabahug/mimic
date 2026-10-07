@@ -48,6 +48,11 @@ class _HostScreenState extends ConsumerState<HostScreen> {
     await netService.startAsHost();
     
     if (netService.isConnected) {
+      final hostIp = netService.hostIp;
+      if (hostIp != null && hostIp != '0.0.0.0') {
+        final roomCode = _encodeRoomCode(hostIp, netService.port);
+        netService.setSessionToken(roomCode);
+      }
       _subscribeToNetworkMessages();
       _log('Hosting started successfully.');
     } else {

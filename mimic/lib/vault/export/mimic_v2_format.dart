@@ -2,21 +2,40 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
-import 'package:convert/convert.dart';
+class _DigestAccumulator implements Sink<Digest> {
+  final List<Digest> events = [];
+  @override
+  void add(Digest data) => events.add(data);
+  @override
+  void close() {}
+}
 
 const List<int> kMimicMagic = [0x4D, 0x4D, 0x49, 0x43]; // MMIC
 const int kMimicVersionV1 = 0x01;
 const int kMimicVersionV2 = 0x02;
 const List<int> kBlobMagic = [0x42, 0x4C, 0x4F, 0x42]; // BLOB
 
+/// SEC-01: Validates that a blob ID cannot cause directory traversal or path injection.
+/// An allowed ID must only contain alphanumeric characters, underscores, or hyphens,
+/// must be between 1 and 255 characters long, and must not start with '.' or contain path separators.
+final RegExp _kSafeBlobIdRegex = RegExp(r'^[a-zA-Z0-9_\-]+$');
+
+bool isValidBlobId(String id) {
+  if (id.isEmpty || id.length > 255) return false;
+  if (id.startsWith('.') || id.contains('..') || id.contains('/') || id.contains('\\')) {
+    return false;
+  }
+  return _kSafeBlobIdRegex.hasMatch(id);
+}
+
 class MimicV2Writer {
   final IOSink _sink;
   late final ByteConversionSink _hashSink;
-  late final AccumulatorSink<Digest> _digestSink;
+  late final _DigestAccumulator _digestSink;
   bool _finished = false;
 
   MimicV2Writer(this._sink) {
-    _digestSink = AccumulatorSink<Digest>();
+    _digestSink = _DigestAccumulator();
     _hashSink = sha256.startChunkedConversion(_digestSink);
   }
 
@@ -44,6 +63,9 @@ class MimicV2Writer {
 
   Future<void> writeBlob(String fileId, int payloadLength, Stream<List<int>> data) async {
     if (_finished) throw StateError('Writer is finished');
+    if (!isValidBlobId(fileId)) {
+      throw ArgumentError('Invalid or unsafe blob ID: $fileId');
+    }
 
     _writeBytes(kBlobMagic);
 
@@ -91,10 +113,10 @@ class BlobEntryHeader {
 class MimicV2Reader {
   final RandomAccessFile _raf;
   late final ByteConversionSink _hashSink;
-  late final AccumulatorSink<Digest> _digestSink;
+  late final _DigestAccumulator _digestSink;
 
   MimicV2Reader(this._raf) {
-    _digestSink = AccumulatorSink<Digest>();
+    _digestSink = _DigestAccumulator();
     _hashSink = sha256.startChunkedConversion(_digestSink);
   }
 
@@ -142,6 +164,10 @@ class MimicV2Reader {
 
     final idBytes = await _readBytes(idLen);
     final id = utf8.decode(idBytes);
+
+    if (!isValidBlobId(id)) {
+      throw FormatException('Invalid or unsafe blob ID in backup entry: $id');
+    }
 
     final payloadLenBytes = await _readBytes(8);
     final payloadLen = ByteData.view(payloadLenBytes.buffer).getUint64(0, Endian.big);

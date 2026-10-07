@@ -96,32 +96,48 @@ class DocumentVaultService {
 
   DocumentVaultService(this._platformService, this._crypto);
 
+  DocumentMeta _decryptMeta(DocumentMeta meta) {
+    if (meta.fileName.isEmpty) return meta;
+    try {
+      final decrypted = _crypto.decryptString(meta.fileName);
+      return meta.copyWith(fileName: decrypted);
+    } catch (_) {
+      // Fallback for pre-existing legacy cleartext filenames
+      return meta;
+    }
+  }
+
   Future<List<DocumentMeta>> listDocuments() async {
     if (kIsWeb) {
       final raw = await _platformService.secureRead(_storageKey);
       if (raw == null || raw.isEmpty) return [];
       final List<dynamic> decoded = jsonDecode(raw);
       return _dedupById(decoded
-          .map((e) => DocumentMeta.fromMap(Map<String, dynamic>.from(e)))
+          .map((e) => _decryptMeta(DocumentMeta.fromMap(Map<String, dynamic>.from(e))))
           .toList());
     }
     // Mobile: secure storage is the source of truth (it always receives the
-    // write alongside prefs). Prefs is only a FALLBACK for when secure
-    // storage returns nothing — reading prefs first let the two stores
-    // diverge, resurfacing stale entries (ghost/duplicate documents) after
-    // imports, moves or restores.
+    // write). Prefs is only a FALLBACK for when secure storage returns nothing.
     final secureRaw = await _platformService.secureRead(_storageKey);
     if (secureRaw != null && secureRaw.isNotEmpty) {
       try {
         final List<dynamic> decoded = jsonDecode(secureRaw);
         return _dedupById(decoded
-            .map((e) => DocumentMeta.fromMap(Map<String, dynamic>.from(e)))
+            .map((e) => _decryptMeta(DocumentMeta.fromMap(Map<String, dynamic>.from(e))))
             .toList());
       } catch (_) {
         // fall through to prefs
       }
     }
-    return _loadFromPrefs();
+    final legacyDocs = await _loadFromPrefs();
+    if (legacyDocs.isNotEmpty) {
+      try {
+        await _saveMeta(legacyDocs);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove(_storageKey);
+      } catch (_) {}
+    }
+    return legacyDocs;
   }
 
   /// Defensive: duplicate ids in the meta list render one document twice.
@@ -137,27 +153,37 @@ class DocumentVaultService {
       final raw = prefs.getString(_storageKey);
       if (raw == null || raw.isEmpty) return [];
       final List<dynamic> decoded = jsonDecode(raw);
-      return decoded
-          .map((e) => DocumentMeta.fromMap(Map<String, dynamic>.from(e)))
-          .toList();
+      return _dedupById(decoded
+          .map((e) => _decryptMeta(DocumentMeta.fromMap(Map<String, dynamic>.from(e))))
+          .toList());
     } catch (_) {
       return [];
     }
   }
 
   Future<void> _saveMeta(List<DocumentMeta> docs) async {
-    final jsonList = docs.map((m) => m.toMap()).toList();
+    final jsonList = docs.map((m) {
+      final map = m.toMap();
+      if (m.fileName.isNotEmpty) {
+        try {
+          map['fileName'] = _crypto.encryptString(m.fileName);
+        } catch (_) {}
+      }
+      return map;
+    }).toList();
     final encoded = jsonEncode(jsonList);
 
-    if (kIsWeb) {
-      await _platformService.secureWrite(_storageKey, encoded);
-      return;
-    }
-
-    // Mobile: store in both platform service and shared prefs for redundancy
     await _platformService.secureWrite(_storageKey, encoded);
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_storageKey, encoded);
+
+    // SEC-06: Purge any legacy unencrypted SharedPreferences copy
+    if (!kIsWeb) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (prefs.containsKey(_storageKey)) {
+          await prefs.remove(_storageKey);
+        }
+      } catch (_) {}
+    }
   }
 
   Future<({String id, bool tempCopyRemoved})> importDocument() async {

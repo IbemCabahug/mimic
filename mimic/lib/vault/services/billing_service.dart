@@ -35,11 +35,17 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
 
+import 'billing_verifier.dart';
 import 'pro_status_service.dart';
 
 /// Google Play product ID for the one-time lifetime Pro entitlement.
 /// Configured in Play Console; must exist before the closed test.
 const String kProProductId = 'mimic_pro_lifetime';
+
+/// Optional Google Play Base64 RSA Public Key (X.509 SPKI) passed at build-time
+/// via `--dart-define=GOOGLE_PLAY_PUBLIC_KEY=...`.
+const String kGooglePlayPublicKey =
+    String.fromEnvironment('GOOGLE_PLAY_PUBLIC_KEY', defaultValue: '');
 
 /// The narrow slice of the in_app_purchase plugin this service needs,
 /// abstracted so tests can drive the purchase stream, fake products and
@@ -84,11 +90,19 @@ class BillingService {
   BillingService({
     required ProStatusService proStatus,
     BillingStore? store,
+    PurchaseVerifier? verifier,
   })  : _pro = proStatus,
-        _store = store ?? PlayBillingStore();
+        _store = store ?? PlayBillingStore(),
+        _verifier = verifier ??
+            GooglePlaySignatureVerifier(
+              base64PublicKey: kGooglePlayPublicKey,
+              expectedProductId: kProProductId,
+              allowUnverifiedWhenNoKey: true,
+            );
 
   final ProStatusService _pro;
   final BillingStore _store;
+  final PurchaseVerifier _verifier;
 
   StreamSubscription<List<PurchaseDetails>>? _subscription;
   ProductDetails? _proProduct;
@@ -113,7 +127,14 @@ class BillingService {
 
   /// Subscribes to the purchase stream and caches the Pro product.
   /// Idempotent; safe to call from startup on any platform.
+  ///
+  /// In FOSS builds (F-Droid, GitHub), proprietary Google Play billing
+  /// is completely bypassed.
   Future<void> init() async {
+    if (_pro.isFoss) {
+      // In FOSS distribution, billing is intentionally disabled.
+      return;
+    }
     try {
       _subscription ??= _store.purchaseStream.listen(
         _onPurchaseUpdates,
@@ -144,6 +165,10 @@ class BillingService {
   /// (init failed) or Play refused to start the flow; the actual result
   /// arrives later on the purchase stream either way.
   Future<bool> buyPro() async {
+    if (_pro.isFoss) {
+      lastError = 'billing unavailable in FOSS build';
+      return false;
+    }
     final ProductDetails? product = _proProduct;
     if (product == null) {
       lastError ??= 'buyPro before a known product';
@@ -162,6 +187,9 @@ class BillingService {
   /// Ask Play to re-deliver owned purchases. Results arrive on the purchase
   /// stream as PurchaseStatus.restored events, handled by [_processOne].
   Future<void> restore() async {
+    if (_pro.isFoss) {
+      return;
+    }
     try {
       await _store.restorePurchases();
     } catch (error) {
@@ -230,11 +258,8 @@ class BillingService {
     }
   }
 
-  /// Verification without a server: the product ID already matched to get
-  /// here; require Play's local verification payload to be present. See the
-  /// honesty note in the file header.
-  bool _verify(PurchaseDetails purchase) =>
-      purchase.verificationData.localVerificationData.isNotEmpty;
+  /// Verifies purchase authenticity using cryptographic [PurchaseVerifier].
+  bool _verify(PurchaseDetails purchase) => _verifier.verify(purchase);
 
   /// Completes the purchase exactly once, swallowing plugin failures so one
   /// bad completion can never stall the rest of the batch.

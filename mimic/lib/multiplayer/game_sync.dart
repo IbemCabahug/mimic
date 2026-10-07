@@ -93,6 +93,43 @@ class GameSync {
     };
   }
 
+  /// Serialize a [GameState] into a JSON-compatible map with secret roles,
+  /// words, and context definitions sanitized for a specific player [forPlayerId].
+  ///
+  /// Prevents disclosure of secret roles (e.g. other mimics), the opposing role's
+  /// secret word, and contextual definitions during broadcasts and rejoin events (SEC-03).
+  static Map<String, dynamic> serializeSanitizedState(
+    GameState state, {
+    required String forPlayerId,
+  }) {
+    final isMimic = state.mimicIds.contains(forPlayerId);
+    final playerWord = state.getWordForPlayer(forPlayerId);
+    final context = state.getContextForPlayer(forPlayerId);
+    final proContext = state.getContextForPlayer(forPlayerId, isPro: true);
+
+    final serialized = serializeState(state);
+
+    // Sanitize secret roles: player only knows their own role
+    serialized['mimicIds'] = isMimic ? <String>[forPlayerId] : <String>[];
+    serialized['secondMimicWord'] = null;
+
+    // Sanitize secret word pairs: both realWord and mimicWord are set to player's assigned word
+    if (state.currentWordPair != null) {
+      serialized['currentWordPair'] = {
+        'realWord': playerWord,
+        'mimicWord': playerWord,
+        'realWordContext': context,
+        'mimicWordContext': context,
+        'realWordProContext': proContext,
+        'mimicWordProContext': proContext,
+      };
+    } else {
+      serialized['currentWordPair'] = null;
+    }
+
+    return serialized;
+  }
+
   /// Serialize a [Player] to a JSON-compatible map.
   static Map<String, dynamic> _serializePlayer(Player player) {
     return {

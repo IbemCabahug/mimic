@@ -198,14 +198,20 @@ void main() {
       final exportedFile = await VaultExporter.buildExportFile(ProviderContainer());
       expect(await exportedFile.exists(), isTrue);
 
-      // The phrase-gated portability set rides in the metadata JSON.
+      // SEC-02: The phrase-gated portability set rides in the metadata JSON.
+      // vault_salt, vault_pin_hash, and master_key_wrapped are deliberately EXCLUDED
+      // to prevent offline PIN dictionary and brute-force attacks.
       final meta = readMetadataJson(exportedFile);
-      for (final key in ['recovery_blob', 'recovery_salt', 'vault_salt', 'vault_pin_hash']) {
-        expect(meta.containsKey(key), isTrue,
-            reason: '$key is what makes the backup restorable off-device');
-      }
-      expect(meta['master_key_wrapped'], startsWith('hw1:'),
-          reason: 'the exported wrap is the EXPORTING device\'s hardware blob');
+      expect(meta.containsKey('recovery_blob'), isTrue,
+          reason: 'recovery_blob is what makes the backup restorable off-device');
+      expect(meta.containsKey('recovery_salt'), isTrue,
+          reason: 'recovery_salt is what makes the backup restorable off-device');
+      expect(meta.containsKey('vault_salt'), isFalse,
+          reason: 'vault_salt must not be exported (SEC-02)');
+      expect(meta.containsKey('vault_pin_hash'), isFalse,
+          reason: 'vault_pin_hash must not be exported (SEC-02)');
+      expect(meta.containsKey('master_key_wrapped'), isFalse,
+          reason: 'device-local hardware wraps must not be exported (SEC-02)');
 
       // ── Wipe everything: the phone was reset / the app reinstalled ────
       secureStorageData.clear();
@@ -223,13 +229,13 @@ void main() {
           reason: 'the recovery-phrase path is device-independent and must succeed');
       expect(VaultCrypto.instance.isUnlocked, isTrue);
 
-      // THE DEFECT, documented: the persisted wrap still belongs to device A.
-      // The next PIN unlock fails LOUDLY (never silently — a wrong key must
-      // not pretend to work), and the app routes the owner to recovery.
+      // SEC-02: Device A's PIN credentials were never exported, so device B
+      // has no PIN set yet. Attempting to unlock with the old PIN fails LOUDLY
+      // (SystemKeyMissingException), protecting existing restored data from overwrite.
       VaultCrypto.instance.lock();
       await expectLater(
         VaultCrypto.instance.initialize('123456'),
-        throwsA(isA<KeystoreInvalidException>()),
+        throwsA(isA<SystemKeyMissingException>()),
       );
 
       // THE FIX: the reset-PIN flow (changePin) performs the complete local
@@ -272,11 +278,11 @@ void main() {
 
       expect(await VaultImporter.importWithPhrase(exportedFile, recoveryWords), isTrue);
 
-      // Neither the old PIN nor a guessed PIN can unwrap device A's blob.
+      // Neither the old PIN nor a guessed PIN can unwrap or unlock without reset-PIN.
       VaultCrypto.instance.lock();
       await expectLater(
         VaultCrypto.instance.initialize('123456'),
-        throwsA(isA<KeystoreInvalidException>()),
+        throwsA(isA<SystemKeyMissingException>()),
       );
       // Recovery still works — the escape hatch stays open at all times.
       expect(await VaultCrypto.instance.recoverWithPhrase(recoveryWords), isTrue);

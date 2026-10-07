@@ -248,40 +248,75 @@ class FileVaultService {
       final raw = await _platformService.secureRead('vault_photos_meta');
       if (raw == null || raw.isEmpty) return [];
       final List<dynamic> decoded = jsonDecode(raw);
-      return decoded
-          .map((e) => PhotoMeta.fromMap(Map<String, dynamic>.from(e)))
-          .toList();
+      return decoded.map((e) {
+        final m = Map<String, dynamic>.from(e);
+        final rawName = m['originalName'] as String?;
+        if (rawName != null && rawName.isNotEmpty) {
+          try {
+            m['originalName'] = _crypto.decryptString(rawName);
+          } catch (_) {}
+        }
+        return PhotoMeta.fromMap(m);
+      }).toList();
     }
 
     await _ensureDb();
     try {
       final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
-      return maps.map((map) => PhotoMeta.fromMap(map)).toList();
+      return maps.map((map) {
+        final m = Map<String, dynamic>.from(map);
+        final rawName = m['originalName'] as String?;
+        if (rawName != null && rawName.isNotEmpty) {
+          try {
+            m['originalName'] = _crypto.decryptString(rawName);
+          } catch (_) {}
+        }
+        return PhotoMeta.fromMap(m);
+      }).toList();
     } catch (e) {
       if (e is DatabaseException && e.toString().contains('database_closed')) {
         _db = null;
         await _ensureDb();
         final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
-        return maps.map((map) => PhotoMeta.fromMap(map)).toList();
+        return maps.map((map) {
+          final m = Map<String, dynamic>.from(map);
+          final rawName = m['originalName'] as String?;
+          if (rawName != null && rawName.isNotEmpty) {
+            try {
+              m['originalName'] = _crypto.decryptString(rawName);
+            } catch (_) {}
+          }
+          return PhotoMeta.fromMap(m);
+        }).toList();
       }
       rethrow;
     }
   }
 
   Future<void> _saveMeta(PhotoMeta meta) async {
+    final map = meta.toMap();
+    if (meta.originalName != null && meta.originalName!.isNotEmpty) {
+      map['originalName'] = _crypto.encryptString(meta.originalName!);
+    }
     if (kIsWeb) {
       final existing = await getAllPhotos();
       existing.removeWhere((m) => m.id == meta.id);
       existing.add(meta);
       await _platformService.secureWrite(
         'vault_photos_meta',
-        jsonEncode(existing.map((m) => m.toMap()).toList()),
+        jsonEncode(existing.map((m) {
+          final em = m.toMap();
+          if (m.originalName != null && m.originalName!.isNotEmpty) {
+            em['originalName'] = _crypto.encryptString(m.originalName!);
+          }
+          return em;
+        }).toList()),
       );
       return;
     }
 
     await _ensureDb();
-    await _db!.insert(_tableName, meta.toMap());
+    await _db!.insert(_tableName, map);
   }
 
   Future<void> _deleteMeta(String id) async {
@@ -438,7 +473,7 @@ class FileVaultService {
           // leak a filesystem path to the screen (see the T15 test).
           onFileFailed?.call(i, 'Import failed');
         } catch (_) {}
-        debugPrint('pickAndEncryptImage failed on $failedFileName: $e');
+        debugPrint('pickAndEncryptImage failed: ${e.runtimeType}');
         break;
       }
     }
@@ -580,6 +615,16 @@ class FileVaultService {
     await _db!.delete(_tableName);
     for (final photo in decodedPhotos) {
       final map = Map<String, dynamic>.from(photo);
+      final rawName = map['originalName'] as String?;
+      if (rawName != null && rawName.isNotEmpty) {
+        try {
+          _crypto.decryptString(rawName);
+        } catch (_) {
+          try {
+            map['originalName'] = _crypto.encryptString(rawName);
+          } catch (_) {}
+        }
+      }
       await _db!.insert(_tableName, map, conflictAlgorithm: ConflictAlgorithm.replace);
     }
   }

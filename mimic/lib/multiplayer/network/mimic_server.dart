@@ -44,17 +44,28 @@ class MimicServer {
   HttpServer? _httpServer;
   String? _boundIp;
 
+  /// Ephemeral session token required for handshake authentication (SEC-04).
+  /// When non-null, clients must transmit {'type': 'handshake', 'token': ...}
+  /// before they are assigned a playerId or allowed to participate.
+  String? sessionToken;
+
+  /// Maximum inbound payload size (32 KB) to prevent memory exhaustion DoS (SEC-11).
+  static const int maxPayloadBytes = 32 * 1024;
+
+  /// Pending connections awaiting handshake verification.
+  final Map<WebSocket, Timer> _pendingSockets = {};
+
   /// Connected clients keyed by generated playerId (UUID v4).
   final Map<String, WebSocket> _clients = {};
+
+  /// Per-client rate limiters (SEC-11).
+  final Map<String, ClientRateLimiter> _rateLimiters = {};
+  final Map<String, int> _rateLimitViolations = {};
 
   /// Stream controller for inbound messages from clients.
   /// Each message is a decoded JSON map with an injected `"senderId"` field.
   final StreamController<Map<String, dynamic>> _onMessage =
       StreamController<Map<String, dynamic>>.broadcast();
-
-  // ─────────────────────────────────────────────────────────────────────
-  // Public getters
-  // ─────────────────────────────────────────────────────────────────────
 
   /// The IP address the server is bound to, or `null` if not started.
   String? get hostIp => _boundIp;
@@ -102,6 +113,19 @@ class MimicServer {
   /// Closes all client connections and shuts down the server.
   void stop() {
     try {
+      // Cancel pending handshake timers and close unauthenticated sockets.
+      for (final timer in _pendingSockets.values) {
+        timer.cancel();
+      }
+      for (final socket in _pendingSockets.keys) {
+        try {
+          socket.close(WebSocketStatus.goingAway, 'Server shutting down');
+        } catch (e) {
+          _log('Error closing pending socket: $e');
+        }
+      }
+      _pendingSockets.clear();
+
       // Close every WebSocket gracefully.
       for (final entry in _clients.entries) {
         try {
@@ -111,6 +135,8 @@ class MimicServer {
         }
       }
       _clients.clear();
+      _rateLimiters.clear();
+      _rateLimitViolations.clear();
 
       _httpServer?.close(force: true);
       _httpServer = null;
@@ -173,11 +199,102 @@ class MimicServer {
   /// Processes a newly connected WebSocket client.
   void _onClientConnected(WebSocket socket) {
     final playerId = _generateUuidV4();
+    bool isAuthenticated = (sessionToken == null || sessionToken!.isEmpty);
 
-    _clients[playerId] = socket;
-    _log('Player connected: $playerId (${_clients.length} total)');
+    if (!isAuthenticated) {
+      final timer = Timer(const Duration(seconds: 5), () {
+        _pendingSockets.remove(socket);
+        _rejectSocket(socket, 'Handshake timeout');
+      });
+      _pendingSockets[socket] = timer;
+    } else {
+      _clients[playerId] = socket;
+      _log('Player connected: $playerId (${_clients.length} total)');
+      _sendWelcome(socket, playerId);
+    }
 
-    // Send welcome message with the assigned player ID.
+    socket.listen(
+      (dynamic data) {
+        if (data is! String) {
+          _log('Rejected non-text frame from $playerId');
+          return;
+        }
+
+        // Frame size limit (SEC-11)
+        if (data.length > maxPayloadBytes) {
+          _log('Frame from $playerId exceeded maxPayloadBytes (${data.length} > $maxPayloadBytes)');
+          if (isAuthenticated) {
+            try {
+              socket.close(WebSocketStatus.messageTooBig, 'Payload too large');
+            } catch (_) {}
+            _onClientDisconnected(playerId);
+          } else {
+            _pendingSockets.remove(socket)?.cancel();
+            _rejectSocket(socket, 'Payload too large');
+          }
+          return;
+        }
+
+        // Rate limiting (SEC-11)
+        final limiter = _rateLimiters.putIfAbsent(playerId, () => ClientRateLimiter());
+        if (!limiter.tryConsume()) {
+          final violations = (_rateLimitViolations[playerId] ?? 0) + 1;
+          _rateLimitViolations[playerId] = violations;
+          _log('Rate limit exceeded for $playerId ($violations violations)');
+          if (violations >= 20) {
+            _log('Terminating $playerId for excessive rate limit violations');
+            try {
+              socket.close(WebSocketStatus.policyViolation, 'Rate limit exceeded');
+            } catch (_) {}
+            if (isAuthenticated) {
+              _onClientDisconnected(playerId);
+            } else {
+              _pendingSockets.remove(socket)?.cancel();
+            }
+          }
+          return;
+        }
+        _rateLimitViolations[playerId] = 0;
+
+        if (!isAuthenticated) {
+          try {
+            final Map<String, dynamic> message =
+                jsonDecode(data) as Map<String, dynamic>;
+            if (message['type'] == 'handshake' && message['token'] == sessionToken) {
+              isAuthenticated = true;
+              _pendingSockets.remove(socket)?.cancel();
+              _clients[playerId] = socket;
+              _log('Player authenticated: $playerId (${_clients.length} total)');
+              _sendWelcome(socket, playerId);
+              return;
+            }
+          } catch (_) {}
+
+          _pendingSockets.remove(socket)?.cancel();
+          _rejectSocket(socket, 'Invalid handshake token');
+          return;
+        }
+
+        _onDataReceived(playerId, data);
+      },
+      onError: (Object error) {
+        _pendingSockets.remove(socket)?.cancel();
+        _log('Socket error from $playerId: $error');
+        if (isAuthenticated) {
+          _onClientDisconnected(playerId);
+        }
+      },
+      onDone: () {
+        _pendingSockets.remove(socket)?.cancel();
+        if (isAuthenticated) {
+          _onClientDisconnected(playerId);
+        }
+      },
+      cancelOnError: true,
+    );
+  }
+
+  void _sendWelcome(WebSocket socket, String playerId) {
     try {
       socket.add(jsonEncode({
         'type': 'welcome',
@@ -186,17 +303,13 @@ class MimicServer {
     } catch (e) {
       _log('Failed to send welcome to $playerId: $e');
     }
+  }
 
-    // Listen for messages and disconnection.
-    socket.listen(
-      (dynamic data) => _onDataReceived(playerId, data),
-      onError: (Object error) {
-        _log('Socket error from $playerId: $error');
-        _onClientDisconnected(playerId);
-      },
-      onDone: () => _onClientDisconnected(playerId),
-      cancelOnError: true,
-    );
+  void _rejectSocket(WebSocket socket, String reason) {
+    _log('Rejecting unauthenticated connection: $reason');
+    try {
+      socket.close(WebSocketStatus.policyViolation, reason);
+    } catch (_) {}
   }
 
   /// Parses an inbound message, attaches the sender ID, and pushes it
@@ -207,8 +320,13 @@ class MimicServer {
           jsonDecode(rawData as String) as Map<String, dynamic>;
 
       // Inject the authenticated sender identity so downstream handlers
-      // cannot be spoofed by a client claiming a different ID.
+      // cannot be spoofed by a client claiming a different ID (SEC-04).
       message['senderId'] = playerId;
+
+      // Force castVote to bind strictly to verified senderId (SEC-04)
+      if (message['type'] == 'castVote') {
+        message['voterId'] = playerId;
+      }
 
       _onMessage.add(message);
     } catch (e) {
@@ -219,6 +337,8 @@ class MimicServer {
   /// Cleans up after a client disconnects and notifies remaining players.
   void _onClientDisconnected(String playerId) {
     final removed = _clients.remove(playerId);
+    _rateLimiters.remove(playerId);
+    _rateLimitViolations.remove(playerId);
     if (removed == null) return; // already cleaned up
 
     _log('Player disconnected: $playerId (${_clients.length} remaining)');
@@ -316,3 +436,32 @@ class MimicServer {
         '${hex(bytes[13])}${hex(bytes[14])}${hex(bytes[15])}';
   }
 }
+
+/// Lightweight token bucket rate limiter to prevent socket flooding (SEC-11).
+class ClientRateLimiter {
+  final double capacity;
+  final double refillRatePerSecond;
+  double _tokens;
+  DateTime _lastRefill;
+
+  ClientRateLimiter({
+    this.capacity = 30.0,
+    this.refillRatePerSecond = 15.0,
+  })  : _tokens = capacity,
+        _lastRefill = DateTime.now();
+
+  bool tryConsume([double tokens = 1.0]) {
+    final now = DateTime.now();
+    final elapsedSeconds =
+        now.difference(_lastRefill).inMicroseconds / 1000000.0;
+    _tokens = (_tokens + elapsedSeconds * refillRatePerSecond).clamp(0.0, capacity);
+    _lastRefill = now;
+
+    if (_tokens >= tokens) {
+      _tokens -= tokens;
+      return true;
+    }
+    return false;
+  }
+}
+

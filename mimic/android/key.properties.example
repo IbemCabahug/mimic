@@ -1,0 +1,12 @@
+# Keystore credentials template for Mimic release builds.
+# DO NOT store real credentials in this file if committed.
+# Prefer setting environment variables:
+#   MIMIC_STORE_PASSWORD
+#   MIMIC_KEY_PASSWORD
+#   MIMIC_KEY_ALIAS
+#   MIMIC_STORE_FILE
+# Or passing Gradle project properties (-PMIMIC_STORE_PASSWORD=...)
+storePassword=YOUR_KEYSTORE_PASSWORD
+keyPassword=YOUR_KEY_PASSWORD
+keyAlias=YOUR_KEY_ALIAS
+storeFile=/path/to/mimic-release-key.jks

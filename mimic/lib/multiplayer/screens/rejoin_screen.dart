@@ -112,6 +112,7 @@ class _RejoinScreenState extends ConsumerState<RejoinScreen>
     final String ip = decoded['ip'] as String;
     final int port = decoded['port'] as int;
     final netService = ref.read(networkServiceProvider);
+    netService.handshakeToken = widget.lastRoomCode;
 
     try {
       // 1. Join network server as guest
@@ -169,14 +170,7 @@ class _RejoinScreenState extends ConsumerState<RejoinScreen>
     final phase = message['phase'] as String? ?? 'discussion';
     final isMimic = role == 'mimic';
 
-    // Update GameStateNotifier
-    ref.read(gameStateProvider.notifier).updateGuestRoleAndWord(
-          isMimic: isMimic,
-          word: word ?? '',
-          playerId: newPlayerId ?? '',
-        );
-
-    // Apply the remote GameState snapshot
+    // Apply the remote GameState snapshot first
     final gameStateData = message['gameState'] as Map<String, dynamic>?;
     if (gameStateData != null) {
       final deserialized = GameSync.deserializeState(gameStateData);
@@ -184,6 +178,13 @@ class _RejoinScreenState extends ConsumerState<RejoinScreen>
         ref.read(gameStateProvider.notifier).applyRemoteState(deserialized);
       }
     }
+
+    // Update GameStateNotifier with personal role and word
+    ref.read(gameStateProvider.notifier).updateGuestRoleAndWord(
+          isMimic: isMimic,
+          word: word ?? '',
+          playerId: newPlayerId ?? '',
+        );
 
     // Persist new details for subsequent dropouts
     final prefs = await SharedPreferences.getInstance();
