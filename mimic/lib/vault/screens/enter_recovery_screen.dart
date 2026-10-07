@@ -1,4 +1,4 @@
-// lib/vault/screens/enter_recovery_screen.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../crypto/vault_crypto.dart';
@@ -19,6 +19,13 @@ class _EnterRecoveryScreenState extends ConsumerState<EnterRecoveryScreen> {
   final _scrollController = ScrollController();
   bool _isLoading = false;
 
+  // Rate limiting against brute-force guessing of partial recovery phrases (VULN-11)
+  int _failedAttempts = 0;
+  int _cooldownSecondsRemaining = 0;
+  Timer? _cooldownTimer;
+
+  bool get _isLockedOut => _cooldownSecondsRemaining > 0;
+
   @override
   void initState() {
     super.initState();
@@ -29,6 +36,7 @@ class _EnterRecoveryScreenState extends ConsumerState<EnterRecoveryScreen> {
 
   @override
   void dispose() {
+    _cooldownTimer?.cancel();
     for (var controller in _controllers) {
       controller.removeListener(_onFieldChanged);
       controller.dispose();
@@ -45,11 +53,35 @@ class _EnterRecoveryScreenState extends ConsumerState<EnterRecoveryScreen> {
   }
 
   bool get _isButtonEnabled {
-    return _controllers.every((c) => c.text.trim().isNotEmpty);
+    return !_isLockedOut && _controllers.every((c) => c.text.trim().isNotEmpty);
+  }
+
+  void _triggerLockout() {
+    _cooldownTimer?.cancel();
+    final duration = _failedAttempts >= 6 ? 60 : 30;
+    setState(() {
+      _cooldownSecondsRemaining = duration;
+    });
+    _cooldownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (!mounted) {
+        timer.cancel();
+        return;
+      }
+      if (_cooldownSecondsRemaining <= 1) {
+        timer.cancel();
+        setState(() {
+          _cooldownSecondsRemaining = 0;
+        });
+      } else {
+        setState(() {
+          _cooldownSecondsRemaining--;
+        });
+      }
+    });
   }
 
   Future<void> _recoverVault() async {
-    if (!_isButtonEnabled) return;
+    if (!_isButtonEnabled || _isLockedOut) return;
 
     setState(() {
       _isLoading = true;
@@ -62,19 +94,36 @@ class _EnterRecoveryScreenState extends ConsumerState<EnterRecoveryScreen> {
       final success = await crypto.recoverWithPhrase(words);
 
       if (success) {
+        _cooldownTimer?.cancel();
+        _failedAttempts = 0;
         if (mounted) {
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (context) => const ResetPinScreen()),
           );
         }
       } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Incorrect recovery phrase'),
-              backgroundColor: VaultColors.error,
-            ),
-          );
+        _failedAttempts++;
+        if (_failedAttempts >= 5) {
+          _triggerLockout();
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Too many failed attempts. Locked out for $_cooldownSecondsRemaining seconds.',
+                ),
+                backgroundColor: VaultColors.error,
+              ),
+            );
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Incorrect recovery phrase'),
+                backgroundColor: VaultColors.error,
+              ),
+            );
+          }
         }
       }
     } catch (e) {
@@ -181,7 +230,7 @@ class _EnterRecoveryScreenState extends ConsumerState<EnterRecoveryScreen> {
                 ElevatedButton(
                   onPressed: _isButtonEnabled && !_isLoading ? _recoverVault : null,
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: VaultColors.accent,
+                    backgroundColor: _isLockedOut ? VaultColors.surface : VaultColors.accent,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 16),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -196,9 +245,16 @@ class _EnterRecoveryScreenState extends ConsumerState<EnterRecoveryScreen> {
                             color: Colors.white,
                           ),
                         )
-                      : const Text(
-                          'Recover Vault',
-                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+                      : Text(
+                          _isLockedOut
+                              ? 'Locked Out (${_cooldownSecondsRemaining}s)'
+                              : 'Recover Vault',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            fontFamily: 'Inter',
+                            color: _isLockedOut ? VaultColors.textTertiary : Colors.white,
+                          ),
                         ),
                 ),
                 const SizedBox(height: 12),

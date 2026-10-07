@@ -1,5 +1,6 @@
 // lib/multiplayer/screens/host_screen.dart
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,6 +31,7 @@ class HostScreen extends ConsumerStatefulWidget {
 class _HostScreenState extends ConsumerState<HostScreen> {
   StreamSubscription<Map<String, dynamic>>? _messageSubscription;
   final Map<String, String> _playerNames = {};
+  String? _roomCode;
 
   @override
   void initState() {
@@ -43,6 +45,13 @@ class _HostScreenState extends ConsumerState<HostScreen> {
     });
   }
 
+  /// Generates a cryptographically secure random alphanumeric salt (AUDIT-03).
+  String _generateEntropySalt(int length) {
+    const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    final random = math.Random.secure();
+    return List.generate(length, (_) => chars[random.nextInt(chars.length)]).join();
+  }
+
   Future<void> _startHosting() async {
     final netService = ref.read(networkServiceProvider);
     await netService.startAsHost();
@@ -50,11 +59,14 @@ class _HostScreenState extends ConsumerState<HostScreen> {
     if (netService.isConnected) {
       final hostIp = netService.hostIp;
       if (hostIp != null && hostIp != '0.0.0.0') {
-        final roomCode = _encodeRoomCode(hostIp, netService.port);
-        netService.setSessionToken(roomCode);
+        // VULN-03: 4 Base62 chars provide ~24 bits of entropy (14.7M candidates), preventing LAN brute force.
+        final salt = _generateEntropySalt(4);
+        _roomCode = '${_encodeRoomCode(hostIp, netService.port)}-$salt';
+        netService.setSessionToken(_roomCode);
+        if (mounted) setState(() {});
       }
       _subscribeToNetworkMessages();
-      _log('Hosting started successfully.');
+      _log('Hosting started successfully with room code $_roomCode.');
     } else {
       _log('Failed to start hosting.');
     }
@@ -182,13 +194,13 @@ class _HostScreenState extends ConsumerState<HostScreen> {
     final isConnected = netService.isConnected;
     final hostIp = netService.hostIp;
 
-    // Generate room code and QR string
+    // Generate room code and QR string with entropy salt (AUDIT-03)
     final roomCode = (isConnected && hostIp != null && hostIp != '0.0.0.0')
-        ? _encodeRoomCode(hostIp, netService.port)
+        ? (_roomCode ?? _encodeRoomCode(hostIp, netService.port))
         : 'LOBBY';
 
     final qrData = (isConnected && hostIp != null)
-        ? '$hostIp:${netService.port}'
+        ? '$hostIp:${netService.port}:$roomCode'
         : '0.0.0.0:${netService.port}';
 
     return PopScope(

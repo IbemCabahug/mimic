@@ -4,6 +4,8 @@
 **/key.properties
 *.jks
 *.keystore
+*recoveryKey*
+*debug_symbols*
 
 # Internal planning documents - never commit (repo was public until 2026-08-07)
 check-project.md

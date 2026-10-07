@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/core/animations/horror_animations.dart';
@@ -48,14 +49,16 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
 
   /// Decodes a 6-character Base62 room code back into a 32-bit IPv4 address string and port.
   Map<String, dynamic>? _decodeRoomCode(String code) {
-    final cleanCode = code.trim().toUpperCase();
-    if (cleanCode.length != 6) return null;
+    // Preserve case (AUDIT-03: Base62 is case-sensitive) and strip any hyphens or spaces
+    final cleanCode = code.replaceAll('-', '').trim();
+    if (cleanCode.length < 6) return null;
 
+    final ipPart = cleanCode.substring(0, 6);
     const chars = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ';
     int val = 0;
 
-    for (int i = 0; i < cleanCode.length; i++) {
-      final char = cleanCode[i];
+    for (int i = 0; i < ipPart.length; i++) {
+      final char = ipPart[i];
       final index = chars.indexOf(char);
       if (index == -1) return null; // Invalid character
       val = val * 62 + index;
@@ -70,6 +73,7 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
     return {
       'ip': '$octet1.$octet2.$octet3.$octet4',
       'port': 4567, // Default port
+      'token': code.trim(),
     };
   }
 
@@ -98,10 +102,11 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
 
   void _onConnectPressed() {
     final code = _codeController.text.trim();
-    if (code.length != 6) {
+    final clean = code.replaceAll('-', '').trim();
+    if (clean.length < 6 || clean.length > 12) {
       setState(() {
         _status = ConnectionStatus.failed;
-        _errorMessage = 'Code must be exactly 6 characters';
+        _errorMessage = 'Code must be 6 to 12 characters';
       });
       return;
     }
@@ -115,7 +120,11 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
       return;
     }
 
-    _connectToHost(connectionData['ip'] as String, connectionData['port'] as int, code);
+    final ip = connectionData['ip'] as String;
+    final port = connectionData['port'] as int;
+    final token = connectionData['token'] as String? ?? code;
+
+    _connectToHost(ip, port, token);
   }
 
   Future<void> _connectToHost(String ip, int port, [String? roomCode]) async {
@@ -231,11 +240,11 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
 
   void _onQrScanned(String value) {
     final parts = value.trim().split(':');
-    if (parts.length == 2) {
+    if (parts.length >= 2) {
       final ip = parts[0];
       final port = int.tryParse(parts[1]) ?? 4567;
+      final roomCode = parts.length >= 3 ? parts[2] : _encodeRoomCode(ip, port);
 
-      final roomCode = _encodeRoomCode(ip, port);
       setState(() {
         _codeController.text = roomCode;
       });
@@ -264,6 +273,9 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
       return;
     }
 
+    // Save session preferences for seamless rejoin (AUDIT-02)
+    _saveSessionPreferences(name);
+
     // Send introduction packet
     ref.read(networkServiceProvider).send({
       'type': 'playerJoined',
@@ -276,6 +288,23 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
         builder: (context) => const LobbyScreen(),
       ),
     );
+  }
+
+  Future<void> _saveSessionPreferences(String name) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (_codeController.text.isNotEmpty) {
+        await prefs.setString('last_room_code', _codeController.text.trim());
+      }
+      await prefs.setString('last_player_name', name);
+      final netService = ref.read(networkServiceProvider);
+      if (netService.assignedPlayerId != null) {
+        await prefs.setString('last_player_id', netService.assignedPlayerId!);
+      }
+      if (netService.rejoinToken != null) {
+        await prefs.setString('last_rejoin_token', netService.rejoinToken!);
+      }
+    } catch (_) {}
   }
 
   void _onBackPress() {
@@ -349,15 +378,11 @@ class _JoinScreenState extends ConsumerState<JoinScreen> {
                             letterSpacing: 4.0,
                             fontWeight: FontWeight.bold,
                           ),
-                          maxLength: 6,
+                          maxLength: 9,
                           autocorrect: false,
                           enableSuggestions: false,
-                          textCapitalization: TextCapitalization.characters,
-                          inputFormatters: [
-                            UpperCaseTextFormatter(),
-                          ],
                           decoration: InputDecoration(
-                            hintText: 'A1B2C3',
+                            hintText: 'A1b2C3-9x',
                             counterText: '',
                             hintStyle: GoogleFonts.shareTechMono(color: HorrorColors.ashGray),
                           ),

@@ -58,9 +58,46 @@ class MimicServer {
   /// Connected clients keyed by generated playerId (UUID v4).
   final Map<String, WebSocket> _clients = {};
 
+  /// Ephemeral rejoin tokens mapped to assigned player IDs (AUDIT-02).
+  final Map<String, String> _playerRejoinTokens = {};
+
   /// Per-client rate limiters (SEC-11).
   final Map<String, ClientRateLimiter> _rateLimiters = {};
   final Map<String, int> _rateLimitViolations = {};
+
+  /// IP-level handshake failure tracker to prevent LAN brute force of room codes (VULN-03).
+  final Map<String, List<DateTime>> _failedHandshakesPerIp = {};
+  final Map<String, DateTime> _bannedIps = {};
+
+  /// Checks if [ip] is temporarily banned from handshaking (VULN-03).
+  bool isIpBanned(String ip) {
+    final bannedUntil = _bannedIps[ip];
+    if (bannedUntil == null) return false;
+    if (DateTime.now().isAfter(bannedUntil)) {
+      _bannedIps.remove(ip);
+      _failedHandshakesPerIp.remove(ip);
+      return false;
+    }
+    return true;
+  }
+
+  void _recordFailedHandshake(String ip) {
+    if (ip == 'unknown') return;
+    final now = DateTime.now();
+    final list = _failedHandshakesPerIp.putIfAbsent(ip, () => []);
+    list.removeWhere((timestamp) => now.difference(timestamp) > const Duration(minutes: 5));
+    list.add(now);
+    if (list.length >= 10) {
+      _bannedIps[ip] = now.add(const Duration(minutes: 5));
+      _log('IP $ip temporarily banned for 5 minutes due to 10 failed handshake attempts (VULN-03).');
+    }
+  }
+
+  /// Normalizes handshake and room code tokens by removing hyphens, spaces and whitespace (VULN-10).
+  static String normalizeToken(String? token) {
+    if (token == null) return '';
+    return token.replaceAll('-', '').replaceAll(' ', '').trim();
+  }
 
   /// Stream controller for inbound messages from clients.
   /// Each message is a decoded JSON map with an injected `"senderId"` field.
@@ -79,6 +116,30 @@ class MimicServer {
 
   /// List of currently connected player IDs.
   List<String> get connectedPlayerIds => List<String>.unmodifiable(_clients.keys);
+
+  /// Whether a rejoin token exists for [playerId] (AUDIT-02).
+  bool hasRejoinToken(String playerId) => _playerRejoinTokens.containsKey(playerId);
+
+  /// Verifies whether the provided [token] matches the stored rejoin token
+  /// for [playerId] (AUDIT-02).
+  bool verifyRejoinToken(String playerId, String? token) {
+    if (token == null || token.isEmpty) return false;
+    final stored = _playerRejoinTokens[playerId];
+    return stored != null && stored == token;
+  }
+
+  /// Remaps an existing player's rejoin token to a new socket player ID upon successful rejoin (AUDIT-02).
+  void remapRejoinToken(String oldPlayerId, String newPlayerId) {
+    final token = _playerRejoinTokens.remove(oldPlayerId);
+    if (token != null) {
+      _playerRejoinTokens[newPlayerId] = token;
+    }
+  }
+
+  /// Registers a rejoin token for a player ID (mocking/testing helper).
+  void registerRejoinToken(String playerId, String token) {
+    _playerRejoinTokens[playerId] = token;
+  }
 
   // ─────────────────────────────────────────────────────────────────────
   // Lifecycle
@@ -135,8 +196,11 @@ class MimicServer {
         }
       }
       _clients.clear();
+      _playerRejoinTokens.clear();
       _rateLimiters.clear();
       _rateLimitViolations.clear();
+      _failedHandshakesPerIp.clear();
+      _bannedIps.clear();
 
       _httpServer?.close(force: true);
       _httpServer = null;
@@ -184,9 +248,20 @@ class MimicServer {
 
   /// Handles an incoming HTTP request by upgrading it to a WebSocket.
   Future<void> _handleHttpRequest(HttpRequest request) async {
+    final clientIp = request.connectionInfo?.remoteAddress.address ?? 'unknown';
+
+    if (isIpBanned(clientIp)) {
+      _log('Rejected connection from rate-limited IP $clientIp (handshake brute-force protection)');
+      request.response
+        ..statusCode = HttpStatus.tooManyRequests
+        ..write('Too many failed handshake attempts. Try again later.')
+        ..close();
+      return;
+    }
+
     try {
       final socket = await WebSocketTransformer.upgrade(request);
-      _onClientConnected(socket);
+      _onClientConnected(socket, clientIp: clientIp);
     } catch (e) {
       _log('WebSocket upgrade failed: $e');
       request.response
@@ -197,20 +272,23 @@ class MimicServer {
   }
 
   /// Processes a newly connected WebSocket client.
-  void _onClientConnected(WebSocket socket) {
+  void _onClientConnected(WebSocket socket, {String clientIp = 'unknown'}) {
     final playerId = _generateUuidV4();
     bool isAuthenticated = (sessionToken == null || sessionToken!.isEmpty);
 
     if (!isAuthenticated) {
       final timer = Timer(const Duration(seconds: 5), () {
         _pendingSockets.remove(socket);
+        _recordFailedHandshake(clientIp);
         _rejectSocket(socket, 'Handshake timeout');
       });
       _pendingSockets[socket] = timer;
     } else {
       _clients[playerId] = socket;
+      final rejoinToken = _generateRejoinToken();
+      _playerRejoinTokens[playerId] = rejoinToken;
       _log('Player connected: $playerId (${_clients.length} total)');
-      _sendWelcome(socket, playerId);
+      _sendWelcome(socket, playerId, rejoinToken: rejoinToken);
     }
 
     socket.listen(
@@ -260,17 +338,23 @@ class MimicServer {
           try {
             final Map<String, dynamic> message =
                 jsonDecode(data) as Map<String, dynamic>;
-            if (message['type'] == 'handshake' && message['token'] == sessionToken) {
+            final incoming = normalizeToken(message['token'] as String?);
+            final expected = normalizeToken(sessionToken);
+            if (message['type'] == 'handshake' && incoming == expected) {
               isAuthenticated = true;
               _pendingSockets.remove(socket)?.cancel();
+              _failedHandshakesPerIp.remove(clientIp);
               _clients[playerId] = socket;
+              final rejoinToken = _generateRejoinToken();
+              _playerRejoinTokens[playerId] = rejoinToken;
               _log('Player authenticated: $playerId (${_clients.length} total)');
-              _sendWelcome(socket, playerId);
+              _sendWelcome(socket, playerId, rejoinToken: rejoinToken);
               return;
             }
           } catch (_) {}
 
           _pendingSockets.remove(socket)?.cancel();
+          _recordFailedHandshake(clientIp);
           _rejectSocket(socket, 'Invalid handshake token');
           return;
         }
@@ -294,11 +378,12 @@ class MimicServer {
     );
   }
 
-  void _sendWelcome(WebSocket socket, String playerId) {
+  void _sendWelcome(WebSocket socket, String playerId, {String? rejoinToken}) {
     try {
       socket.add(jsonEncode({
         'type': 'welcome',
         'playerId': playerId,
+        if (rejoinToken != null) 'rejoinToken': rejoinToken,
       }));
     } catch (e) {
       _log('Failed to send welcome to $playerId: $e');
@@ -434,6 +519,12 @@ class MimicServer {
         '${hex(bytes[8])}${hex(bytes[9])}-'
         '${hex(bytes[10])}${hex(bytes[11])}${hex(bytes[12])}'
         '${hex(bytes[13])}${hex(bytes[14])}${hex(bytes[15])}';
+  }
+
+  /// Generates a cryptographically strong 128-bit base64url rejoin token (AUDIT-02).
+  static String _generateRejoinToken() {
+    final bytes = List<int>.generate(16, (_) => _random.nextInt(256));
+    return base64Url.encode(bytes);
   }
 }
 

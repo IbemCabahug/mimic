@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
 import '../security/duress_service.dart';
+import '../crypto/vault_crypto.dart';
 
 class SetDuressPinScreen extends ConsumerStatefulWidget {
   const SetDuressPinScreen({super.key});
@@ -39,6 +40,13 @@ class _SetDuressPinScreenState extends ConsumerState<SetDuressPinScreen> {
       return;
     }
 
+    // AUDIT-05: Prevent Duress PIN from colliding with Vault Master PIN
+    final isMasterPin = await ref.read(vaultCryptoProvider).verifyPin(pin);
+    if (isMasterPin) {
+      setState(() => _error = 'Duress PIN cannot be the same as your Vault PIN');
+      return;
+    }
+
     if (!_showConfirm) {
       setState(() {
         _showConfirm = true;
@@ -56,6 +64,14 @@ class _SetDuressPinScreenState extends ConsumerState<SetDuressPinScreen> {
 
     setState(() => _isLoading = true);
     try {
+      final isMasterPin = await ref.read(vaultCryptoProvider).verifyPin(pin);
+      if (isMasterPin) {
+        setState(() {
+          _error = 'Duress PIN cannot be the same as your Vault PIN';
+          _isLoading = false;
+        });
+        return;
+      }
       await ref.read(duressServiceProvider).setFakePin(pin);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

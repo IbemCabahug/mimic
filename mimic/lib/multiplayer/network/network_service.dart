@@ -125,7 +125,6 @@ class NetworkService extends ChangeNotifier {
   String? get assignedPlayerId => _client?.assignedPlayerId;
 
   String? _sessionToken;
-  String? _handshakeToken;
 
   /// Ephemeral session token for host-guest handshake verification (SEC-04).
   String? get sessionToken => _server?.sessionToken ?? _sessionToken;
@@ -136,8 +135,45 @@ class NetworkService extends ChangeNotifier {
     }
   }
 
-  /// Ephemeral handshake token transmitted by guests when connecting (SEC-04).
+  /// Ephemeral handshake token transmitted by guests when connecting (SEC-04, AUDIT-01).
   String? handshakeToken;
+
+  /// The ephemeral rejoin token assigned to this guest by the host (AUDIT-02).
+  String? get rejoinToken => _client?.rejoinToken;
+
+  final Map<String, String> _registeredTokens = {};
+
+  /// Whether a rejoin token is recorded for [playerId] (AUDIT-02).
+  bool hasRejoinToken(String playerId) =>
+      _server?.hasRejoinToken(playerId) ?? _registeredTokens.containsKey(playerId);
+
+  /// Verifies a rejoin token for an existing player (host only, AUDIT-02).
+  bool verifyRejoinToken(String playerId, String? token) {
+    if (token == null || token.isEmpty) return false;
+    if (_server != null) {
+      return _server!.verifyRejoinToken(playerId, token);
+    }
+    return _registeredTokens[playerId] == token;
+  }
+
+  /// Remaps an existing player's rejoin token to a newly reconnected socket ID (host only, AUDIT-02).
+  void remapRejoinToken(String oldPlayerId, String newPlayerId) {
+    if (_server != null) {
+      _server!.remapRejoinToken(oldPlayerId, newPlayerId);
+      return;
+    }
+    final t = _registeredTokens.remove(oldPlayerId);
+    if (t != null) _registeredTokens[newPlayerId] = t;
+  }
+
+  /// Manually registers a rejoin token (useful for mocking/testing, host only).
+  void registerRejoinToken(String playerId, String token) {
+    if (_server != null) {
+      _server!.registerRejoinToken(playerId, token);
+      return;
+    }
+    _registeredTokens[playerId] = token;
+  }
 
   /// Set the active session handshake token for the host server (SEC-04).
   void setSessionToken(String? token) {
@@ -196,7 +232,7 @@ class NetworkService extends ChangeNotifier {
       }
 
       _client = MimicClient();
-      await _client!.connect(ip, port, handshakeToken: _handshakeToken);
+      await _client!.connect(ip, port, handshakeToken: handshakeToken);
 
       if (!_client!.isConnected) {
         _log('Failed to connect to $ip:$port');
@@ -313,6 +349,8 @@ class NetworkService extends ChangeNotifier {
     _server = null;
     _client = null;
     _role = NetworkRole.none;
+    handshakeToken = null;
+    _sessionToken = null;
 
     _log('Session ended — role reset to none.');
     notifyListeners();

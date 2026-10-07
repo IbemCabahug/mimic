@@ -396,15 +396,18 @@ class AppRouter {
         String lastRoomCode = '';
         String lastPlayerName = '';
         String lastPlayerId = '';
+        String? lastRejoinToken;
 
         if (args is Map<String, dynamic>) {
           lastRoomCode = args['lastRoomCode'] ?? '';
           lastPlayerName = args['lastPlayerName'] ?? '';
           lastPlayerId = args['lastPlayerId'] ?? '';
+          lastRejoinToken = args['lastRejoinToken'];
         } else if (args is Map) {
           lastRoomCode = args['lastRoomCode']?.toString() ?? '';
           lastPlayerName = args['lastPlayerName']?.toString() ?? '';
           lastPlayerId = args['lastPlayerId']?.toString() ?? '';
+          lastRejoinToken = args['lastRejoinToken']?.toString();
         }
 
         return MaterialPageRoute(
@@ -412,6 +415,7 @@ class AppRouter {
             lastRoomCode: lastRoomCode,
             lastPlayerName: lastPlayerName,
             lastPlayerId: lastPlayerId,
+            lastRejoinToken: lastRejoinToken,
           ),
           settings: settings,
         );

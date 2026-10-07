@@ -42,6 +42,7 @@ class _MultiplayerMenuScreenState extends ConsumerState<MultiplayerMenuScreen>
   String? _storedRoomCode;
   String? _storedPlayerName;
   String? _storedPlayerId;
+  String? _storedRejoinToken;
 
   // ─── Entrance animation ───────────────────────────────────────────────
   late AnimationController _entranceController;
@@ -91,6 +92,7 @@ class _MultiplayerMenuScreenState extends ConsumerState<MultiplayerMenuScreen>
       _storedRoomCode = _prefs?.getString('last_room_code');
       _storedPlayerName = _prefs?.getString('last_player_name');
       _storedPlayerId = _prefs?.getString('last_player_id');
+      _storedRejoinToken = _prefs?.getString('last_rejoin_token');
 
       if (!mounted) return;
 
@@ -157,6 +159,7 @@ class _MultiplayerMenuScreenState extends ConsumerState<MultiplayerMenuScreen>
           lastRoomCode: _storedRoomCode!,
           lastPlayerName: _storedPlayerName!,
           lastPlayerId: _storedPlayerId!,
+          lastRejoinToken: _storedRejoinToken,
         ),
       ),
     );

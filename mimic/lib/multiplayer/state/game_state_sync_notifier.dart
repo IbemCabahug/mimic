@@ -2,12 +2,15 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/game/state/game_state.dart';
 import 'package:mimic/multiplayer/game_sync.dart';
 import 'package:mimic/multiplayer/network/network_service.dart';
 
 export 'package:mimic/core/providers/provider_registration.dart' show gameStateSyncProvider;
+
+void _log(String message) => debugPrint('[GameStateSyncNotifier] $message');
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -84,7 +87,15 @@ class GameStateSyncNotifier extends StateNotifier<GameSyncState> {
       final type = message['type'] as String?;
       switch (type) {
         case 'startGame':
-          _initializeGame();
+          // VULN-SEC-01: Only allow local host execution; reject remote guest sockets.
+          final startSenderId = message['senderId'] as String?;
+          if (startSenderId != null && startSenderId != 'host') {
+            _log('VULN-SEC-01: Discarded unauthorized startGame frame from remote socket $startSenderId');
+            break;
+          }
+          if (networkService.role == NetworkRole.host) {
+            _initializeGame();
+          }
           break;
         case 'wordAck':
           final senderId = message['senderId'] as String?;
@@ -111,8 +122,9 @@ class GameStateSyncNotifier extends StateNotifier<GameSyncState> {
           final senderId = message['senderId'] as String?;
           final originalPlayerId = message['playerId'] as String?;
           final name = message['name'] as String? ?? 'Guest';
+          final rejoinToken = message['rejoinToken'] as String?;
           if (senderId != null) {
-            _handleRejoin(senderId, originalPlayerId, name);
+            _handleRejoin(senderId, originalPlayerId, name, rejoinToken: rejoinToken);
           }
           break;
         case 'playerLeft':
@@ -237,6 +249,7 @@ class GameStateSyncNotifier extends StateNotifier<GameSyncState> {
       final serialized = GameSync.serializeSanitizedState(
         gameState,
         forPlayerId: guestId,
+        isPro: false,
       );
 
       networkService.sendTo(guestId, {
@@ -278,10 +291,45 @@ class GameStateSyncNotifier extends StateNotifier<GameSyncState> {
     }
   }
 
-  void _handleRejoin(String newPlayerId, String? originalPlayerId, String name) {
+  void _handleRejoin(
+    String newPlayerId,
+    String? originalPlayerId,
+    String name, {
+    String? rejoinToken,
+  }) {
     if (networkService.role != NetworkRole.host) return;
 
     final oldId = originalPlayerId ?? '';
+
+    // VULN-01: A remote network client can NEVER hijack or rejoin the local host slot.
+    if (oldId == 'host') {
+      _log('VULN-01: Unauthorized attempt to rejoin local host slot from socket $newPlayerId. Rejecting.');
+      networkService.sendTo(newPlayerId, {
+        'type': 'rejoinRejected',
+        'reason': 'Unauthorized: host slot cannot be claimed remotely',
+      });
+      return;
+    }
+
+    // AUDIT-02 & VULN-01: Protect against identity & role/word hijacking.
+    // If originalPlayerId belongs to an active player, require valid rejoinToken (fail-closed).
+    final bool isKnownPlayer = oldId.isNotEmpty &&
+        (state.players.containsKey(oldId) ||
+            gameStateNotifier.state.players.any((p) => p.id == oldId));
+
+    if (isKnownPlayer) {
+      final hasToken = networkService.hasRejoinToken(oldId);
+      final isValidToken = hasToken && networkService.verifyRejoinToken(oldId, rejoinToken);
+      if (!isValidToken) {
+        _log('VULN-01: Unauthorized rejoin attempt for player $oldId from socket $newPlayerId (missing or invalid token). Rejecting.');
+        networkService.sendTo(newPlayerId, {
+          'type': 'rejoinRejected',
+          'reason': 'Unauthorized: invalid or missing rejoin token',
+        });
+        return;
+      }
+      networkService.remapRejoinToken(oldId, newPlayerId);
+    }
 
     // Remap player ID in GameState
     if (oldId.isNotEmpty && oldId != newPlayerId) {
@@ -335,10 +383,11 @@ class GameStateSyncNotifier extends StateNotifier<GameSyncState> {
       }
     }
 
-    // Send rejoinAccepted message directly to rejoining guest with sanitized state (SEC-03)
+    // Send rejoinAccepted message directly to rejoining guest with sanitized state (SEC-03 & VULN-05)
     final sanitizedState = GameSync.serializeSanitizedState(
       gameStateNotifier.state,
       forPlayerId: newPlayerId,
+      isPro: false,
     );
 
     networkService.sendTo(newPlayerId, {

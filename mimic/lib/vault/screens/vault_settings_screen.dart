@@ -1,5 +1,4 @@
 // mimic/lib/vault/screens/vault_settings_screen.dart
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,12 +15,14 @@ import '../../core/providers/provider_registration.dart' show vaultConcealServic
 import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
 import '../security/vault_conceal_service.dart';
+import '../security/duress_service.dart';
 import '../widgets/vault_scaffold.dart';
 import 'gesture_setup_screen.dart';
 import '../services/pro_status_service.dart';
 import '../services/quick_entry_service.dart';
 import '../services/vault_wipe_service.dart';
 import '../services/video_thumbnail_service.dart';
+import '../services/intruder_service.dart';
 import '../trigger/gesture_store.dart';
 
 class VaultSettingsScreen extends ConsumerStatefulWidget {
@@ -37,6 +38,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   bool _isLoadingBiometric = false;
   bool _shakeEnabled = false;
   ShakeSensitivity _shakeSensitivity = ShakeSensitivity.medium;
+  bool _intruderCaptureEnabled = false;
   // F7: the persisted foreground-idle choice in whole minutes; null until
   // loaded. Pro-gated options are offered only when [ref] reports Pro.
   int? _idleTimeoutMinutes;
@@ -52,6 +54,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     _checkRecoveryBlob();
     _checkGesture();
     _loadShakePref();
+    _loadIntruderCapturePref();
     _loadIdleTimeoutPref();
     _loadQuickEntryPref();
   }
@@ -65,6 +68,45 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           prefs.getString('shake_sensitivity'),
         );
       });
+    }
+  }
+
+  Future<void> _loadIntruderCapturePref() async {
+    final enabled = await IntruderService.isEnabled();
+    if (mounted) {
+      setState(() => _intruderCaptureEnabled = enabled);
+    }
+  }
+
+  Future<void> _onIntruderCaptureToggle(bool value) async {
+    if (value) {
+      final agreed = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Intruder Photo Capture'),
+          content: const Text(
+            'When enabled, Mimic uses the front camera to take a photo after 3 failed PIN attempts.\n\n'
+            '• Photos are encrypted with AES-256 and stored strictly on this device.\n'
+            '• No photos or data are ever transmitted over the internet or cloud.\n'
+            '• You can view or delete captured photos anytime in Intruder Logs.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Enable'),
+            ),
+          ],
+        ),
+      );
+      if (agreed != true) return;
+    }
+    await IntruderService.setEnabled(value);
+    if (mounted) {
+      setState(() => _intruderCaptureEnabled = value);
     }
   }
 
@@ -493,11 +535,29 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                 });
 
                 try {
+                  // AUDIT-05: Prevent Master PIN from colliding with active Duress PIN
+                  final duressService = ref.read(duressServiceProvider);
+                  final isDuressPin = await duressService.isFakePin(newPin);
+                  if (isDuressPin) {
+                    if (dialogContext.mounted) {
+                      setDialogState(() {
+                        isProcessing = false;
+                        error = 'Vault PIN cannot be the same as Duress PIN';
+                      });
+                    }
+                    return;
+                  }
+
                   final crypto = ref.read(vaultCryptoProvider);
                   // Preserve the data key (DEK): changePin re-wraps the SAME key under the new PIN.
                   // NEVER delete the salt/hash or call initialize() here — that creates a new key
                   // and permanently orphans all encrypted photos, videos, and documents.
                   await crypto.changePin(newPin);
+
+                  // AUDIT-04: Invalidate biometric secret on PIN change
+                  try {
+                    await ref.read(biometricUnlockStoreProvider).clearBioSecret();
+                  } catch (_) {}
 
                   if (dialogContext.mounted) {
                     Navigator.of(dialogContext).pop();
@@ -1002,6 +1062,19 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
             onTap: () {
               Navigator.of(context).pushNamed('/vault-breakin-logs');
             },
+          ),
+          _buildSettingsTile(
+            icon: Icons.camera_alt_outlined,
+            title: 'Capture Intruder Photos',
+            subtitle: _intruderCaptureEnabled
+                ? 'Enabled: front camera captures a photo after 3 failed attempts (stored locally)'
+                : 'Disabled: no camera photos taken on failed attempts',
+            onTap: () => _onIntruderCaptureToggle(!_intruderCaptureEnabled),
+            trailing: Switch(
+              value: _intruderCaptureEnabled,
+              onChanged: (val) => _onIntruderCaptureToggle(val),
+              activeThumbColor: VaultColors.accent,
+            ),
           ),
           _buildSettingsTile(
             icon: Icons.speed,
