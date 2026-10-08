@@ -13,6 +13,8 @@ import 'package:mimic/vault/security/duress_service.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/security/auto_lock.dart';
+import 'package:mimic/vault/security/secret_entry_trail.dart';
+import 'package:mimic/core/router/app_router.dart';
 
 class FakePlatformService implements PlatformService {
   final Map<String, String> store = {};
@@ -693,5 +695,103 @@ void main() {
 
     // pin_exit remains available and visible
     expect(find.byKey(const ValueKey('pin_exit')), findsOneWidget);
+  });
+
+  testWidgets('P4: tapping pin_exit when opened from voting returns to voting in a single tap', (WidgetTester tester) async {
+    SecretEntryTrail.setOrigin('/voting');
+
+    final fakePlatform = FakePlatformService();
+    fakePlatform.store['vault_salt'] = 'some_salt';
+    final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          vaultCryptoProvider.overrideWith((ref) => crypto),
+        ],
+        child: MaterialApp(
+          initialRoute: '/',
+          routes: {
+            '/': (_) => const Scaffold(body: Text('GAME_HOME')),
+            '/voting': (_) => const Scaffold(body: Text('VOTING_SCREEN')),
+            '/vault-pin': (_) => const PinScreen(),
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final navigator = tester.state<NavigatorState>(find.byType(Navigator).first);
+    navigator.pushNamed('/voting');
+    await tester.pumpAndSettle();
+    expect(find.text('VOTING_SCREEN'), findsOneWidget);
+
+    navigator.pushNamed('/vault-pin');
+    await tester.pumpAndSettle();
+    expect(find.byType(PinScreen), findsOneWidget);
+
+    final exitButton = find.byKey(const ValueKey('pin_exit'));
+    expect(exitButton, findsOneWidget);
+
+    await tester.tap(exitButton);
+    await tester.pumpAndSettle();
+
+    // Exactly one tap lands back on VOTING_SCREEN
+    expect(find.text('VOTING_SCREEN'), findsOneWidget);
+    expect(find.byType(PinScreen), findsNothing);
+    expect(find.text('GAME_HOME'), findsNothing);
+  });
+
+  testWidgets('P5: locking vault preserves voting route, and tapping pin_exit returns to voting in a single tap', (WidgetTester tester) async {
+    SecretEntryTrail.setOrigin('/voting');
+
+    final fakePlatform = FakePlatformService();
+    fakePlatform.store['vault_salt'] = 'some_salt';
+    final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          vaultCryptoProvider.overrideWith((ref) => crypto),
+        ],
+        child: MaterialApp(
+          initialRoute: '/',
+          routes: {
+            '/': (_) => const Scaffold(body: Text('GAME_HOME')),
+            '/voting': (_) => const Scaffold(body: Text('VOTING_SCREEN')),
+            '/vault-pin': (_) => const PinScreen(),
+            '/vault-home': (_) => const Scaffold(body: Text('VAULT_HOME')),
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final navigator = tester.state<NavigatorState>(find.byType(Navigator).first);
+    navigator.pushNamed('/voting');
+    await tester.pumpAndSettle();
+
+    navigator.pushNamed('/vault-home');
+    await tester.pumpAndSettle();
+    expect(find.text('VAULT_HOME'), findsOneWidget);
+
+    // Simulate locking vault using isNotVaultRoute predicate
+    navigator.pushNamedAndRemoveUntil(
+      AppRouter.vaultPinRoute,
+      AppRouter.isNotVaultRoute,
+    );
+    await tester.pumpAndSettle();
+    expect(find.byType(PinScreen), findsOneWidget);
+
+    // Single tap on pin_exit must return to voting, not game home
+    final exitButton = find.byKey(const ValueKey('pin_exit'));
+    await tester.tap(exitButton);
+    await tester.pumpAndSettle();
+
+    expect(find.text('VOTING_SCREEN'), findsOneWidget);
+    expect(find.byType(PinScreen), findsNothing);
+    expect(find.text('GAME_HOME'), findsNothing);
   });
 }

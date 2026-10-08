@@ -102,6 +102,13 @@ class AppRouter {
   static const String multiplayerWordRevealRoute = '/multiplayer/word-reveal';
   static const String multiplayerVotingRoute = '/multiplayer/voting';
   static const String multiplayerRejoinRoute = '/multiplayer/rejoin';
+  /// Predicate for [Navigator.pushNamedAndRemoveUntil] when locking the vault.
+  /// Removes all vault screens while preserving any underlying game screens
+  /// (e.g. '/', '/voting', '/results', '/multiplayer/*').
+  static bool isNotVaultRoute(Route<dynamic> route) {
+    final name = route.settings.name;
+    return name != null && !name.startsWith('/vault-');
+  }
 
   /// Generates the routes dynamically to handle guards and parameter passing.
   static Route<dynamic>? onGenerateRoute(RouteSettings settings) {
@@ -461,9 +468,12 @@ class VaultRouteGuard extends ConsumerWidget {
 
     if (requireUnlocked && !crypto.isUnlocked) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        final currentRoute = ModalRoute.of(context);
+        if (currentRoute == null || !currentRoute.isCurrent) return;
         Navigator.of(context).pushNamedAndRemoveUntil(
           AppRouter.vaultPinRoute,
-          (route) => route.isFirst,
+          AppRouter.isNotVaultRoute,
         );
       });
       return const Scaffold(

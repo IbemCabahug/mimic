@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../security/auto_lock.dart';
 import '../crypto/vault_crypto.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/router/app_router.dart';
 
 /// A consistent Scaffold wrapper for every vault screen.
 /// Automatically applies vaultTheme and wraps the body in AutoLockWrapper.
@@ -59,8 +60,8 @@ class VaultScaffold extends ConsumerWidget {
                     ref.read(vaultCryptoProvider).lock();
                     AutoLock().dispose();
                     Navigator.of(context).pushNamedAndRemoveUntil(
-                      '/vault-pin',
-                      (route) => false,
+                      AppRouter.vaultPinRoute,
+                      AppRouter.isNotVaultRoute,
                     );
                   },
                 ),

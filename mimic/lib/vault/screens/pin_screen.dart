@@ -13,6 +13,7 @@ import '../security/auto_lock.dart';
 import '../security/duress_service.dart';
 import '../security/vault_conceal_service.dart';
 import '../security/lockout_service.dart';
+import '../security/secret_entry_trail.dart';
 import '../crypto/keystore_service.dart';
 import 'wiped_vault_screen.dart';
 import 'recovery_phrase_screen.dart';
@@ -510,11 +511,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           key: const ValueKey('pin_exit'),
           icon: const Icon(Icons.close, color: Color(0xFF7F77DD)),
           onPressed: () {
-            if (Navigator.of(context).canPop()) {
-              Navigator.of(context).pop();
-            } else {
-              Navigator.of(context).pushReplacementNamed('/');
-            }
+            exitSecretScreenToOrigin(context);
           },
         ),
         title: Text(

@@ -155,14 +155,6 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
 
   @override
   Widget build(BuildContext context) {
-    final crypto = ref.watch(vaultCryptoProvider);
-    if (!crypto.isUnlocked && !_isHiding) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        Navigator.of(context).pushReplacementNamed('/vault-pin');
-      });
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
     return VaultScaffold(
       title: null,
       showBackButton: false,
