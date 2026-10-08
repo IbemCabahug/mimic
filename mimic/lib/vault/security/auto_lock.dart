@@ -358,8 +358,8 @@ class AutoLock with WidgetsBindingObserver {
     await wipeTransientPlaintext();
 
     AutoLock.navigatorKey.currentState?.pushNamedAndRemoveUntil(
-      '/vault-pin',
-      (route) => false,
+      router.AppRouter.vaultPinRoute,
+      router.AppRouter.isNotVaultRoute,
     );
 
     dispose();

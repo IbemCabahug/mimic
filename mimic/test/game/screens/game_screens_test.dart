@@ -34,6 +34,7 @@ import 'package:mimic/multiplayer/network/network_service.dart';
 import 'package:mimic/vault/services/pro_status_service.dart';
 import 'package:mimic/vault/services/quick_entry_service.dart';
 import 'package:mimic/vault/security/secret_entry_trail.dart';
+import 'package:mimic/core/router/app_router.dart';
 import 'package:mimic/game/game.dart';
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1027,6 +1028,51 @@ void main() {
           reason:
               'Gateway entry must resume the round it was opened from, '
               'not rebuild the game home');
+    });
+
+    testWidgets(
+        'voting origin -> unlock vault -> lock vault -> duress admin panel -> RETURN TO GAME returns to live voting round',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      SecretEntryTrail.setOrigin(MimicGame.votingRoute);
+
+      final container = ProviderContainer();
+      await tester.pumpWidget(buildOriginTestApp(container));
+      await pumpScreen(tester);
+
+      final navigator =
+          tester.state<NavigatorState>(find.byType(Navigator).first);
+      navigator.pushNamed('/voting');
+      await pumpScreen(tester);
+
+      // Simulates unlocking vault to vault home
+      navigator.pushNamed('/vault-home');
+      await pumpScreen(tester);
+
+      // Simulates locking vault with non-vault preserving predicate
+      navigator.pushNamedAndRemoveUntil(
+        '/vault-pin',
+        AppRouter.isNotVaultRoute,
+      );
+      await pumpScreen(tester);
+
+      // Entering duress PIN replaces PIN route with admin panel
+      navigator.pushReplacementNamed('/admin-panel');
+      await pumpScreen(tester);
+
+      await tester.tap(find.text('RETURN TO GAME'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+
+      expect(find.byType(AdminPanelScreen), findsNothing);
+      expect(find.text('VOTING_SCREEN'), findsOneWidget,
+          reason: 'Must return to the live voting round after vault lock and duress PIN');
+      expect(find.text('GAME_HOME'), findsNothing);
     });
 
     testWidgets(

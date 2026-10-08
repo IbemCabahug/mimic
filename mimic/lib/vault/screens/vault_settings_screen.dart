@@ -17,6 +17,7 @@ import '../security/auto_lock.dart';
 import '../security/vault_conceal_service.dart';
 import '../security/duress_service.dart';
 import '../widgets/vault_scaffold.dart';
+import '../../core/router/app_router.dart';
 import 'gesture_setup_screen.dart';
 import '../services/pro_status_service.dart';
 import '../services/quick_entry_service.dart';
@@ -468,7 +469,10 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     crypto.lock();
     PanicMode().dispose();
     AutoLock().dispose();
-    Navigator.of(context).pushNamedAndRemoveUntil('/vault-pin', (route) => false);
+    Navigator.of(context).pushNamedAndRemoveUntil(
+      AppRouter.vaultPinRoute,
+      AppRouter.isNotVaultRoute,
+    );
   }
 
   void _showChangePinDialog() {

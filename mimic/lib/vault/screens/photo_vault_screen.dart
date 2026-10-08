@@ -964,17 +964,6 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final crypto = ref.watch(vaultCryptoProvider);
-    if (!crypto.isUnlocked) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        final route = ModalRoute.of(context);
-        if (route == null || !route.isCurrent) return;
-        Navigator.of(context).pushReplacementNamed('/vault-pin');
-      });
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
-
     return VaultScaffold(
       title: 'Photos',
       actions: _selection.isNotEmpty
