@@ -34,7 +34,6 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
   int _noteCount = 0;
   int _videoCount = 0;
   int _documentCount = 0;
-  bool _isHiding = false;
 
   @override
   void initState() {

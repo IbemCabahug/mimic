@@ -3,8 +3,12 @@
 -keep class io.flutter.plugins.** { *; }
 -dontwarn io.flutter.embedding.**
 
-# --- App entry / disguise alias (manifest-referenced; explicit for safety) ---
--keep class com.ibem.mimic.MainActivity { *; }
+# --- App entry / disguise alias & Keystore channel ---
+-keep class com.ibem.mimic.** { *; }
+
+# --- Google Play In-App Billing ---
+-keep class com.android.billingclient.api.** { *; }
+-dontwarn com.android.billingclient.api.**
 
 # --- flutter_secure_storage + Tink + AndroidX security-crypto ---
 -keep class com.it_nomads.fluttersecurestorage.** { *; }
