@@ -5,8 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../crypto/vault_crypto.dart';
 import '../widgets/vault_scaffold.dart';
 import '../security/duress_service.dart';
-import '../security/auto_lock.dart';
-import '../security/panic_mode.dart';
 import '../../core/providers/biometric_providers.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -137,8 +135,6 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
       } catch (_) {}
 
       if (mounted) {
-        AutoLock().init(context, ref);
-        PanicMode().init(context, ref);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('PIN updated and recovery phrase secured successfully'),
