@@ -2,7 +2,7 @@ name: mimic
 description: "A new Flutter project."
 publish_to: 'none'
 
-version: 1.4.4+3011
+version: 1.4.4+3012
 
 environment:
   sdk: ^3.12.0
