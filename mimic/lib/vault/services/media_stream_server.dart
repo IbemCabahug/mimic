@@ -26,6 +26,12 @@ class MediaStreamServer {
     _decryptRange = decryptRange;
   }
 
+  /// Whether the server has had its dependencies configured.
+  bool get isInitialized =>
+      _videoVaultService != null &&
+      _resolveVaultFile != null &&
+      _decryptRange != null;
+
   /// Returns the streamable loopback URL for the given video ID.
   /// Starts the server lazily if not already running.
   Future<Uri> urlFor(String id) async {

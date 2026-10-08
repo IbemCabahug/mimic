@@ -321,7 +321,8 @@ Future<Uint8List> derivePbkdf2Async(
 
   if (_isNativePbkdf2Verified == true) {
     try {
-      return await nativeDerive(password, salt, iterations, keyLength);
+      final res = await nativeDerive(password, salt, iterations, keyLength);
+      return Uint8List.fromList(res);
     } catch (e) {
       return _computePointycastlePbkdf2(password, salt, iterations, keyLength);
     }

@@ -74,7 +74,7 @@ void main() {
     test('valid SHA-256 RSA signature over valid payload passes verification', () {
       final payload = json.encode({
         'orderId': 'GPA.1234-5678',
-        'packageName': 'com.example.mimic',
+        'packageName': 'com.ibem.mimic',
         'productId': kProProductId,
         'purchaseTime': 1700000000,
       });
@@ -170,7 +170,25 @@ void main() {
       final verifier = GooglePlaySignatureVerifier(
         base64PublicKey: testBase64PublicKey,
         expectedProductId: kProProductId,
-        expectedPackageName: 'com.example.mimic',
+        expectedPackageName: 'com.ibem.mimic',
+      );
+
+      final purchase = createPurchase(localJson: payload, signature: sig);
+      expect(verifier.verify(purchase), isFalse);
+    });
+
+    test('payload with legacy packageName com.example.mimic fails verification when expected is com.ibem.mimic', () {
+      final payload = json.encode({
+        'orderId': 'GPA.1234-5678',
+        'packageName': 'com.example.mimic',
+        'productId': kProProductId,
+      });
+      final sig = signData(payload);
+
+      final verifier = GooglePlaySignatureVerifier(
+        base64PublicKey: testBase64PublicKey,
+        expectedProductId: kProProductId,
+        expectedPackageName: 'com.ibem.mimic',
       );
 
       final purchase = createPurchase(localJson: payload, signature: sig);

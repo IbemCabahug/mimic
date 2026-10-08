@@ -7,6 +7,9 @@ import 'package:chewie/chewie.dart';
 import '../security/vault_error_ui.dart';
 import '../crypto/vault_crypto.dart';
 import '../services/media_stream_server.dart';
+import '../services/video_vault_service.dart';
+import '../../core/services/platform_service.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../security/auto_lock.dart';
 import 'player_failure_text.dart';
 
@@ -37,6 +40,14 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
 
   Future<void> _initializePlayer() async {
     try {
+      if (!MediaStreamServer.instance.isInitialized) {
+        final platform = kIsWeb ? WebPlatformService() : AndroidPlatformService();
+        MediaStreamServer.instance.init(
+          videoVaultService: VideoVaultService(platform, VaultCrypto.instance),
+          resolveVaultFile: platform.resolveVaultFile,
+          decryptRange: (f, o, l) => VaultCrypto.instance.decryptRangeSystem(f, o, l),
+        );
+      }
       // H16/F4: the conversion's typed fate must reach this screen instead of
       // looking like an endless spinner. streamableUrlFor is the only caller
       // of ensureVideoStreamable, so this is where the outcome arrives.
@@ -147,6 +158,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
       if (!mounted || _disposed) return;
       setState(() {
         _hasError = true;
+        _errorMessage = 'Error playing video: ${e.toString().replaceAll("Exception: ", "")}';
       });
     }
   }

@@ -557,9 +557,16 @@ class VaultCrypto extends ChangeNotifier {
       } catch (_) {}
       rethrow;
     } finally {
-      newCandidateKey.fillRange(0, newCandidateKey.length, 0);
-      newKek.fillRange(0, newKek.length, 0);
+      _safeZero(newCandidateKey);
+      _safeZero(newKek);
     }
+  }
+
+  static void _safeZero(Uint8List? key) {
+    if (key == null) return;
+    try {
+      key.fillRange(0, key.length, 0);
+    } catch (_) {}
   }
 
   Future<void> _changePinInternal(String newPin, Uint8List capturedDek, int capturedEpoch) async {
@@ -582,7 +589,7 @@ class VaultCrypto extends ChangeNotifier {
       _needsHardwareMigration = false;
       notifyListeners();
     } else {
-      dek.fillRange(0, dek.length, 0);
+      _safeZero(dek);
     }
   }
 
@@ -1408,12 +1415,13 @@ class VaultCrypto extends ChangeNotifier {
   Future<Uint8List> _deriveKey(String pin, String saltBase64, [int iterations = kPbkdf2Iterations]) async {
     final passwordBytes = Uint8List.fromList(utf8.encode(pin));
     final saltBytes = base64Decode(saltBase64);
-    return await derivePbkdf2Async(
+    final key = await derivePbkdf2Async(
       passwordBytes,
       saltBytes,
       iterations,
       kDerivedKeyLength,
     );
+    return Uint8List.fromList(key);
   }
 
   BlockCipher _createCipher(Uint8List key, Uint8List iv, bool forEncryption) {

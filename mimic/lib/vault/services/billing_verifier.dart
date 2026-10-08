@@ -66,7 +66,7 @@ class GooglePlaySignatureVerifier implements PurchaseVerifier {
   /// Expected product identifier (defaults to `kProProductId`).
   final String expectedProductId;
 
-  /// Optional expected package name (e.g. `com.example.mimic` or `com.ibem.mimic`).
+  /// Optional expected package name (e.g. `com.ibem.mimic`).
   final String? expectedPackageName;
 
   /// Whether to allow purchases when no public key has been configured.

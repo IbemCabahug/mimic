@@ -1,4 +1,4 @@
-package com.example.mimic
+package com.ibem.mimic
 
 import android.content.ComponentName
 import android.content.pm.PackageManager
