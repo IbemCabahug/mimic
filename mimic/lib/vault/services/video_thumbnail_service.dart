@@ -8,6 +8,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'media_stream_server.dart';
 import 'video_vault_service.dart';
+import '../../core/services/platform_service.dart';
+import '../crypto/vault_crypto.dart';
 
 /// F23 — thumbnails for the video vault, in memory only.
 ///
@@ -155,6 +157,14 @@ class VideoThumbnailService {
 /// first. c2 blobs stream through the vault's own loopback server.
 Future<Uri?> resolveThumbnailStreamUrl(VideoVaultService vault, String id) async {
   if (!await vault.isCtrV2Blob(id)) return null;
+  if (!MediaStreamServer.instance.isInitialized) {
+    final platform = kIsWeb ? WebPlatformService() : AndroidPlatformService();
+    MediaStreamServer.instance.init(
+      videoVaultService: vault,
+      resolveVaultFile: platform.resolveVaultFile,
+      decryptRange: (f, o, l) => VaultCrypto.instance.decryptRangeSystem(f, o, l),
+    );
+  }
   final (uri, _) = await MediaStreamServer.instance.streamableUrlFor(id);
   return uri;
 }

@@ -33,7 +33,7 @@ Future<Uint8List> nativePbkdf2(
     'keyLength': keyLength,
   });
   if (result == null) throw Exception('PBKDF2 derivation failed or returned null');
-  return result;
+  return Uint8List.fromList(result);
 }
 
 class AndroidKeystoreService implements KeystoreService, BiometricKeystoreService {

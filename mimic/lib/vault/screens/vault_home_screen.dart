@@ -14,6 +14,8 @@ import '../services/backup_reminder_service.dart';
 import '../services/onboarding_service.dart';
 import '../widgets/vault_scaffold.dart';
 import '../security/shake_wipe_service.dart';
+import '../security/auto_lock.dart';
+import '../security/panic_mode.dart';
 import '../widgets/blood_splatter_overlay.dart';
 import '../widgets/backup_out_of_date_banner.dart';
 
@@ -39,6 +41,12 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        AutoLock().init(context, ref);
+        PanicMode().init(context, ref);
+      }
+    });
     _shakeWipeService = ref.read(shakeWipeServiceProvider);
     _fadeController = AnimationController(
       duration: const Duration(milliseconds: 600),

@@ -203,7 +203,6 @@ void main() {
         AppRouter.vaultRecoveryPhraseRoute,
         AppRouter.vaultSetDuressPinRoute,
         AppRouter.vaultExportRoute,
-        AppRouter.vaultImportRoute,
         AppRouter.vaultVideosRoute,
         AppRouter.vaultDiagnosticsRoute,
         AppRouter.vaultManualRoute,
@@ -224,6 +223,7 @@ void main() {
         AppRouter.vaultPinRoute,
         AppRouter.vaultEnterRecoveryRoute,
         AppRouter.vaultResetPinRoute,
+        AppRouter.vaultImportRoute,
       ];
 
       for (final routeName in unlockRoutes) {

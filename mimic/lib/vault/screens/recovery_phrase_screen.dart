@@ -5,6 +5,7 @@ import '../crypto/vault_crypto.dart';
 import '../crypto/recovery_phrase.dart';
 import '../widgets/vault_scaffold.dart';
 import '../security/auto_lock.dart';
+import '../security/panic_mode.dart';
 import '../../core/theme/app_theme.dart';
 
 class RecoveryPhraseScreen extends ConsumerStatefulWidget {
@@ -481,6 +482,8 @@ class RecoveryPhraseScreenState extends ConsumerState<RecoveryPhraseScreen> {
                 await ref.read(vaultCryptoProvider).migrateToHardwareBinding();
               }
               if (!mounted) return;
+              AutoLock().init(context, ref);
+              PanicMode().init(context, ref);
               Navigator.of(context).pushReplacementNamed('/vault-home');
             } else {
               Navigator.of(context).pop();

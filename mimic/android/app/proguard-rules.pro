@@ -4,7 +4,7 @@
 -dontwarn io.flutter.embedding.**
 
 # --- App entry / disguise alias (manifest-referenced; explicit for safety) ---
--keep class com.example.mimic.MainActivity { *; }
+-keep class com.ibem.mimic.MainActivity { *; }
 
 # --- flutter_secure_storage + Tink + AndroidX security-crypto ---
 -keep class com.it_nomads.fluttersecurestorage.** { *; }

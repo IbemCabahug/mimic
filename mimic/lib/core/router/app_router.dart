@@ -312,7 +312,7 @@ class AppRouter {
       case vaultImportRoute:
         return MaterialPageRoute(
           builder: (_) => const VaultRouteGuard(
-            requireUnlocked: true,
+            requireUnlocked: false,
             child: SecureGuard(child: ImportVaultScreen()),
           ),
           settings: settings,

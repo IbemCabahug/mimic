@@ -129,7 +129,7 @@ void main() {
       // Emit a fake unverified purchase payload
       final fakeReceipt = json.encode({
         'orderId': 'FAKE.1234',
-        'packageName': 'com.example.mimic',
+        'packageName': 'com.ibem.mimic',
         'productId': kProProductId,
       });
 

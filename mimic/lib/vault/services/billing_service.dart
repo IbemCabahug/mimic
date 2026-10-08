@@ -50,7 +50,7 @@ const String kGooglePlayPublicKey =
 
 /// Optional expected package name passed at build-time via `--dart-define=GOOGLE_PLAY_PACKAGE_NAME=...`.
 const String kGooglePlayPackageName =
-    String.fromEnvironment('GOOGLE_PLAY_PACKAGE_NAME', defaultValue: '');
+    String.fromEnvironment('GOOGLE_PLAY_PACKAGE_NAME', defaultValue: 'com.ibem.mimic');
 
 /// The narrow slice of the in_app_purchase plugin this service needs,
 /// abstracted so tests can drive the purchase stream, fake products and
@@ -62,6 +62,34 @@ abstract interface class BillingStore {
   Future<void> restorePurchases();
   Future<void> completePurchase(PurchaseDetails purchase);
   Stream<List<PurchaseDetails>> get purchaseStream;
+}
+
+/// A no-op billing store used for FOSS distributions where Google Play is bypassed.
+class NoOpBillingStore implements BillingStore {
+  const NoOpBillingStore();
+
+  @override
+  Stream<List<PurchaseDetails>> get purchaseStream => const Stream.empty();
+
+  @override
+  Future<bool> isAvailable() async => false;
+
+  @override
+  Future<ProductDetailsResponse> queryProductDetails(Set<String> ids) async =>
+      ProductDetailsResponse(
+        productDetails: const <ProductDetails>[],
+        notFoundIDs: ids.toList(),
+      );
+
+  @override
+  Future<bool> buyNonConsumable({required PurchaseParam purchaseParam}) async =>
+      false;
+
+  @override
+  Future<void> restorePurchases() async {}
+
+  @override
+  Future<void> completePurchase(PurchaseDetails purchase) async {}
 }
 
 /// The real store: thin delegation to the plugin singleton.
@@ -99,7 +127,10 @@ class BillingService {
     bool? allowUnverifiedWhenNoKey,
     String? expectedPackageName,
   })  : _pro = proStatus,
-        _store = store ?? PlayBillingStore(),
+        _store = store ??
+            (proStatus.isFoss
+                ? const NoOpBillingStore()
+                : PlayBillingStore()),
         _verifier = verifier ??
             GooglePlaySignatureVerifier(
               base64PublicKey: kGooglePlayPublicKey,
