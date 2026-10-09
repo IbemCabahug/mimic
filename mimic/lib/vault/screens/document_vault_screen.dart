@@ -6,10 +6,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import '../widgets/vault_scaffold.dart';
 import '../widgets/import_activity_button.dart';
+import '../widgets/vault_search_bar.dart';
+import '../widgets/tag_caption_editor_sheet.dart';
+import '../widgets/paywall_sheet.dart';
 import '../security/vault_error_ui.dart';
 import '../crypto/vault_crypto.dart';
 import '../security/auto_lock.dart';
 import '../services/document_vault_service.dart';
+import '../services/pro_status_service.dart';
 import '../services/import_progress.dart';
 import '../../core/theme/app_theme.dart';
 import 'package:share_plus/share_plus.dart';
@@ -24,7 +28,9 @@ class DocumentVaultScreen extends ConsumerStatefulWidget {
 class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
   List<DocumentMeta> documents = [];
   bool _isLoading = true;
+  final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+  String? _selectedTag;
   String _sortMode = 'date';
   String? _selectedFolder;
 
@@ -45,14 +51,53 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
     });
   }
 
+  List<String> _extractAllTags() {
+    final set = <String>{};
+    for (final d in documents) {
+      set.addAll(d.tags);
+    }
+    return set.toList();
+  }
+
+  Future<void> _editDocumentTagsAndCaption(DocumentMeta doc) async {
+    final isPro = await ref.read(proStatusServiceProvider).isPro();
+    if (!mounted) return;
+    if (!isPro) {
+      showPaywallSheet(context);
+      return;
+    }
+    await showTagCaptionEditorSheet(
+      context: context,
+      title: doc.fileName,
+      initialTags: doc.tags,
+      initialCaption: doc.caption,
+      onSave: (tags, caption) async {
+        await ref.read(documentVaultServiceProvider).updateDocumentDetails(
+              doc.id,
+              tags: tags,
+              caption: caption,
+            );
+        await _loadDocuments();
+      },
+    );
+  }
+
   List<DocumentMeta> _visibleDocuments() {
     Iterable<DocumentMeta> list = documents;
     if (_selectedFolder != null) {
       list = list.where((d) => d.folder == _selectedFolder);
     }
+    if (_selectedTag != null && _selectedTag!.isNotEmpty) {
+      list = list.where((d) => d.tags.contains(_selectedTag));
+    }
     final q = _searchQuery.trim().toLowerCase();
     if (q.isNotEmpty) {
-      list = list.where((d) => d.fileName.toLowerCase().contains(q));
+      list = list.where((d) {
+        final nameMatch = d.fileName.toLowerCase().contains(q);
+        final captionMatch = d.caption.toLowerCase().contains(q);
+        final tagMatch = d.tags.any((t) => t.toLowerCase().contains(q));
+        return nameMatch || captionMatch || tagMatch;
+      });
     }
     final result = list.toList();
     switch (_sortMode) {
@@ -200,6 +245,7 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
   void dispose() {
     _restoreLingerTimer?.cancel();
     _restoreSession.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -600,10 +646,11 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
             Material(
               color: Colors.transparent,
               child: ListTile(
@@ -658,6 +705,40 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                     color: VaultColors.accent.withValues(alpha: 0.1),
                     shape: BoxShape.circle,
                   ),
+                  child: const Icon(Icons.label_outline, color: VaultColors.accent),
+                ),
+                title: const Text('Tags & Caption',
+                    style: TextStyle(
+                        fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                trailing: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: VaultColors.accent.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Text('PRO',
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: VaultColors.accent)),
+                ),
+                onTap: () {
+                  Navigator.of(sheetContext).pop();
+                  _editDocumentTagsAndCaption(doc);
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            Material(
+              color: Colors.transparent,
+              child: ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: VaultColors.accent.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
                   child: const Icon(Icons.drive_file_move_outlined,
                       color: VaultColors.accent),
                 ),
@@ -673,7 +754,8 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
           ],
         ),
       ),
-    );
+    ),
+  );
   }
 
   Future<void> _deleteDocument(DocumentMeta doc) async {
@@ -884,45 +966,32 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                     final visible = _visibleDocuments();
                     return Column(
                       children: [
-                        _buildFolderChips(),
-                        const SizedBox(height: 8),
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: TextField(
-                                  onChanged: (v) => setState(() => _searchQuery = v),
-                                  style: const TextStyle(fontFamily: 'Inter', color: VaultColors.textPrimary),
-                                  decoration: InputDecoration(
-                                    hintText: 'Search documents',
-                                    hintStyle: const TextStyle(fontFamily: 'Inter', color: VaultColors.textTertiary),
-                                    prefixIcon: const Icon(Icons.search, color: VaultColors.textTertiary),
-                                    filled: true,
-                                    fillColor: VaultColors.surface,
-                                    contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
-                                    border: OutlineInputBorder(
-                                      borderRadius: BorderRadius.circular(14),
-                                      borderSide: BorderSide.none,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              PopupMenuButton<String>(
-                                icon: const Icon(Icons.sort, color: VaultColors.textSecondary),
-                                initialValue: _sortMode,
-                                onSelected: (v) => setState(() => _sortMode = v),
-                                itemBuilder: (_) => const [
-                                  PopupMenuItem(value: 'date', child: Text('Newest first')),
-                                  PopupMenuItem(value: 'name', child: Text('Name (A–Z)')),
-                                  PopupMenuItem(value: 'size', child: Text('Largest first')),
-                                  PopupMenuItem(value: 'type', child: Text('File type')),
-                                ],
-                              ),
+                        VaultSearchBar(
+                          controller: _searchController,
+                          hintText: 'Search documents by name, caption, #tag...',
+                          onQueryChanged: (v) => setState(() => _searchQuery = v),
+                          onClear: () => setState(() {
+                            _searchController.clear();
+                            _searchQuery = '';
+                          }),
+                          selectedTag: _selectedTag,
+                          onTagSelected: (t) => setState(() => _selectedTag = t),
+                          availableTags: _extractAllTags(),
+                          isPro: ref.watch(isProProvider).value ?? false,
+                          onProRequired: () => showPaywallSheet(context),
+                          trailing: PopupMenuButton<String>(
+                            icon: const Icon(Icons.sort, color: VaultColors.textSecondary),
+                            initialValue: _sortMode,
+                            onSelected: (v) => setState(() => _sortMode = v),
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(value: 'date', child: Text('Newest first')),
+                              PopupMenuItem(value: 'name', child: Text('Name (A–Z)')),
+                              PopupMenuItem(value: 'size', child: Text('Largest first')),
+                              PopupMenuItem(value: 'type', child: Text('File type')),
                             ],
                           ),
                         ),
+                        _buildFolderChips(),
                         Expanded(
                           child: visible.isEmpty
                               ? Center(

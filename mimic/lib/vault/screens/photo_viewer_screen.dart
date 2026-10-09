@@ -5,6 +5,9 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/file_vault_service.dart';
+import '../services/pro_status_service.dart';
+import '../widgets/paywall_sheet.dart';
+import '../widgets/tag_caption_editor_sheet.dart';
 
 class PhotoViewerScreen extends ConsumerStatefulWidget {
   final List<PhotoMeta> photos;
@@ -12,6 +15,7 @@ class PhotoViewerScreen extends ConsumerStatefulWidget {
   final Future<Uint8List?> Function(String) loadBytes;
   final ValueChanged<String> onDelete;
   final ValueChanged<String> onRestore;
+  final ValueChanged<PhotoMeta>? onUpdated;
 
   const PhotoViewerScreen({
     super.key,
@@ -20,6 +24,7 @@ class PhotoViewerScreen extends ConsumerStatefulWidget {
     required this.loadBytes,
     required this.onDelete,
     required this.onRestore,
+    this.onUpdated,
   });
 
   @override
@@ -28,6 +33,7 @@ class PhotoViewerScreen extends ConsumerStatefulWidget {
 
 class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
   late final PageController _pageController;
+  late List<PhotoMeta> _currentPhotos;
   int _currentIndex = 0;
   bool _isZoomed = false;
 
@@ -47,6 +53,7 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
   @override
   void initState() {
     super.initState();
+    _currentPhotos = List.from(widget.photos);
     _pageController = PageController(initialPage: widget.initialIndex);
     _currentIndex = widget.initialIndex;
   }
@@ -58,6 +65,7 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
     // a removed photo's bytes are not held for the rest of the session, and so
     // a photo re-added later reloads instead of replaying a stale result.
     if (!identical(oldWidget.photos, widget.photos)) {
+      _currentPhotos = List.from(widget.photos);
       final liveIds = widget.photos.map((p) => p.id).toSet();
       _bytesFutures.removeWhere((id, _) => !liveIds.contains(id));
     }
@@ -94,8 +102,8 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
   /// vault delete live in the service; the grid owns the snackbar and the
   /// list refresh through the onRestore callback.
   Future<void> _restoreCurrent() async {
-    if (widget.photos.isEmpty) return;
-    final photo = widget.photos[_currentIndex];
+    if (_currentPhotos.isEmpty) return;
+    final photo = _currentPhotos[_currentIndex];
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -124,15 +132,15 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
 
     if (confirmed == true && mounted) {
       widget.onRestore(photo.id);
-      if (mounted && widget.photos.length <= 1) {
+      if (mounted && _currentPhotos.length <= 1) {
         Navigator.of(context).pop();
       }
     }
   }
 
   Future<void> _deleteCurrent() async {
-    if (widget.photos.isEmpty) return;
-    final photo = widget.photos[_currentIndex];
+    if (_currentPhotos.isEmpty) return;
+    final photo = _currentPhotos[_currentIndex];
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -161,10 +169,41 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
 
     if (confirmed == true && mounted) {
       widget.onDelete(photo.id);
-      if (mounted && widget.photos.length <= 1) {
+      if (mounted && _currentPhotos.length <= 1) {
         Navigator.of(context).pop();
       }
     }
+  }
+
+  Future<void> _editCurrentTagsAndCaption() async {
+    if (_currentPhotos.isEmpty) return;
+    final isPro = await ref.read(proStatusServiceProvider).isPro();
+    if (!mounted) return;
+    if (!isPro) {
+      showPaywallSheet(context);
+      return;
+    }
+    final photo = _currentPhotos[_currentIndex];
+    await showTagCaptionEditorSheet(
+      context: context,
+      title: photo.originalName ?? 'Photo details',
+      initialTags: photo.tags,
+      initialCaption: photo.caption,
+      onSave: (tags, caption) async {
+        await ref.read(fileVaultServiceProvider).updatePhotoDetails(
+              photo.id,
+              tags: tags,
+              caption: caption,
+            );
+        final updated = photo.copyWith(tags: tags, caption: caption);
+        if (mounted) {
+          setState(() {
+            _currentPhotos[_currentIndex] = updated;
+          });
+        }
+        widget.onUpdated?.call(updated);
+      },
+    );
   }
 
   @override
@@ -180,6 +219,11 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.label_outline, color: Colors.white),
+            tooltip: 'Tags & Caption',
+            onPressed: _editCurrentTagsAndCaption,
+          ),
+          IconButton(
             icon: const Icon(Icons.unarchive, color: Colors.white),
             tooltip: 'Restore to gallery',
             onPressed: _restoreCurrent,
@@ -190,40 +234,103 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
           ),
         ],
       ),
-      body: widget.photos.isEmpty
+      body: _currentPhotos.isEmpty
           ? const Center(child: CircularProgressIndicator(color: Colors.white))
-          : PageView.builder(
-              controller: _pageController,
-              physics: _isZoomed ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
-              onPageChanged: (index) {
-                setState(() {
-                  _currentIndex = index;
-                  _isZoomed = false;
-                });
-              },
-              itemCount: widget.photos.length,
-              itemBuilder: (context, index) {
-                final photo = widget.photos[index];
-                return FutureBuilder<Uint8List?>(
-                  future: _bytesFor(photo),
-                  builder: (context, snapshot) {
-                    if (snapshot.connectionState == ConnectionState.waiting) {
-                      return const Center(child: CircularProgressIndicator(color: Colors.white));
-                    }
-                    final bytes = snapshot.data;
-                    if (bytes == null) {
-                      return const Center(child: Icon(Icons.broken_image, color: Colors.white));
-                    }
-                    return _ZoomablePhoto(
-                      key: ValueKey(photo.id),
-                      bytes: bytes,
-                      onZoomChanged: (z) {
-                        if (z != _isZoomed) setState(() => _isZoomed = z);
+          : Stack(
+              children: [
+                PageView.builder(
+                  controller: _pageController,
+                  physics: _isZoomed ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
+                  onPageChanged: (index) {
+                    setState(() {
+                      _currentIndex = index;
+                      _isZoomed = false;
+                    });
+                  },
+                  itemCount: _currentPhotos.length,
+                  itemBuilder: (context, index) {
+                    final photo = _currentPhotos[index];
+                    return FutureBuilder<Uint8List?>(
+                      future: _bytesFor(photo),
+                      builder: (context, snapshot) {
+                        if (snapshot.connectionState == ConnectionState.waiting) {
+                          return const Center(child: CircularProgressIndicator(color: Colors.white));
+                        }
+                        final bytes = snapshot.data;
+                        if (bytes == null) {
+                          return const Center(child: Icon(Icons.broken_image, color: Colors.white));
+                        }
+                        return _ZoomablePhoto(
+                          key: ValueKey(photo.id),
+                          bytes: bytes,
+                          onZoomChanged: (z) {
+                            if (z != _isZoomed) setState(() => _isZoomed = z);
+                          },
+                        );
                       },
                     );
                   },
-                );
-              },
+                ),
+                if (!_isZoomed &&
+                    _currentIndex < _currentPhotos.length &&
+                    (_currentPhotos[_currentIndex].caption.trim().isNotEmpty ||
+                        _currentPhotos[_currentIndex].tags.isNotEmpty))
+                  Positioned(
+                    left: 16,
+                    right: 16,
+                    bottom: 24,
+                    child: GestureDetector(
+                      onTap: _editCurrentTagsAndCaption,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.65),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white24),
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            if (_currentPhotos[_currentIndex].caption.trim().isNotEmpty)
+                              Text(
+                                _currentPhotos[_currentIndex].caption,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontFamily: 'Inter',
+                                  fontSize: 14,
+                                ),
+                              ),
+                            if (_currentPhotos[_currentIndex].caption.trim().isNotEmpty &&
+                                _currentPhotos[_currentIndex].tags.isNotEmpty)
+                              const SizedBox(height: 6),
+                            if (_currentPhotos[_currentIndex].tags.isNotEmpty)
+                              Wrap(
+                                spacing: 6,
+                                runSpacing: 4,
+                                children: _currentPhotos[_currentIndex].tags.map((tag) => Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white.withValues(alpha: 0.2),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Text(
+                                    tag,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontFamily: 'Inter',
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                )).toList(),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
     );
   }

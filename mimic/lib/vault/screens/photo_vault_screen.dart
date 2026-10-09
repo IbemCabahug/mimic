@@ -10,8 +10,12 @@ import '../security/vault_error_ui.dart';
 import '../security/auto_lock.dart';
 import '../crypto/vault_crypto.dart';
 import '../services/file_vault_service.dart';
+import '../services/pro_status_service.dart';
 import '../widgets/vault_scaffold.dart';
 import '../widgets/import_activity_button.dart';
+import '../widgets/vault_search_bar.dart';
+import '../widgets/tag_caption_editor_sheet.dart';
+import '../widgets/paywall_sheet.dart';
 import '../services/import_progress.dart';
 import '../../core/theme/app_theme.dart';
 import 'photo_viewer_screen.dart';
@@ -29,6 +33,10 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   // Folder feature (mirrors DocumentVaultScreen): null = All, '' = Unfiled,
   // otherwise the folder name. Filter-only.
   String? _selectedFolder;
+  // Smart Vault File Locator: query and active tag filter
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  String? _selectedTag;
   // Multi-select: photo ids currently ticked. Empty set = selection mode off.
   final Set<String> _selection = {};
   // Live import card (mirrors Videos): per-photo Queued -> Encrypting N/M ->
@@ -99,6 +107,7 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     _bytesCacheSize = 0;
     _restoreSession.dispose();
     _importSession.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -338,10 +347,11 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
             Material(
               color: Colors.transparent,
               child: ListTile(
@@ -358,6 +368,34 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                 onTap: () {
                   Navigator.of(context).pop();
                   _restorePhoto(photo);
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            Material(
+              color: Colors.transparent,
+              child: ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: VaultColors.accent.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.label_outlined, color: VaultColors.accent),
+                ),
+                title: const Text('Tags & Caption', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                trailing: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: VaultColors.accent.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Text('PRO', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: VaultColors.accent)),
+                ),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _editPhotoTagsAndCaption(photo);
                 },
               ),
             ),
@@ -404,7 +442,8 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
           ],
         ),
       ),
-    );
+    ),
+  );
   }
 
   Future<void> _restorePhoto(PhotoMeta photo) async {
@@ -537,11 +576,56 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     }
   }
 
-  /// Folder feature: visible-list filter + chips + move dialog.
-  /// Mirrors DocumentVaultScreen; filter-only, blobs never move.
+  Future<void> _editPhotoTagsAndCaption(PhotoMeta photo) async {
+    final isPro = await ref.read(proStatusServiceProvider).isPro();
+    if (!mounted) return;
+    if (!isPro) {
+      showPaywallSheet(context);
+      return;
+    }
+    await showTagCaptionEditorSheet(
+      context: context,
+      title: photo.originalName ?? 'Photo details',
+      initialTags: photo.tags,
+      initialCaption: photo.caption,
+      onSave: (tags, caption) async {
+        await ref.read(fileVaultServiceProvider).updatePhotoDetails(
+              photo.id,
+              tags: tags,
+              caption: caption,
+            );
+        await _loadPhotos();
+      },
+    );
+  }
+
+  List<String> _extractAllTags() {
+    final set = <String>{};
+    for (final p in _photos) {
+      set.addAll(p.tags);
+    }
+    return set.toList();
+  }
+
+  /// Visible-list filter applying folder, tag filter, and search query.
   List<PhotoMeta> _visiblePhotos() {
-    if (_selectedFolder == null) return _photos;
-    return _photos.where((p) => p.folder == _selectedFolder).toList();
+    var list = _photos;
+    if (_selectedFolder != null) {
+      list = list.where((p) => p.folder == _selectedFolder).toList();
+    }
+    if (_selectedTag != null && _selectedTag!.isNotEmpty) {
+      list = list.where((p) => p.tags.contains(_selectedTag)).toList();
+    }
+    final q = _searchQuery.trim().toLowerCase();
+    if (q.isNotEmpty) {
+      list = list.where((p) {
+        final nameMatch = (p.originalName ?? '').toLowerCase().contains(q);
+        final captionMatch = p.caption.toLowerCase().contains(q);
+        final tagMatch = p.tags.any((t) => t.toLowerCase().contains(q));
+        return nameMatch || captionMatch || tagMatch;
+      }).toList();
+    }
+    return list;
   }
 
   Widget _folderChip(String label, bool selected, VoidCallback onTap,
@@ -871,6 +955,7 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
           photos: visible,
           initialIndex: initialIndex,
           loadBytes: _loadPhotoBytes,
+          onUpdated: (_) => _loadPhotos(),
           onDelete: (id) async {
             await ref.read(fileVaultServiceProvider).deletePhoto(id);
             await _loadPhotos();
@@ -1052,6 +1137,20 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                 )
               : Column(
                   children: [
+                    VaultSearchBar(
+                      controller: _searchController,
+                      hintText: 'Search photos by name, caption, #tag...',
+                      onQueryChanged: (v) => setState(() => _searchQuery = v),
+                      onClear: () => setState(() {
+                        _searchController.clear();
+                        _searchQuery = '';
+                      }),
+                      selectedTag: _selectedTag,
+                      onTagSelected: (t) => setState(() => _selectedTag = t),
+                      availableTags: _extractAllTags(),
+                      isPro: ref.watch(isProProvider).value ?? false,
+                      onProRequired: () => showPaywallSheet(context),
+                    ),
                     _buildFolderChips(),
                     if (_selection.isNotEmpty)
                       Material(
@@ -1099,10 +1198,12 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                       ),
                     Expanded(
                       child: _visiblePhotos().isEmpty
-                          ? const Center(
+                          ? Center(
                               child: Text(
-                                'No photos in this folder',
-                                style: TextStyle(
+                                (_searchQuery.isNotEmpty || _selectedTag != null)
+                                    ? 'No matching photos found'
+                                    : 'No photos in this folder',
+                                style: const TextStyle(
                                   fontSize: 15,
                                   color: VaultColors.textTertiary,
                                   fontFamily: 'Inter',

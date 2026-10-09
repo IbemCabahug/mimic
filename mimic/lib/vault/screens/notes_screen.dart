@@ -3,8 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'note_editor_screen.dart';
 import '../services/notes_service.dart';
+import '../services/pro_status_service.dart';
 import '../crypto/vault_crypto.dart';
 import '../widgets/vault_scaffold.dart';
+import '../widgets/vault_search_bar.dart';
+import '../widgets/paywall_sheet.dart';
 import '../../core/theme/app_theme.dart';
 
 class NotesScreen extends ConsumerStatefulWidget {
@@ -16,7 +19,10 @@ class NotesScreen extends ConsumerStatefulWidget {
 
 class _NotesScreenState extends ConsumerState<NotesScreen> {
   late Future<List<Note>> _notesFuture;
+  final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+  String? _selectedTag;
+  List<Note> _cachedNotes = [];
 
   @override
   void initState() {
@@ -24,10 +30,27 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
     _loadNotes();
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
   void _loadNotes() {
     setState(() {
-      _notesFuture = ref.read(notesServiceProvider).getAllNotes();
+      _notesFuture = ref.read(notesServiceProvider).getAllNotes().then((list) {
+        _cachedNotes = list;
+        return list;
+      });
     });
+  }
+
+  List<String> _extractAllTags(List<Note> notes) {
+    final set = <String>{};
+    for (final n in notes) {
+      set.addAll(n.tags);
+    }
+    return set.toList();
   }
 
   Future<bool?> _deleteNote(Note note) async {
@@ -136,24 +159,19 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-            child: TextField(
-              onChanged: (v) => setState(() => _searchQuery = v),
-              style: const TextStyle(fontFamily: 'Inter', color: VaultColors.textPrimary),
-              decoration: InputDecoration(
-                hintText: 'Search notes',
-                hintStyle: const TextStyle(fontFamily: 'Inter', color: VaultColors.textTertiary),
-                prefixIcon: const Icon(Icons.search, color: VaultColors.textTertiary),
-                filled: true,
-                fillColor: VaultColors.surface,
-                contentPadding: const EdgeInsets.symmetric(vertical: 0, horizontal: 16),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(14),
-                  borderSide: BorderSide.none,
-                ),
-              ),
-            ),
+          VaultSearchBar(
+            controller: _searchController,
+            hintText: 'Search notes by title, text, #tag...',
+            onQueryChanged: (v) => setState(() => _searchQuery = v),
+            onClear: () => setState(() {
+              _searchController.clear();
+              _searchQuery = '';
+            }),
+            selectedTag: _selectedTag,
+            onTagSelected: (t) => setState(() => _selectedTag = t),
+            availableTags: _extractAllTags(_cachedNotes),
+            isPro: ref.watch(isProProvider).value ?? false,
+            onProRequired: () => showPaywallSheet(context),
           ),
           Expanded(
             child: FutureBuilder<List<Note>>(
@@ -167,12 +185,19 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
 
           final notes = snapshot.data ?? [];
 
+          var visibleNotes = notes;
+          if (_selectedTag != null && _selectedTag!.isNotEmpty) {
+            visibleNotes = visibleNotes.where((n) => n.tags.contains(_selectedTag)).toList();
+          }
           final q = _searchQuery.trim().toLowerCase();
-          final visibleNotes = q.isEmpty
-              ? notes
-              : notes.where((n) =>
-                  n.title.toLowerCase().contains(q) ||
-                  n.encryptedBody.toLowerCase().contains(q)).toList();
+          if (q.isNotEmpty) {
+            visibleNotes = visibleNotes.where((n) {
+              final titleMatch = n.title.toLowerCase().contains(q);
+              final bodyMatch = n.encryptedBody.toLowerCase().contains(q);
+              final tagMatch = n.tags.any((t) => t.toLowerCase().contains(q));
+              return titleMatch || bodyMatch || tagMatch;
+            }).toList();
+          }
 
           if (notes.isEmpty) {
             return Center(
@@ -297,6 +322,29 @@ class _NotesScreenState extends ConsumerState<NotesScreen> {
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
+                          if (note.tags.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Wrap(
+                              spacing: 4,
+                              runSpacing: 2,
+                              children: note.tags.map((t) => Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: VaultColors.accent.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  t,
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    fontFamily: 'Inter',
+                                    color: VaultColors.accent,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              )).toList(),
+                            ),
+                          ],
                           const SizedBox(height: 4),
                           Text(
                             dateStr,

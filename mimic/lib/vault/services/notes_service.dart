@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import 'package:sqflite/sqflite.dart';
 import '../../core/services/platform_service.dart';
 import '../crypto/vault_crypto.dart';
+import '../models/vault_tag.dart';
 
 class Note {
   final String id;
@@ -14,6 +15,7 @@ class Note {
   final String encryptedBody;
   final DateTime createdAt;
   final DateTime updatedAt;
+  final List<String> tags;
 
   Note({
     required this.id,
@@ -21,6 +23,7 @@ class Note {
     required this.encryptedBody,
     required this.createdAt,
     required this.updatedAt,
+    this.tags = const [],
   });
 
   Map<String, dynamic> toJson() => {
@@ -29,6 +32,7 @@ class Note {
         'encryptedBody': encryptedBody,
         'createdAt': createdAt.toIso8601String(),
         'updatedAt': updatedAt.toIso8601String(),
+        'tags': tags.join(','),
       };
 
   factory Note.fromJson(Map<String, dynamic> json) => Note(
@@ -37,6 +41,23 @@ class Note {
         encryptedBody: json['encryptedBody'] as String,
         createdAt: DateTime.parse(json['createdAt'] as String),
         updatedAt: DateTime.parse(json['updatedAt'] as String),
+        tags: VaultTags.parseList(json['tags']),
+      );
+
+  Note copyWith({
+    String? title,
+    String? encryptedBody,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+    List<String>? tags,
+  }) =>
+      Note(
+        id: id,
+        title: title ?? this.title,
+        encryptedBody: encryptedBody ?? this.encryptedBody,
+        createdAt: createdAt ?? this.createdAt,
+        updatedAt: updatedAt ?? this.updatedAt,
+        tags: tags ?? this.tags,
       );
 }
 
@@ -73,9 +94,22 @@ class NotesService {
               title TEXT,
               encryptedBody TEXT,
               created_at TEXT,
-              updated_at TEXT
+              updated_at TEXT,
+              tags TEXT DEFAULT ''
             )
           ''');
+        },
+        onOpen: (db) async {
+          try {
+            final List<Map<String, dynamic>> columns =
+                await db.rawQuery('PRAGMA table_info(notes)');
+            final hasTags = columns.any((column) => column['name'] == 'tags');
+            if (!hasTags) {
+              await db.execute("ALTER TABLE notes ADD COLUMN tags TEXT DEFAULT ''");
+            }
+          } catch (e) {
+            debugPrint('Error updating notes schema: $e');
+          }
         },
       );
     }();
@@ -90,6 +124,9 @@ class NotesService {
   Future<void> addNote(Note note) async {
     final encryptedBody = _crypto.encryptString(note.encryptedBody);
     final encryptedTitle = _crypto.encryptString(note.title);
+    final encryptedTags = note.tags.isNotEmpty
+        ? _crypto.encryptString(note.tags.join(','))
+        : '';
 
     if (kIsWeb) {
       final notes = await _getWebNotes();
@@ -99,6 +136,7 @@ class NotesService {
         'encryptedBody': encryptedBody,
         'createdAt': note.createdAt.toIso8601String(),
         'updatedAt': note.updatedAt.toIso8601String(),
+        'tags': encryptedTags,
       });
       await _platformService.secureWrite(_webKey, jsonEncode(notes));
       return;
@@ -111,12 +149,16 @@ class NotesService {
       'encryptedBody': encryptedBody,
       'created_at': note.createdAt.toIso8601String(),
       'updated_at': note.updatedAt.toIso8601String(),
+      'tags': encryptedTags,
     });
   }
 
   Future<void> updateNote(Note note) async {
     final encryptedBody = _crypto.encryptString(note.encryptedBody);
     final encryptedTitle = _crypto.encryptString(note.title);
+    final encryptedTags = note.tags.isNotEmpty
+        ? _crypto.encryptString(note.tags.join(','))
+        : '';
 
     if (kIsWeb) {
       final notes = await _getWebNotes();
@@ -128,6 +170,7 @@ class NotesService {
           'encryptedBody': encryptedBody,
           'createdAt': note.createdAt.toIso8601String(),
           'updatedAt': note.updatedAt.toIso8601String(),
+          'tags': encryptedTags,
         };
       }
       await _platformService.secureWrite(_webKey, jsonEncode(notes));
@@ -141,6 +184,7 @@ class NotesService {
         'title': encryptedTitle,
         'encryptedBody': encryptedBody,
         'updated_at': note.updatedAt.toIso8601String(),
+        'tags': encryptedTags,
       },
       where: 'id = ?',
       whereArgs: [note.id],
@@ -210,12 +254,22 @@ class NotesService {
         try {
           decryptedTitle = _crypto.decryptString(decryptedTitle);
         } catch (_) {}
+        String decryptedTags = '';
+        final rawTags = n['tags'] as String?;
+        if (rawTags != null && rawTags.isNotEmpty) {
+          try {
+            decryptedTags = _crypto.decryptString(rawTags);
+          } catch (_) {
+            decryptedTags = rawTags;
+          }
+        }
         return Note(
           id: n['id'] as String,
           title: decryptedTitle,
           encryptedBody: decrypted,
           createdAt: DateTime.parse(n['createdAt'] as String),
           updatedAt: DateTime.parse(n['updatedAt'] as String),
+          tags: VaultTags.parseList(decryptedTags),
         );
       }).toList();
     }
@@ -243,14 +297,33 @@ class NotesService {
       try {
         decryptedTitle = _crypto.decryptString(decryptedTitle);
       } catch (_) {}
+      String decryptedTags = '';
+      final rawTags = map['tags'] as String?;
+      if (rawTags != null && rawTags.isNotEmpty) {
+        try {
+          decryptedTags = _crypto.decryptString(rawTags);
+        } catch (_) {
+          decryptedTags = rawTags;
+        }
+      }
       return Note(
         id: map['id'] as String,
         title: decryptedTitle,
         encryptedBody: decrypted,
         createdAt: DateTime.parse(map['created_at'] as String),
         updatedAt: DateTime.parse(map['updated_at'] as String),
+        tags: VaultTags.parseList(decryptedTags),
       );
     }).toList();
+  }
+
+  /// Smart Vault File Locator: update tags for a note.
+  Future<void> updateNoteTags(String id, List<String> tags) async {
+    final notes = await getAllNotes();
+    final index = notes.indexWhere((n) => n.id == id);
+    if (index == -1) return;
+    final updated = notes[index].copyWith(tags: tags);
+    await updateNote(updated);
   }
 
   Future<List<Map<String, dynamic>>> _getWebNotes() async {
@@ -269,9 +342,14 @@ class NotesService {
         title TEXT,
         encryptedBody TEXT,
         created_at TEXT,
-        updated_at TEXT
+        updated_at TEXT,
+        tags TEXT DEFAULT ''
       )
     ''');
+    final columns = await _db!.rawQuery('PRAGMA table_info(notes)');
+    if (!columns.any((column) => column['name'] == 'tags')) {
+      await _db!.execute("ALTER TABLE notes ADD COLUMN tags TEXT DEFAULT ''");
+    }
     await _db!.delete('notes');
     for (final note in decodedNotes) {
       final map = Map<String, dynamic>.from(note);
@@ -285,12 +363,23 @@ class NotesService {
           } catch (_) {}
         }
       }
+      String tags = map['tags'] as String? ?? '';
+      if (tags.isNotEmpty) {
+        try {
+          _crypto.decryptString(tags);
+        } catch (_) {
+          try {
+            tags = _crypto.encryptString(tags);
+          } catch (_) {}
+        }
+      }
       final dbMap = {
         'id': map['id'],
         'title': title,
         'encryptedBody': map['encryptedBody'],
         'created_at': map['createdAt'],
         'updated_at': map['updatedAt'],
+        'tags': tags,
       };
       await _db!.insert('notes', dbMap, conflictAlgorithm: ConflictAlgorithm.replace);
     }

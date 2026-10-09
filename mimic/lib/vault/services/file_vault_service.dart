@@ -12,6 +12,7 @@ import 'package:uuid/uuid.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 import '../../core/services/platform_service.dart';
 import '../crypto/vault_crypto.dart';
+import '../models/vault_tag.dart';
 
 class PhotoMeta {
   final String id;
@@ -22,6 +23,9 @@ class PhotoMeta {
   // Folder feature (mirrors DocumentMeta.folder): '' = Unfiled. Filter-only —
   // the encrypted blob never moves; only this label changes.
   final String folder;
+  // Smart Vault File Locator: private user tags and caption
+  final List<String> tags;
+  final String caption;
 
   PhotoMeta({
     required this.id,
@@ -30,6 +34,8 @@ class PhotoMeta {
     required this.createdAt,
     this.originalName,
     this.folder = '',
+    this.tags = const [],
+    this.caption = '',
   });
 
   Map<String, dynamic> toMap() => {
@@ -39,6 +45,8 @@ class PhotoMeta {
         'createdAt': createdAt.toIso8601String(),
         'originalName': originalName,
         'folder': folder,
+        'tags': tags.join(','),
+        'caption': caption,
       };
 
   factory PhotoMeta.fromMap(Map<String, dynamic> map) => PhotoMeta(
@@ -50,6 +58,8 @@ class PhotoMeta {
         // Pre-folder rows (and v2 backup payloads) carry no key — ?? '' keeps
         // them readable as Unfiled instead of throwing.
         folder: map['folder'] as String? ?? '',
+        tags: VaultTags.parseList(map['tags']),
+        caption: map['caption'] as String? ?? '',
       );
 
   /// Copies this metadata with the given fields replaced.
@@ -59,6 +69,8 @@ class PhotoMeta {
     DateTime? createdAt,
     String? originalName,
     String? folder,
+    List<String>? tags,
+    String? caption,
   }) {
     return PhotoMeta(
       id: id,
@@ -67,6 +79,8 @@ class PhotoMeta {
       createdAt: createdAt ?? this.createdAt,
       originalName: originalName ?? this.originalName,
       folder: folder ?? this.folder,
+      tags: tags ?? this.tags,
+      caption: caption ?? this.caption,
     );
   }
 }
@@ -106,7 +120,9 @@ class FileVaultService {
               size INTEGER,
               createdAt TEXT,
               originalName TEXT,
-              folder TEXT DEFAULT ''
+              folder TEXT DEFAULT '',
+              tags TEXT DEFAULT '',
+              caption TEXT DEFAULT ''
             )
           ''');
         },
@@ -122,6 +138,15 @@ class FileVaultService {
             final hasFolder = columns.any((column) => column['name'] == 'folder');
             if (!hasFolder) {
               await db.execute("ALTER TABLE $_tableName ADD COLUMN folder TEXT DEFAULT ''");
+            }
+            // Smart Vault Locator: tags and caption columns
+            final hasTags = columns.any((column) => column['name'] == 'tags');
+            if (!hasTags) {
+              await db.execute("ALTER TABLE $_tableName ADD COLUMN tags TEXT DEFAULT ''");
+            }
+            final hasCaption = columns.any((column) => column['name'] == 'caption');
+            if (!hasCaption) {
+              await db.execute("ALTER TABLE $_tableName ADD COLUMN caption TEXT DEFAULT ''");
             }
           } catch (e) {
             debugPrint('Error updating schema: $e');
@@ -243,51 +268,47 @@ class FileVaultService {
     await _deleteMeta(id);
   }
 
+  PhotoMeta _hydratePhotoMap(Map<String, dynamic> raw) {
+    final m = Map<String, dynamic>.from(raw);
+    final rawName = m['originalName'] as String?;
+    if (rawName != null && rawName.isNotEmpty) {
+      try {
+        m['originalName'] = _crypto.decryptString(rawName);
+      } catch (_) {}
+    }
+    final rawCaption = m['caption'] as String?;
+    if (rawCaption != null && rawCaption.isNotEmpty) {
+      try {
+        m['caption'] = _crypto.decryptString(rawCaption);
+      } catch (_) {}
+    }
+    final rawTags = m['tags'] as String?;
+    if (rawTags != null && rawTags.isNotEmpty) {
+      try {
+        m['tags'] = _crypto.decryptString(rawTags);
+      } catch (_) {}
+    }
+    return PhotoMeta.fromMap(m);
+  }
+
   Future<List<PhotoMeta>> getAllPhotos() async {
     if (kIsWeb) {
       final raw = await _platformService.secureRead('vault_photos_meta');
       if (raw == null || raw.isEmpty) return [];
       final List<dynamic> decoded = jsonDecode(raw);
-      return decoded.map((e) {
-        final m = Map<String, dynamic>.from(e);
-        final rawName = m['originalName'] as String?;
-        if (rawName != null && rawName.isNotEmpty) {
-          try {
-            m['originalName'] = _crypto.decryptString(rawName);
-          } catch (_) {}
-        }
-        return PhotoMeta.fromMap(m);
-      }).toList();
+      return decoded.map((e) => _hydratePhotoMap(Map<String, dynamic>.from(e))).toList();
     }
 
     await _ensureDb();
     try {
       final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
-      return maps.map((map) {
-        final m = Map<String, dynamic>.from(map);
-        final rawName = m['originalName'] as String?;
-        if (rawName != null && rawName.isNotEmpty) {
-          try {
-            m['originalName'] = _crypto.decryptString(rawName);
-          } catch (_) {}
-        }
-        return PhotoMeta.fromMap(m);
-      }).toList();
+      return maps.map((map) => _hydratePhotoMap(map)).toList();
     } catch (e) {
       if (e is DatabaseException && e.toString().contains('database_closed')) {
         _db = null;
         await _ensureDb();
         final maps = await _db!.query(_tableName, orderBy: 'createdAt DESC');
-        return maps.map((map) {
-          final m = Map<String, dynamic>.from(map);
-          final rawName = m['originalName'] as String?;
-          if (rawName != null && rawName.isNotEmpty) {
-            try {
-              m['originalName'] = _crypto.decryptString(rawName);
-            } catch (_) {}
-          }
-          return PhotoMeta.fromMap(m);
-        }).toList();
+        return maps.map((map) => _hydratePhotoMap(map)).toList();
       }
       rethrow;
     }
@@ -297,6 +318,12 @@ class FileVaultService {
     final map = meta.toMap();
     if (meta.originalName != null && meta.originalName!.isNotEmpty) {
       map['originalName'] = _crypto.encryptString(meta.originalName!);
+    }
+    if (meta.caption.isNotEmpty) {
+      map['caption'] = _crypto.encryptString(meta.caption);
+    }
+    if (meta.tags.isNotEmpty) {
+      map['tags'] = _crypto.encryptString(meta.tags.join(','));
     }
     if (kIsWeb) {
       final existing = await getAllPhotos();
@@ -309,6 +336,12 @@ class FileVaultService {
           if (m.originalName != null && m.originalName!.isNotEmpty) {
             em['originalName'] = _crypto.encryptString(m.originalName!);
           }
+          if (m.caption.isNotEmpty) {
+            em['caption'] = _crypto.encryptString(m.caption);
+          }
+          if (m.tags.isNotEmpty) {
+            em['tags'] = _crypto.encryptString(m.tags.join(','));
+          }
           return em;
         }).toList()),
       );
@@ -316,7 +349,11 @@ class FileVaultService {
     }
 
     await _ensureDb();
-    await _db!.insert(_tableName, map);
+    await _db!.insert(
+      _tableName,
+      map,
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
   }
 
   Future<void> _deleteMeta(String id) async {
@@ -334,28 +371,29 @@ class FileVaultService {
     await _db!.delete(_tableName, where: 'id = ?', whereArgs: [id]);
   }
 
+  /// Smart Vault File Locator: update tags, caption, and/or folder for a photo.
+  Future<void> updatePhotoDetails(
+    String id, {
+    List<String>? tags,
+    String? caption,
+    String? folder,
+  }) async {
+    final photos = await getAllPhotos();
+    final index = photos.indexWhere((p) => p.id == id);
+    if (index == -1) return;
+    final updated = photos[index].copyWith(
+      tags: tags,
+      caption: caption,
+      folder: folder,
+    );
+    await _saveMeta(updated);
+  }
+
   /// Folder feature: relabels one photo's folder ('' = Unfiled). Filter-only —
   /// the encrypted blob is untouched; only the metadata row is rewritten.
   /// Mirrors DocumentVaultService.moveDocument.
   Future<void> movePhoto(String id, String folder) async {
-    if (kIsWeb) {
-      final existing = await getAllPhotos();
-      final index = existing.indexWhere((m) => m.id == id);
-      if (index == -1) return;
-      existing[index] = existing[index].copyWith(folder: folder);
-      await _platformService.secureWrite(
-        'vault_photos_meta',
-        jsonEncode(existing.map((m) => m.toMap()).toList()),
-      );
-      return;
-    }
-    await _ensureDb();
-    final maps = await _db!.query(_tableName, where: 'id = ?', whereArgs: [id]);
-    if (maps.isEmpty) return;
-    final updated =
-        PhotoMeta.fromMap(maps.single).copyWith(folder: folder);
-    await _db!.update(_tableName, updated.toMap(),
-        where: 'id = ?', whereArgs: [id]);
+    await updatePhotoDetails(id, folder: folder);
   }
 
   /// Closes the cached SQLite connection and resets the lazy-open state, so
@@ -603,14 +641,22 @@ class FileVaultService {
         size INTEGER,
         createdAt TEXT,
         originalName TEXT,
-        folder TEXT DEFAULT ''
+        folder TEXT DEFAULT '',
+        tags TEXT DEFAULT '',
+        caption TEXT DEFAULT ''
       )
     ''');
-    // Folder feature: pre-folder installs may have the table without the
-    // column (IF NOT EXISTS above is a no-op then); PRAGMA-migrate it.
+    // Folder & locator features: pre-migration installs may have the table
+    // without the columns (IF NOT EXISTS above is a no-op then); PRAGMA-migrate.
     final columns = await _db!.rawQuery('PRAGMA table_info($_tableName)');
     if (!columns.any((column) => column['name'] == 'folder')) {
       await _db!.execute("ALTER TABLE $_tableName ADD COLUMN folder TEXT DEFAULT ''");
+    }
+    if (!columns.any((column) => column['name'] == 'tags')) {
+      await _db!.execute("ALTER TABLE $_tableName ADD COLUMN tags TEXT DEFAULT ''");
+    }
+    if (!columns.any((column) => column['name'] == 'caption')) {
+      await _db!.execute("ALTER TABLE $_tableName ADD COLUMN caption TEXT DEFAULT ''");
     }
     await _db!.delete(_tableName);
     for (final photo in decodedPhotos) {
@@ -622,6 +668,26 @@ class FileVaultService {
         } catch (_) {
           try {
             map['originalName'] = _crypto.encryptString(rawName);
+          } catch (_) {}
+        }
+      }
+      final rawCaption = map['caption'] as String?;
+      if (rawCaption != null && rawCaption.isNotEmpty) {
+        try {
+          _crypto.decryptString(rawCaption);
+        } catch (_) {
+          try {
+            map['caption'] = _crypto.encryptString(rawCaption);
+          } catch (_) {}
+        }
+      }
+      final rawTags = map['tags'] as String?;
+      if (rawTags != null && rawTags.isNotEmpty) {
+        try {
+          _crypto.decryptString(rawTags);
+        } catch (_) {
+          try {
+            map['tags'] = _crypto.encryptString(rawTags);
           } catch (_) {}
         }
       }

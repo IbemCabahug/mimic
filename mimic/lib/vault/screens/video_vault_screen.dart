@@ -7,10 +7,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/video_thumbnail_service.dart';
 import '../services/video_vault_service.dart';
+import '../services/pro_status_service.dart';
 import '../security/auto_lock.dart';
 import '../crypto/vault_crypto.dart';
 import '../widgets/vault_scaffold.dart';
 import '../widgets/import_activity_button.dart';
+import '../widgets/vault_search_bar.dart';
+import '../widgets/tag_caption_editor_sheet.dart';
+import '../widgets/paywall_sheet.dart';
 import '../services/import_progress.dart';
 import '../../core/theme/app_theme.dart';
 import 'video_player_screen.dart';
@@ -28,6 +32,10 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
   // Folder feature (mirrors DocumentVaultScreen): null = All, '' = Unfiled,
   // otherwise the folder name. Filter-only.
   String? _selectedFolder;
+  // Smart Vault File Locator: query and active tag filter
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
+  String? _selectedTag;
   // Multi-select: video ids currently ticked. Empty set = selection mode off.
   final Set<String> _selection = {};
   // Live import card: one session per picker return; the card above the grid
@@ -53,6 +61,7 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     _restoreLingerTimer?.cancel();
     _importSession.dispose();
     _restoreSession.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -315,10 +324,11 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
           color: Colors.white,
           borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
         ),
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
             Material(
               color: Colors.transparent,
               child: ListTile(
@@ -335,6 +345,34 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
                 onTap: () {
                   Navigator.of(context).pop();
                   _restoreVideo(video);
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+            Material(
+              color: Colors.transparent,
+              child: ListTile(
+                leading: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: VaultColors.accent.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.label_outline, color: VaultColors.accent),
+                ),
+                title: const Text('Tags & Caption', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                trailing: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: VaultColors.accent.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: const Text('PRO', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: VaultColors.accent)),
+                ),
+                onTap: () {
+                  Navigator.of(context).pop();
+                  _editVideoTagsAndCaption(video);
                 },
               ),
             ),
@@ -381,7 +419,8 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
           ],
         ),
       ),
-    );
+    ),
+  );
   }
 
   Future<void> _restoreVideo(VideoMeta video) async {
@@ -560,11 +599,56 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     }
   }
 
-  /// Folder feature: folder chips (All / Unfiled / names) + move-to-folder
-  /// dialog. Mirrors DocumentVaultScreen; filter-only, blobs never move.
+  List<String> _extractAllTags() {
+    final set = <String>{};
+    for (final v in _videos) {
+      set.addAll(v.tags);
+    }
+    return set.toList();
+  }
+
+  Future<void> _editVideoTagsAndCaption(VideoMeta video) async {
+    final isPro = await ref.read(proStatusServiceProvider).isPro();
+    if (!mounted) return;
+    if (!isPro) {
+      showPaywallSheet(context);
+      return;
+    }
+    await showTagCaptionEditorSheet(
+      context: context,
+      title: video.originalName ?? 'Video details',
+      initialTags: video.tags,
+      initialCaption: video.caption,
+      onSave: (tags, caption) async {
+        await ref.read(videoVaultServiceProvider).updateVideoDetails(
+              video.id,
+              tags: tags,
+              caption: caption,
+            );
+        await _loadVideos();
+      },
+    );
+  }
+
+  /// Folder & tag feature: folder chips + tag filter + search query.
   List<VideoMeta> _visibleVideos() {
-    if (_selectedFolder == null) return _videos;
-    return _videos.where((v) => v.folder == _selectedFolder).toList();
+    var list = _videos;
+    if (_selectedFolder != null) {
+      list = list.where((v) => v.folder == _selectedFolder).toList();
+    }
+    if (_selectedTag != null && _selectedTag!.isNotEmpty) {
+      list = list.where((v) => v.tags.contains(_selectedTag)).toList();
+    }
+    final q = _searchQuery.trim().toLowerCase();
+    if (q.isNotEmpty) {
+      list = list.where((v) {
+        final nameMatch = (v.originalName ?? '').toLowerCase().contains(q);
+        final captionMatch = v.caption.toLowerCase().contains(q);
+        final tagMatch = v.tags.any((t) => t.toLowerCase().contains(q));
+        return nameMatch || captionMatch || tagMatch;
+      }).toList();
+    }
+    return list;
   }
 
   Widget _folderChip(String label, bool selected, VoidCallback onTap,
@@ -946,6 +1030,20 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
                 )
               : Column(
                   children: [
+                    VaultSearchBar(
+                      controller: _searchController,
+                      hintText: 'Search videos by name, caption, #tag...',
+                      onQueryChanged: (v) => setState(() => _searchQuery = v),
+                      onClear: () => setState(() {
+                        _searchController.clear();
+                        _searchQuery = '';
+                      }),
+                      selectedTag: _selectedTag,
+                      onTagSelected: (t) => setState(() => _selectedTag = t),
+                      availableTags: _extractAllTags(),
+                      isPro: ref.watch(isProProvider).value ?? false,
+                      onProRequired: () => showPaywallSheet(context),
+                    ),
                     _buildFolderChips(),
                     if (_selection.isNotEmpty)
                       Material(
@@ -993,10 +1091,12 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
                       ),
                     Expanded(
                       child: _visibleVideos().isEmpty
-                          ? const Center(
+                          ? Center(
                               child: Text(
-                                'No videos in this folder',
-                                style: TextStyle(
+                                (_searchQuery.isNotEmpty || _selectedTag != null)
+                                    ? 'No videos match your search'
+                                    : 'No videos in this folder',
+                                style: const TextStyle(
                                   fontSize: 15,
                                   color: VaultColors.textTertiary,
                                   fontFamily: 'Inter',

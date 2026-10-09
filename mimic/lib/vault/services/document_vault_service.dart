@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import '../../core/services/platform_service.dart';
 import '../crypto/vault_crypto.dart';
 import '../security/auto_lock.dart';
+import '../models/vault_tag.dart';
 
 class DocumentMeta {
   final String id;
@@ -21,6 +22,9 @@ class DocumentMeta {
   final DateTime addedAt;
   final bool isTextNote;
   final String folder;
+  // Smart Vault File Locator: private user tags and caption
+  final List<String> tags;
+  final String caption;
 
   DocumentMeta({
     required this.id,
@@ -30,6 +34,8 @@ class DocumentMeta {
     required this.addedAt,
     this.isTextNote = false,
     this.folder = '',
+    this.tags = const [],
+    this.caption = '',
   });
 
   Map<String, dynamic> toMap() => {
@@ -40,6 +46,8 @@ class DocumentMeta {
         'addedAt': addedAt.toIso8601String(),
         'isTextNote': isTextNote ? 1 : 0,
         'folder': folder,
+        'tags': tags.join(','),
+        'caption': caption,
       };
 
   factory DocumentMeta.fromMap(Map<String, dynamic> map) => DocumentMeta(
@@ -50,6 +58,8 @@ class DocumentMeta {
         addedAt: DateTime.parse(map['addedAt'] as String),
         isTextNote: (map['isTextNote'] as int? ?? 0) == 1,
         folder: map['folder'] as String? ?? '',
+        tags: VaultTags.parseList(map['tags']),
+        caption: map['caption'] as String? ?? '',
       );
 
   DocumentMeta copyWith({
@@ -59,6 +69,8 @@ class DocumentMeta {
     DateTime? addedAt,
     bool? isTextNote,
     String? folder,
+    List<String>? tags,
+    String? caption,
   }) =>
       DocumentMeta(
         id: id,
@@ -68,6 +80,8 @@ class DocumentMeta {
         addedAt: addedAt ?? this.addedAt,
         isTextNote: isTextNote ?? this.isTextNote,
         folder: folder ?? this.folder,
+        tags: tags ?? this.tags,
+        caption: caption ?? this.caption,
       );
 }
 
@@ -96,15 +110,29 @@ class DocumentVaultService {
 
   DocumentVaultService(this._platformService, this._crypto);
 
-  DocumentMeta _decryptMeta(DocumentMeta meta) {
-    if (meta.fileName.isEmpty) return meta;
-    try {
-      final decrypted = _crypto.decryptString(meta.fileName);
-      return meta.copyWith(fileName: decrypted);
-    } catch (_) {
-      // Fallback for pre-existing legacy cleartext filenames
-      return meta;
+  DocumentMeta _hydrateDocumentMap(Map<String, dynamic> raw) {
+    final m = Map<String, dynamic>.from(raw);
+    final rawName = m['fileName'] as String?;
+    if (rawName != null && rawName.isNotEmpty) {
+      try {
+        m['fileName'] = _crypto.decryptString(rawName);
+      } catch (_) {
+        // Fallback for pre-existing legacy cleartext filenames
+      }
     }
+    final rawCaption = m['caption'] as String?;
+    if (rawCaption != null && rawCaption.isNotEmpty) {
+      try {
+        m['caption'] = _crypto.decryptString(rawCaption);
+      } catch (_) {}
+    }
+    final rawTags = m['tags'] as String?;
+    if (rawTags != null && rawTags.isNotEmpty) {
+      try {
+        m['tags'] = _crypto.decryptString(rawTags);
+      } catch (_) {}
+    }
+    return DocumentMeta.fromMap(m);
   }
 
   Future<List<DocumentMeta>> listDocuments() async {
@@ -113,7 +141,7 @@ class DocumentVaultService {
       if (raw == null || raw.isEmpty) return [];
       final List<dynamic> decoded = jsonDecode(raw);
       return _dedupById(decoded
-          .map((e) => _decryptMeta(DocumentMeta.fromMap(Map<String, dynamic>.from(e))))
+          .map((e) => _hydrateDocumentMap(Map<String, dynamic>.from(e)))
           .toList());
     }
     // Mobile: secure storage is the source of truth (it always receives the
@@ -123,7 +151,7 @@ class DocumentVaultService {
       try {
         final List<dynamic> decoded = jsonDecode(secureRaw);
         return _dedupById(decoded
-            .map((e) => _decryptMeta(DocumentMeta.fromMap(Map<String, dynamic>.from(e))))
+            .map((e) => _hydrateDocumentMap(Map<String, dynamic>.from(e)))
             .toList());
       } catch (_) {
         // fall through to prefs
@@ -154,7 +182,7 @@ class DocumentVaultService {
       if (raw == null || raw.isEmpty) return [];
       final List<dynamic> decoded = jsonDecode(raw);
       return _dedupById(decoded
-          .map((e) => _decryptMeta(DocumentMeta.fromMap(Map<String, dynamic>.from(e))))
+          .map((e) => _hydrateDocumentMap(Map<String, dynamic>.from(e)))
           .toList());
     } catch (_) {
       return [];
@@ -167,6 +195,16 @@ class DocumentVaultService {
       if (m.fileName.isNotEmpty) {
         try {
           map['fileName'] = _crypto.encryptString(m.fileName);
+        } catch (_) {}
+      }
+      if (m.caption.isNotEmpty) {
+        try {
+          map['caption'] = _crypto.encryptString(m.caption);
+        } catch (_) {}
+      }
+      if (m.tags.isNotEmpty) {
+        try {
+          map['tags'] = _crypto.encryptString(m.tags.join(','));
         } catch (_) {}
       }
       return map;
@@ -461,12 +499,26 @@ class DocumentVaultService {
     } catch (_) {}
   }
 
-  Future<void> moveDocument(String id, String folder) async {
+  /// Smart Vault File Locator: update tags, caption, and/or folder for a document.
+  Future<void> updateDocumentDetails(
+    String id, {
+    List<String>? tags,
+    String? caption,
+    String? folder,
+  }) async {
     final existing = await listDocuments();
     final index = existing.indexWhere((d) => d.id == id);
     if (index == -1) return;
-    existing[index] = existing[index].copyWith(folder: folder);
+    existing[index] = existing[index].copyWith(
+      tags: tags,
+      caption: caption,
+      folder: folder,
+    );
     await _saveMeta(existing);
+  }
+
+  Future<void> moveDocument(String id, String folder) async {
+    await updateDocumentDetails(id, folder: folder);
   }
 
   Future<File?> getDocumentForSharing(DocumentMeta doc) async {
