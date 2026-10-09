@@ -1170,6 +1170,7 @@ void main() {
 
       // Reload settings screen
       await tester.runAsync(() async {
+        fakeCrypto = VaultCrypto(fakePlatform, FakeKeystoreService());
         await fakeCrypto.initialize('1234');
       });
       await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));

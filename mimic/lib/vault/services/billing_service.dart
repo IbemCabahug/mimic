@@ -334,6 +334,12 @@ final billingServiceProvider = Provider<BillingService>((ref) {
   final service = BillingService(
     proStatus: ref.read(proStatusServiceProvider),
   );
-  ref.onDispose(service.dispose);
+  final sub = service.entitlementChanged.listen((_) {
+    ref.invalidate(isProProvider);
+  });
+  ref.onDispose(() {
+    sub.cancel();
+    service.dispose();
+  });
   return service;
 });
