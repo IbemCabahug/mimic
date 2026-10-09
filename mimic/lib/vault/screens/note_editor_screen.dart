@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../services/notes_service.dart';
+import '../services/pro_status_service.dart';
+import '../widgets/paywall_sheet.dart';
+import '../widgets/tag_caption_editor_sheet.dart';
 
 class NoteEditorScreen extends ConsumerStatefulWidget {
   final Note note;
@@ -22,6 +25,7 @@ class NoteEditorScreen extends ConsumerStatefulWidget {
 class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with WidgetsBindingObserver {
   late TextEditingController _titleController;
   late TextEditingController _bodyController;
+  late List<String> _tags;
   bool _hasChanges = false;
   Timer? _autoSaveTimer;
   bool _previewMode = false;
@@ -33,6 +37,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
     WidgetsBinding.instance.addObserver(this);
     _titleController = TextEditingController(text: widget.note.title);
     _bodyController = TextEditingController(text: widget.initialBody);
+    _tags = List.from(widget.note.tags);
     _titleController.addListener(_onContentChanged);
     _bodyController.addListener(_onContentChanged);
   }
@@ -58,6 +63,28 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
     _autoSaveTimer = Timer(const Duration(seconds: 1), _saveNote);
   }
 
+  Future<void> _editTags() async {
+    final isPro = await ref.read(proStatusServiceProvider).isPro();
+    if (!mounted) return;
+    if (!isPro) {
+      showPaywallSheet(context);
+      return;
+    }
+    await showTagCaptionEditorSheet(
+      context: context,
+      title: _titleController.text.trim().isEmpty ? 'Note tags' : _titleController.text.trim(),
+      initialTags: _tags,
+      showCaptionField: false,
+      onSave: (tags, _) async {
+        setState(() {
+          _tags = tags;
+          _hasChanges = true;
+        });
+        await _saveNote();
+      },
+    );
+  }
+
   Future<void> _saveNote() async {
     if (!_hasChanges) return;
     final updatedNote = Note(
@@ -66,6 +93,7 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
       encryptedBody: _bodyController.text,
       createdAt: widget.note.createdAt,
       updatedAt: DateTime.now(),
+      tags: _tags,
     );
     if (mounted) setState(() => _isSaving = true);
     try {
@@ -199,6 +227,11 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
               ),
             ),
             IconButton(
+              icon: const Icon(Icons.label_outline, color: Color(0xFF3A2DB0)),
+              tooltip: 'Tags',
+              onPressed: _editTags,
+            ),
+            IconButton(
               icon: Icon(_previewMode ? Icons.edit_outlined : Icons.visibility_outlined,
                   color: const Color(0xFF3A2DB0)),
               onPressed: () => setState(() => _previewMode = !_previewMode),
@@ -207,6 +240,35 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
         ),
         body: Column(
           children: [
+            if (_tags.isNotEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 4,
+                  children: _tags.map((tag) => InkWell(
+                    onTap: _editTags,
+                    borderRadius: BorderRadius.circular(6),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF3A2DB0).withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        tag,
+                        style: const TextStyle(
+                          color: const Color(0xFF3A2DB0),
+                          fontFamily: 'Inter',
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  )).toList(),
+                ),
+              ),
             Expanded(
               child: _previewMode
                   ? Markdown(
