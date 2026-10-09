@@ -25,6 +25,7 @@ import '../services/vault_wipe_service.dart';
 import '../services/video_thumbnail_service.dart';
 import '../services/intruder_service.dart';
 import '../trigger/gesture_store.dart';
+import '../widgets/paywall_sheet.dart';
 
 class VaultSettingsScreen extends ConsumerStatefulWidget {
   const VaultSettingsScreen({super.key});
@@ -181,11 +182,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     final isPro = await ref.read(proStatusServiceProvider).isPro();
     if (!mounted) return;
     if (!isPro) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Quick entry is part of Mimic Pro'),
-        ),
-      );
+      showPaywallSheet(context);
       return;
     }
     try {
@@ -285,6 +282,14 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           ),
         ),
         actions: [
+          if (!isPro)
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+                showPaywallSheet(context);
+              },
+              child: const Text('Unlock Pro'),
+            ),
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('Cancel'),
@@ -792,6 +797,9 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
         children: [
+          // Mimic Pro Supporter / Upgrade Card
+          isPro ? _buildProSupporterBanner() : _buildProUpgradeCard(),
+
           // Security Section
           _buildSectionHeader('Security'),
           _buildSettingsTile(
@@ -1189,6 +1197,128 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           ),
           trailing: trailing ?? const Icon(Icons.chevron_right, color: VaultColors.textTertiary, size: 20),
           onTap: onTap,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProSupporterBanner() {
+    return InkWell(
+      onTap: () => showPaywallSheet(context),
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF6FBF8),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: VaultColors.success.withValues(alpha: 0.3)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: VaultColors.success.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.workspace_premium,
+                color: VaultColors.success,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Mimic Pro Supporter ⭐',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: VaultColors.textPrimary,
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Lifetime unlock active — Thank you for your support!',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 12,
+                      color: VaultColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.chevron_right, size: 20, color: VaultColors.textSecondary),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProUpgradeCard() {
+    return InkWell(
+      onTap: () => showPaywallSheet(context),
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(
+          color: const Color(0xFFFAF8F5),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: VaultColors.accent.withValues(alpha: 0.3),
+            width: 1.5,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: VaultColors.accent.withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.workspace_premium,
+                color: VaultColors.accent,
+                size: 24,
+              ),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Unlock Mimic Pro',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      color: VaultColors.textPrimary,
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'Quick entry, 30-min idle timeout & support indie privacy.',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 12,
+                      color: VaultColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_forward_ios,
+                size: 14, color: VaultColors.accent),
+          ],
         ),
       ),
     );

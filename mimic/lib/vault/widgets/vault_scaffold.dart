@@ -27,6 +27,25 @@ class VaultScaffold extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final crypto = ref.watch(vaultCryptoProvider);
+    if (!crypto.isUnlocked) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!context.mounted) return;
+        final currentRoute = ModalRoute.of(context);
+        if (currentRoute == null || !currentRoute.isCurrent) return;
+        Navigator.of(context).pushNamedAndRemoveUntil(
+          AppRouter.vaultPinRoute,
+          AppRouter.isNotVaultRoute,
+        );
+      });
+      return const Scaffold(
+        backgroundColor: VaultColors.background,
+        body: Center(
+          child: CircularProgressIndicator(color: VaultColors.accent),
+        ),
+      );
+    }
+
     return Theme(
       data: vaultTheme,
       child: AutoLockWrapper(

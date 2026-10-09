@@ -102,9 +102,6 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
 
   void _handleShakeToHide() {
     if (!mounted) return;
-    setState(() {
-      _isHiding = true;
-    });
 
     // Capture the root overlay state BEFORE pushNamedAndRemoveUntil disposes this screen
     final overlay = Navigator.of(context, rootNavigator: true).overlay;
