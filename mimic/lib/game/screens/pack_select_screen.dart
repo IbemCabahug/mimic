@@ -7,6 +7,8 @@ import 'package:mimic/core/animations/horror_animations.dart';
 import 'package:mimic/game/data/word_packs.dart';
 import 'package:mimic/game/state/game_state.dart';
 import 'package:mimic/game/game.dart';
+import 'package:mimic/vault/services/pro_status_service.dart';
+import 'package:mimic/vault/widgets/paywall_sheet.dart';
 
 class PackSelectScreen extends ConsumerStatefulWidget {
   const PackSelectScreen({super.key});
@@ -25,7 +27,14 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
     _selectedPackIds.add(WordPackData.packs.first.id);
   }
 
-  void _togglePack(String id) {
+  void _togglePack(WordPack pack) {
+    final isPro = ref.read(isProProvider).value ?? false;
+    if (pack.isProOnly && !isPro) {
+      showPaywallSheet(context);
+      return;
+    }
+
+    final id = pack.id;
     setState(() {
       if (_selectedPackIds.contains(id)) {
         // Must keep at least one pack selected
@@ -71,6 +80,7 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isPro = ref.watch(isProProvider).value ?? false;
     return Scaffold(
       backgroundColor: HorrorColors.voidBlack,
       appBar: AppBar(
@@ -114,7 +124,7 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
                   return Padding(
                     padding: const EdgeInsets.only(bottom: 14.0),
                     child: GestureDetector(
-                      onTap: () => _togglePack(pack.id),
+                      onTap: () => _togglePack(pack),
                       child: AnimatedContainer(
                         duration: const Duration(milliseconds: 200),
                         padding: const EdgeInsets.all(16.0),
@@ -184,13 +194,46 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
                                   Row(
                                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                     children: [
-                                      Text(
-                                        pack.name.toUpperCase(),
-                                        style: GoogleFonts.creepster(
-                                          fontSize: 20,
-                                          color: isSelected ? HorrorColors.crimson : HorrorColors.fogWhite,
-                                          letterSpacing: 1.0,
-                                        ),
+                                      Row(
+                                        children: [
+                                          Text(
+                                            pack.name.toUpperCase(),
+                                            style: GoogleFonts.creepster(
+                                              fontSize: 20,
+                                              color: isSelected ? HorrorColors.crimson : HorrorColors.fogWhite,
+                                              letterSpacing: 1.0,
+                                            ),
+                                          ),
+                                          if (pack.isProOnly) ...[
+                                            const SizedBox(width: 8),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                              decoration: BoxDecoration(
+                                                color: const Color(0xFFD97706).withValues(alpha: 0.2),
+                                                borderRadius: BorderRadius.circular(4),
+                                                border: Border.all(color: const Color(0xFFF59E0B), width: 1),
+                                              ),
+                                              child: Row(
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  if (!isPro) ...[
+                                                    const Icon(Icons.lock_outline, size: 10, color: Color(0xFFFBBF24)),
+                                                    const SizedBox(width: 3),
+                                                  ],
+                                                  Text(
+                                                    'PRO',
+                                                    style: GoogleFonts.inter(
+                                                      color: const Color(0xFFFBBF24),
+                                                      fontSize: 10,
+                                                      fontWeight: FontWeight.w800,
+                                                      letterSpacing: 0.8,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ],
+                                        ],
                                       ),
                                       // Word count badge
                                       Container(

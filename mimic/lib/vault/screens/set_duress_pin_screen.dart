@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
 import '../security/duress_service.dart';
+import '../security/decoy_vault_service.dart';
 import '../crypto/vault_crypto.dart';
 
 class SetDuressPinScreen extends ConsumerStatefulWidget {
@@ -13,6 +14,7 @@ class SetDuressPinScreen extends ConsumerStatefulWidget {
 }
 
 class _SetDuressPinScreenState extends ConsumerState<SetDuressPinScreen> {
+  final TextEditingController _currentPinController = TextEditingController();
   final TextEditingController _pinController = TextEditingController();
   final TextEditingController _confirmController = TextEditingController();
   bool _isLoading = false;
@@ -33,62 +35,172 @@ class _SetDuressPinScreenState extends ConsumerState<SetDuressPinScreen> {
     }
   }
 
+  @override
+  void dispose() {
+    _currentPinController.dispose();
+    _pinController.dispose();
+    _confirmController.dispose();
+    super.dispose();
+  }
+
   Future<void> _submitPin() async {
-    final pin = _pinController.text;
-    if (pin.length < 4) {
-      setState(() => _error = 'PIN must be at least 4 digits');
-      return;
-    }
+    if (_hasExistingPin) {
+      // ── Update Flow: Current PIN -> New PIN -> Confirm PIN ──
+      final currentPin = _currentPinController.text.trim();
+      final newPin = _pinController.text.trim();
+      final confirmPin = _confirmController.text.trim();
 
-    // AUDIT-05: Prevent Duress PIN from colliding with Vault Master PIN
-    final isMasterPin = await ref.read(vaultCryptoProvider).verifyPin(pin);
-    if (isMasterPin) {
-      setState(() => _error = 'Duress PIN cannot be the same as your Vault PIN');
-      return;
-    }
-
-    if (!_showConfirm) {
-      setState(() {
-        _showConfirm = true;
-        _error = null;
-      });
-      return;
-    }
-
-    final confirm = _confirmController.text;
-    if (pin != confirm) {
-      setState(() => _error = 'PINs do not match');
-      _confirmController.clear();
-      return;
-    }
-
-    setState(() => _isLoading = true);
-    try {
-      final isMasterPin = await ref.read(vaultCryptoProvider).verifyPin(pin);
-      if (isMasterPin) {
-        setState(() {
-          _error = 'Duress PIN cannot be the same as your Vault PIN';
-          _isLoading = false;
-        });
+      if (currentPin.isEmpty) {
+        setState(() => _error = 'Please enter your current Duress PIN');
         return;
       }
-      await ref.read(duressServiceProvider).setFakePin(pin);
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Duress PIN saved'),
-            backgroundColor: Colors.green,
-          ),
-        );
-        Navigator.of(context).pop();
+      if (newPin.length < 4) {
+        setState(() => _error = 'New PIN must be at least 4 digits');
+        return;
       }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _error = 'Failed to save PIN: $e');
+      if (newPin != confirmPin) {
+        setState(() => _error = 'PINs do not match');
+        return;
       }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
+      if (newPin == currentPin) {
+        setState(() => _error = 'New PIN must be different from current PIN');
+        return;
+      }
+
+      setState(() => _isLoading = true);
+      try {
+        final isCurrentValid = await ref.read(duressServiceProvider).isFakePin(currentPin);
+        if (!isCurrentValid) {
+          if (mounted) {
+            setState(() {
+              _error = 'Incorrect current Duress PIN';
+              _isLoading = false;
+            });
+          }
+          return;
+        }
+
+        // AUDIT-05: Prevent Duress PIN from colliding with Vault Master PIN or Decoy PIN
+        final isMasterPin = await ref.read(vaultCryptoProvider).verifyPin(newPin);
+        if (isMasterPin) {
+          if (mounted) {
+            setState(() {
+              _error = 'This PIN is unavailable. Please choose a different PIN.';
+              _isLoading = false;
+            });
+          }
+          return;
+        }
+
+        final isDecoyPin = await ref.read(decoyVaultServiceProvider).hasStoredDecoyPinMatch(newPin);
+        if (isDecoyPin) {
+          if (mounted) {
+            setState(() {
+              _error = 'This PIN is unavailable. Please choose a different PIN.';
+              _isLoading = false;
+            });
+          }
+          return;
+        }
+
+        await ref.read(duressServiceProvider).setFakePin(newPin);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Duress PIN updated successfully'),
+              backgroundColor: VaultColors.success,
+            ),
+          );
+          Navigator.of(context).pop();
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() => _error = 'Failed to save PIN: $e');
+        }
+      } finally {
+        if (mounted) {
+          setState(() => _isLoading = false);
+        }
+      }
+    } else {
+      // ── Setup Flow: New PIN -> Confirm PIN ──
+      final pin = _pinController.text.trim();
+      if (pin.length < 4) {
+        setState(() => _error = 'PIN must be at least 4 digits');
+        return;
+      }
+
+      if (!_showConfirm) {
+        setState(() => _isLoading = true);
+        try {
+          // AUDIT-05: Prevent Duress PIN from colliding with Vault Master PIN or Decoy PIN
+          final isMasterPin = await ref.read(vaultCryptoProvider).verifyPin(pin);
+          if (isMasterPin) {
+            if (mounted) {
+              setState(() {
+                _error = 'This PIN is unavailable. Please choose a different PIN.';
+                _isLoading = false;
+              });
+            }
+            return;
+          }
+
+          final isDecoyPin = await ref.read(decoyVaultServiceProvider).hasStoredDecoyPinMatch(pin);
+          if (isDecoyPin) {
+            if (mounted) {
+              setState(() {
+                _error = 'This PIN is unavailable. Please choose a different PIN.';
+                _isLoading = false;
+              });
+            }
+            return;
+          }
+
+          if (mounted) {
+            setState(() {
+              _showConfirm = true;
+              _error = null;
+              _isLoading = false;
+            });
+          }
+        } catch (e) {
+          if (mounted) {
+            setState(() {
+              _error = 'Validation error: $e';
+              _isLoading = false;
+            });
+          }
+        }
+        return;
+      }
+
+      final confirm = _confirmController.text.trim();
+      if (pin != confirm) {
+        setState(() => _error = 'PINs do not match');
+        _confirmController.clear();
+        return;
+      }
+
+      setState(() => _isLoading = true);
+      try {
+        await ref.read(duressServiceProvider).setFakePin(pin);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Duress PIN saved successfully'),
+              backgroundColor: VaultColors.success,
+            ),
+          );
+          Navigator.of(context).pop();
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() => _error = 'Failed to save PIN: $e');
+        }
+      } finally {
+        if (mounted) {
+          setState(() => _isLoading = false);
+        }
       }
     }
   }
@@ -99,22 +211,22 @@ class _SetDuressPinScreenState extends ConsumerState<SetDuressPinScreen> {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: Text(
+        title: const Text(
           'Remove Duress PIN?',
           style: TextStyle(fontWeight: FontWeight.bold, fontFamily: 'Inter', color: VaultColors.textPrimary),
         ),
-        content: Text(
+        content: const Text(
           'This will disable the fake PIN feature. The admin panel will no longer be accessible via a secret PIN.',
           style: TextStyle(fontFamily: 'Inter', color: VaultColors.textSecondary),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
           ),
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: Text('Remove', style: TextStyle(color: VaultColors.error, fontFamily: 'Inter')),
+            child: const Text('Remove', style: TextStyle(color: VaultColors.error, fontFamily: 'Inter')),
           ),
         ],
       ),
@@ -124,9 +236,9 @@ class _SetDuressPinScreenState extends ConsumerState<SetDuressPinScreen> {
       await ref.read(duressServiceProvider).clearFakePin();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
+          const SnackBar(
             content: Text('Duress PIN removed'),
-            backgroundColor: Colors.green,
+            backgroundColor: VaultColors.success,
           ),
         );
         Navigator.of(context).pop();
@@ -134,11 +246,26 @@ class _SetDuressPinScreenState extends ConsumerState<SetDuressPinScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    _pinController.dispose();
-    _confirmController.dispose();
-    super.dispose();
+  InputDecoration _inputDecoration(String label) {
+    return InputDecoration(
+      labelText: label,
+      labelStyle: const TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter'),
+      counterText: '',
+      filled: true,
+      fillColor: VaultColors.surface,
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: Color(0xFFE0E0E0)),
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(12),
+        borderSide: const BorderSide(color: VaultColors.accent, width: 2),
+      ),
+    );
   }
 
   @override
@@ -149,115 +276,304 @@ class _SetDuressPinScreenState extends ConsumerState<SetDuressPinScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         title: Text(
-          _hasExistingPin ? 'Change Duress PIN' : 'Set Duress PIN',
-          style: TextStyle(color: VaultColors.accent, fontSize: 20, fontWeight: FontWeight.bold, fontFamily: 'Inter'),
+          _hasExistingPin ? 'Change Duress PIN' : 'Set Up Duress PIN',
+          style: const TextStyle(
+            color: VaultColors.accent,
+            fontSize: 20,
+            fontWeight: FontWeight.bold,
+            fontFamily: 'Inter',
+          ),
+        ),
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: VaultColors.accent),
+          onPressed: () => Navigator.of(context).pop(),
         ),
         centerTitle: true,
       ),
-      body: Padding(
-        padding: EdgeInsets.all(24),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text(
-              'Enter a fake PIN that opens the admin panel instead of your vault.',
-              style: TextStyle(fontSize: 14, color: VaultColors.textSecondary, fontFamily: 'Inter'),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: VaultColors.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: VaultColors.accent.withValues(alpha: 0.15)),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.admin_panel_settings, color: VaultColors.accent, size: 28),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _hasExistingPin ? 'Modify Duress PIN' : 'Silent Emergency Trigger',
+                          style: const TextStyle(
+                            fontFamily: 'Inter',
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                            color: VaultColors.textPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          _hasExistingPin
+                              ? 'Enter your current Duress PIN to verify identity, then configure your new emergency PIN.'
+                              : 'Entering this fake PIN at the vault unlock screen silently opens the dummy admin panel instead of your vault.',
+                          style: const TextStyle(
+                            fontFamily: 'Inter',
+                            fontSize: 13,
+                            color: VaultColors.textSecondary,
+                            height: 1.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
-            SizedBox(height: 32),
-            _PinDots(pin: _pinController.text, maxLength: 8),
-            SizedBox(height: 24),
-            TextField(
-              controller: _pinController,
-              obscureText: true,
-              keyboardType: TextInputType.number,
-              maxLength: 8,
-              style: TextStyle(color: VaultColors.textPrimary, fontFamily: 'Inter'),
-              decoration: InputDecoration(
-                labelText: _showConfirm ? 'New PIN' : 'Enter Duress PIN',
-                labelStyle: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter'),
-                counterText: '',
-                filled: true,
-                fillColor: VaultColors.surface,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: Color(0xFFE0E0E0)),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: Color(0xFFE0E0E0)),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: VaultColors.accent),
+            const SizedBox(height: 28),
+            if (_hasExistingPin) ...[
+              // Current PIN
+              const Text(
+                'Current Duress PIN',
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: VaultColors.textPrimary,
                 ),
               ),
-              onChanged: (_) => setState(() => _error = null),
-            ),
-            if (_showConfirm) ...[
-              SizedBox(height: 16),
+              const SizedBox(height: 8),
+              _PinDots(pin: _currentPinController.text, maxLength: 8),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _currentPinController,
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                maxLength: 8,
+                style: const TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 22,
+                  letterSpacing: 4,
+                  color: VaultColors.textPrimary,
+                ),
+                decoration: _inputDecoration('Enter Current Duress PIN'),
+                onChanged: (_) => setState(() => _error = null),
+              ),
+              const SizedBox(height: 20),
+              // New PIN
+              const Text(
+                'New Duress PIN',
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: VaultColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              _PinDots(pin: _pinController.text, maxLength: 8),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _pinController,
+                obscureText: true,
+                keyboardType: TextInputType.number,
+                maxLength: 8,
+                style: const TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 22,
+                  letterSpacing: 4,
+                  color: VaultColors.textPrimary,
+                ),
+                decoration: _inputDecoration('Enter New Duress PIN'),
+                onChanged: (_) => setState(() => _error = null),
+              ),
+              const SizedBox(height: 20),
+              // Confirm New PIN
+              const Text(
+                'Confirm New Duress PIN',
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: VaultColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
               _PinDots(pin: _confirmController.text, maxLength: 8),
-              SizedBox(height: 24),
+              const SizedBox(height: 12),
               TextField(
                 controller: _confirmController,
                 obscureText: true,
                 keyboardType: TextInputType.number,
                 maxLength: 8,
-                style: TextStyle(color: VaultColors.textPrimary, fontFamily: 'Inter'),
-                decoration: InputDecoration(
-                  labelText: 'Confirm Duress PIN',
-                  labelStyle: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter'),
-                  counterText: '',
-                  filled: true,
-                  fillColor: VaultColors.surface,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Color(0xFFE0E0E0)),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Color(0xFFE0E0E0)),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: VaultColors.accent),
-                  ),
+                style: const TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 22,
+                  letterSpacing: 4,
+                  color: VaultColors.textPrimary,
                 ),
+                decoration: _inputDecoration('Confirm New Duress PIN'),
                 onChanged: (_) => setState(() => _error = null),
               ),
+            ] else ...[
+              // Setup Flow
+              Text(
+                _showConfirm ? 'Confirm Duress PIN' : 'Enter Duress PIN',
+                style: const TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: VaultColors.textPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _showConfirm
+                    ? 'Re-enter the same PIN to verify'
+                    : 'Must be at least 4 digits, different from other vault PINs',
+                style: const TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 13,
+                  color: VaultColors.textSecondary,
+                ),
+              ),
+              if (!_showConfirm) ...[
+                _PinDots(pin: _pinController.text, maxLength: 8),
+                const SizedBox(height: 24),
+                TextField(
+                  controller: _pinController,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  maxLength: 8,
+                  autofocus: true,
+                  style: const TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 22,
+                    letterSpacing: 4,
+                    color: VaultColors.textPrimary,
+                  ),
+                  decoration: _inputDecoration('Enter Duress PIN'),
+                  onChanged: (_) {
+                    setState(() {
+                      _error = null;
+                      if (_showConfirm) {
+                        _showConfirm = false;
+                        _confirmController.clear();
+                      }
+                    });
+                  },
+                ),
+              ] else ...[
+                _PinDots(pin: _confirmController.text, maxLength: 8),
+                const SizedBox(height: 24),
+                TextField(
+                  controller: _confirmController,
+                  obscureText: true,
+                  keyboardType: TextInputType.number,
+                  maxLength: 8,
+                  autofocus: true,
+                  style: const TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 22,
+                    letterSpacing: 4,
+                    color: VaultColors.textPrimary,
+                  ),
+                  decoration: _inputDecoration('Re-enter your PIN to verify'),
+                  onChanged: (_) => setState(() => _error = null),
+                ),
+                const SizedBox(height: 12),
+                Center(
+                  child: TextButton(
+                    onPressed: () {
+                      setState(() {
+                        _showConfirm = false;
+                        _confirmController.clear();
+                        _error = null;
+                      });
+                    },
+                    child: const Text(
+                      'Back to change PIN',
+                      style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+                    ),
+                  ),
+                ),
+              ],
             ],
             if (_error != null) ...[
-              SizedBox(height: 16),
-              Text(
-                _error!,
-                style: TextStyle(color: VaultColors.error, fontSize: 13, fontFamily: 'Inter'),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: VaultColors.error.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.error_outline, color: VaultColors.error, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        _error!,
+                        style: const TextStyle(
+                          color: VaultColors.error,
+                          fontSize: 13,
+                          fontFamily: 'Inter',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
-            SizedBox(height: 32),
+            const SizedBox(height: 28),
             ElevatedButton(
               onPressed: _isLoading ? null : _submitPin,
               style: ElevatedButton.styleFrom(
                 backgroundColor: VaultColors.accent,
                 foregroundColor: Colors.white,
-                minimumSize: Size(double.infinity, 50),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
+                minimumSize: const Size(double.infinity, 50),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               ),
               child: _isLoading
-                  ? SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
                   : Text(
-                      _hasExistingPin ? 'Update PIN' : (_showConfirm ? 'Confirm PIN' : 'Continue'),
-                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+                      _hasExistingPin
+                          ? 'Update Duress PIN'
+                          : (_showConfirm ? 'Save Duress PIN' : 'Continue'),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'Inter',
+                      ),
                     ),
             ),
             if (_hasExistingPin) ...[
-              SizedBox(height: 12),
-              TextButton(
-                onPressed: _removePin,
-                style: TextButton.styleFrom(foregroundColor: VaultColors.error),
-                child: Text(
+              const SizedBox(height: 20),
+              const Divider(),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _isLoading ? null : _removePin,
+                icon: const Icon(Icons.delete_outline, color: VaultColors.error),
+                label: const Text(
                   'Remove Duress PIN',
-                  style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+                  style: TextStyle(color: VaultColors.error, fontFamily: 'Inter'),
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: VaultColors.error),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                 ),
               ),
             ],
@@ -283,7 +599,7 @@ class _PinDots extends StatelessWidget {
         return Container(
           width: 16,
           height: 16,
-          margin: EdgeInsets.symmetric(horizontal: 6),
+          margin: const EdgeInsets.symmetric(horizontal: 6),
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: filled ? VaultColors.accent : VaultColors.surface,

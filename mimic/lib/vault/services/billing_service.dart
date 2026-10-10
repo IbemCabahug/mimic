@@ -31,10 +31,12 @@
 // recorded in [lastError] for diagnostics.
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'billing_verifier.dart';
 import 'pro_status_service.dart';
@@ -92,6 +94,136 @@ class NoOpBillingStore implements BillingStore {
   Future<void> completePurchase(PurchaseDetails purchase) async {}
 }
 
+/// A simulated billing store used in debug mode when Google Play is not connected.
+/// Simulates product queries, purchases, and restorations seamlessly through the exact same
+/// [BillingStore] pipeline without requiring an active Play Store connection or live product ID.
+class SimulatedBillingStore implements BillingStore {
+  SimulatedBillingStore({ProStatusService? proStatus}) : _pro = proStatus;
+
+  final ProStatusService? _pro;
+  final StreamController<List<PurchaseDetails>> _controller =
+      StreamController<List<PurchaseDetails>>.broadcast();
+
+  static const String _kSimulatedPlayProKey = 'debug_simulated_play_has_pro';
+
+  /// Whether the simulated store should act offline (for testing checks 22-23).
+  static bool simulateOffline = false;
+
+  /// Memory fallback if prefs are unavailable
+  static bool _accountOwnsProMemory = false;
+
+  /// Whether the simulated Google Play account owns the lifetime Pro product.
+  static Future<bool> hasAccountOwnedPro() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool(_kSimulatedPlayProKey) ?? _accountOwnsProMemory;
+    } catch (_) {
+      return _accountOwnsProMemory;
+    }
+  }
+
+  /// Sets whether the simulated Google Play account owns Pro.
+  static Future<void> setAccountOwnedPro(bool owned) async {
+    _accountOwnsProMemory = owned;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_kSimulatedPlayProKey, owned);
+    } catch (_) {}
+  }
+
+  @override
+  Stream<List<PurchaseDetails>> get purchaseStream => _controller.stream;
+
+  @override
+  Future<bool> isAvailable() async => !simulateOffline;
+
+  @override
+  Future<ProductDetailsResponse> queryProductDetails(Set<String> ids) async {
+    if (simulateOffline) {
+      return ProductDetailsResponse(
+        productDetails: const <ProductDetails>[],
+        notFoundIDs: ids.toList(),
+      );
+    }
+    return ProductDetailsResponse(
+      productDetails: [
+        ProductDetails(
+          id: kProProductId,
+          title: 'Mimic Pro',
+          description: 'Lifetime unlock',
+          price: '₱99.00',
+          rawPrice: 99.0,
+          currencyCode: 'PHP',
+        ),
+      ],
+      notFoundIDs: const [],
+    );
+  }
+
+  @override
+  Future<bool> buyNonConsumable({required PurchaseParam purchaseParam}) async {
+    if (simulateOffline) {
+      return false;
+    }
+    // Record simulated purchase on the user's simulated Google Play account
+    await setAccountOwnedPro(true);
+
+    // Simulate network delay / Google Play OS sheet interaction (1.2 seconds)
+    await Future<void>.delayed(const Duration(milliseconds: 1200));
+
+    final details = PurchaseDetails(
+      purchaseID: 'simulated-${DateTime.now().millisecondsSinceEpoch}',
+      productID: kProProductId,
+      verificationData: PurchaseVerificationData(
+        localVerificationData: json.encode({
+          'productId': kProProductId,
+          'packageName': kGooglePlayPackageName,
+          'purchaseState': 0,
+          'purchaseTime': DateTime.now().millisecondsSinceEpoch,
+        }),
+        serverVerificationData: 'simulated_signature_payload',
+        source: 'google_play',
+      ),
+      transactionDate: DateTime.now().millisecondsSinceEpoch.toString(),
+      status: PurchaseStatus.purchased,
+    );
+    details.pendingCompletePurchase = true;
+
+    _controller.add([details]);
+    return true;
+  }
+
+  @override
+  Future<void> restorePurchases() async {
+    final owned = await hasAccountOwnedPro();
+    if (owned) {
+      final details = PurchaseDetails(
+        purchaseID: 'simulated-restore-${DateTime.now().millisecondsSinceEpoch}',
+        productID: kProProductId,
+        verificationData: PurchaseVerificationData(
+          localVerificationData: json.encode({
+            'productId': kProProductId,
+            'packageName': kGooglePlayPackageName,
+            'purchaseState': 0,
+            'purchaseTime': DateTime.now().millisecondsSinceEpoch,
+          }),
+          serverVerificationData: 'simulated_signature_payload',
+          source: 'google_play',
+        ),
+        transactionDate: DateTime.now().millisecondsSinceEpoch.toString(),
+        status: PurchaseStatus.restored,
+      );
+      details.pendingCompletePurchase = true;
+      _controller.add([details]);
+    }
+  }
+
+  @override
+  Future<void> completePurchase(PurchaseDetails purchase) async {
+    // Simulated purchase completion confirmed
+  }
+}
+
 /// The real store: thin delegation to the plugin singleton.
 class PlayBillingStore implements BillingStore {
   final InAppPurchase _plugin = InAppPurchase.instance;
@@ -130,14 +262,23 @@ class BillingService {
         _store = store ??
             (proStatus.isFoss
                 ? const NoOpBillingStore()
-                : PlayBillingStore()),
+                // DEBUG-ONLY simulation: gated on kDebugMode alone, never on
+                // kBillingSimulationEnabled, so a release/profile APK always
+                // uses the real Google Play store. (P0-1 teardown, 2026-10-10.)
+                : (kDebugMode
+                    ? SimulatedBillingStore(proStatus: proStatus)
+                    : PlayBillingStore())),
         _verifier = verifier ??
             GooglePlaySignatureVerifier(
               base64PublicKey: kGooglePlayPublicKey,
               expectedProductId: kProProductId,
               expectedPackageName: expectedPackageName ??
                   (kGooglePlayPackageName.isNotEmpty ? kGooglePlayPackageName : null),
-              allowUnverifiedWhenNoKey: allowUnverifiedWhenNoKey ?? kDebugMode,
+              // FAIL CLOSED in release: a release build must never grant Pro on
+              // an unverified receipt. Only debug builds may bypass when no key
+              // is configured. (P0-1 teardown, 2026-10-10.)
+              allowUnverifiedWhenNoKey:
+                  allowUnverifiedWhenNoKey ?? kDebugMode,
             );
 
   final ProStatusService _pro;
@@ -185,6 +326,7 @@ class BillingService {
       final bool available = await _store.isAvailable();
       if (!available) {
         lastError = 'store unavailable';
+        _proProduct = null;
         return;
       }
       final ProductDetailsResponse response =
@@ -197,7 +339,14 @@ class BillingService {
           : response.productDetails.first;
     } catch (error) {
       lastError = 'billing init failed: $error';
+      _proProduct = null;
     }
+  }
+
+  /// For debug/simulation: resets the cached product and re-runs init.
+  Future<void> reloadProductDetails() async {
+    _proProduct = null;
+    await init();
   }
 
   /// Launches the Play purchase flow for the lifetime Pro product.

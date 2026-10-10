@@ -1,4 +1,5 @@
 // mimic/lib/vault/screens/vault_settings_screen.dart
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,10 +17,13 @@ import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
 import '../security/vault_conceal_service.dart';
 import '../security/duress_service.dart';
+import '../security/decoy_vault_service.dart';
+import '../services/vault_theme_service.dart';
 import '../widgets/vault_scaffold.dart';
 import '../../core/router/app_router.dart';
 import 'gesture_setup_screen.dart';
 import '../services/pro_status_service.dart';
+import '../services/billing_service.dart';
 import '../services/quick_entry_service.dart';
 import '../services/vault_wipe_service.dart';
 import '../services/video_thumbnail_service.dart';
@@ -49,6 +53,8 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   // entry check itself happens at tap time on the game screen — this
   // field only drives the toggle and its subtitle.
   bool? _quickEntryEnabled;
+  bool _hasDecoyPin = false;
+  bool _hasDuressPin = false;
 
   @override
   void initState() {
@@ -59,6 +65,22 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     _loadIntruderCapturePref();
     _loadIdleTimeoutPref();
     _loadQuickEntryPref();
+    _checkDecoyPin();
+    _checkDuressPin();
+  }
+
+  Future<void> _checkDecoyPin() async {
+    final enabled = await ref.read(decoyVaultServiceProvider).isDecoyPinEnabled();
+    if (mounted) {
+      setState(() => _hasDecoyPin = enabled);
+    }
+  }
+
+  Future<void> _checkDuressPin() async {
+    final enabled = await ref.read(duressServiceProvider).isFakePinEnabled();
+    if (mounted) {
+      setState(() => _hasDuressPin = enabled);
+    }
   }
 
   Future<void> _loadShakePref() async {
@@ -526,15 +548,24 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
             ),
             TextButton(
               onPressed: isProcessing ? null : () async {
+                final currentPin = currentPinController.text;
                 final newPin = newPinController.text;
                 final confirmPin = confirmPinController.text;
 
+                if (currentPin.isEmpty) {
+                  setDialogState(() => error = 'Please enter your current PIN');
+                  return;
+                }
                 if (newPin.length < 4) {
                   setDialogState(() => error = 'New PIN must be at least 4 digits');
                   return;
                 }
                 if (newPin != confirmPin) {
                   setDialogState(() => error = 'PINs do not match');
+                  return;
+                }
+                if (newPin == currentPin) {
+                  setDialogState(() => error = 'New PIN must be different from current PIN');
                   return;
                 }
 
@@ -544,20 +575,42 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                 });
 
                 try {
-                  // AUDIT-05: Prevent Master PIN from colliding with active Duress PIN
+                  final crypto = ref.read(vaultCryptoProvider);
+                  final isCurrentValid = await crypto.verifyPin(currentPin);
+                  if (!isCurrentValid) {
+                    if (dialogContext.mounted) {
+                      setDialogState(() {
+                        isProcessing = false;
+                        error = 'Incorrect current PIN';
+                      });
+                    }
+                    return;
+                  }
+
+                  // AUDIT-05: Prevent Master PIN from colliding with active Duress PIN or Decoy PIN
                   final duressService = ref.read(duressServiceProvider);
                   final isDuressPin = await duressService.isFakePin(newPin);
                   if (isDuressPin) {
                     if (dialogContext.mounted) {
                       setDialogState(() {
                         isProcessing = false;
-                        error = 'Vault PIN cannot be the same as Duress PIN';
+                        error = 'This PIN is unavailable. Please choose a different PIN.';
                       });
                     }
                     return;
                   }
 
-                  final crypto = ref.read(vaultCryptoProvider);
+                  final isDecoyPin = await ref.read(decoyVaultServiceProvider).hasStoredDecoyPinMatch(newPin);
+                  if (isDecoyPin) {
+                    if (dialogContext.mounted) {
+                      setDialogState(() {
+                        isProcessing = false;
+                        error = 'This PIN is unavailable. Please choose a different PIN.';
+                      });
+                    }
+                    return;
+                  }
+
                   // Preserve the data key (DEK): changePin re-wraps the SAME key under the new PIN.
                   // NEVER delete the salt/hash or call initialize() here — that creates a new key
                   // and permanently orphans all encrypted photos, videos, and documents.
@@ -794,6 +847,18 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     return VaultScaffold(
       title: 'Settings',
       showLockButton: false,
+      actions: [
+        // Dev/billing-simulation entry is DEBUG-ONLY by construction: gated on
+        // kDebugMode alone (not kBillingSimulationEnabled) so a release or
+        // profile APK can never surface it, even if the simulation flag is
+        // accidentally re-enabled. See pro_status_service.dart (P0-1 teardown).
+        if (kDebugMode)
+          IconButton(
+            icon: const Icon(Icons.build_circle_outlined, color: VaultColors.accent),
+            tooltip: 'Billing Simulation Suite',
+            onPressed: () => _showDevSimulationSheet(context),
+          ),
+      ],
       body: ListView(
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
         children: [
@@ -915,9 +980,39 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           _buildSettingsTile(
             icon: Icons.admin_panel_settings,
             title: 'Duress PIN',
-            subtitle: 'Fake PIN that opens the admin panel instead of your vault',
+            subtitle: _hasDuressPin
+                ? 'Duress PIN active — opens admin panel instead of your vault'
+                : 'Fake PIN that opens the admin panel instead of your vault',
+            trailing: _hasDuressPin
+                ? const Icon(Icons.check_circle, color: VaultColors.success, size: 20)
+                : null,
             onTap: () {
-              Navigator.of(context).pushNamed('/vault-set-duress-pin');
+              Navigator.of(context)
+                  .pushNamed('/vault-set-duress-pin')
+                  .then((_) => _checkDuressPin());
+            },
+          ),
+          _buildSettingsTile(
+            icon: Icons.hide_source_outlined,
+            title: 'Decoy Vault (Ghost Album)',
+            subtitle: !isPro
+                ? 'Fake PIN that opens a harmless decoy vault for plausible deniability'
+                : _hasDecoyPin
+                    ? 'Decoy PIN active — opens harmless ghost vault'
+                    : 'Fake PIN that opens a harmless decoy vault for plausible deniability',
+            trailing: !isPro
+                ? _buildProBadge()
+                : _hasDecoyPin
+                    ? const Icon(Icons.check_circle, color: VaultColors.success, size: 20)
+                    : null,
+            onTap: () {
+              if (!isPro) {
+                showPaywallSheet(context);
+                return;
+              }
+              Navigator.of(context)
+                  .pushNamed('/vault-set-decoy-pin')
+                  .then((_) => _checkDecoyPin());
             },
           ),
           _buildSettingsTile(
@@ -941,28 +1036,35 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
             subtitle: _idleTimeoutSubtitle(),
             onTap: _showIdleTimeoutDialog,
           ),
-          // F27: the Pro quick-entry toggle — rendered only for Pro. The
-          // handler additionally asks isPro() at use time (turning ON is
-          // gated; turning OFF is allowed for everyone — a protective
+          // F27: the Pro quick-entry toggle — visible for all users, but
+          // gated for free: a PRO badge replaces the switch, and tapping
+          // the tile opens the paywall. Pro users get the live toggle.
+          // The handler additionally asks isPro() at use time (turning ON
+          // is gated; turning OFF is allowed for everyone — a protective
           // direction is never gated). The subtitle carries the honest
           // warning the spec requires: what the shortcut skips, and the
           // coercion note.
-          if (isPro)
-            _buildSettingsTile(
-              icon: Icons.bolt_outlined,
-              title: 'Quick entry to the vault',
-              subtitle: '${_quickEntrySubtitle()}: long-press the MIMIC '
-                  'title on the game home to skip the tap gesture. Your '
-                  'PIN, biometrics, lockout and break-in log are unchanged, '
-                  'and anyone holding your unlocked phone can reach this '
-                  'screen and turn it on.',
-              onTap: () {},
-              trailing: Switch(
-                value: _quickEntryEnabled ?? false,
-                onChanged: _onQuickEntryToggle,
-                activeThumbColor: VaultColors.accent,
-              ),
-            ),
+          _buildSettingsTile(
+            icon: Icons.bolt_outlined,
+            title: 'Quick entry to the vault',
+            subtitle: isPro
+                ? '${_quickEntrySubtitle()}: long-press the MIMIC '
+                    'title on the game home to skip the tap gesture. Your '
+                    'PIN, biometrics, lockout and break-in log are unchanged, '
+                    'and anyone holding your unlocked phone can reach this '
+                    'screen and turn it on.'
+                : 'Long-press the MIMIC title on the game home to skip the tap gesture',
+            trailing: isPro
+                ? Switch(
+                    value: _quickEntryEnabled ?? false,
+                    onChanged: _onQuickEntryToggle,
+                    activeThumbColor: VaultColors.accent,
+                  )
+                : _buildProBadge(),
+            onTap: isPro
+                ? () {}
+                : () => showPaywallSheet(context),
+          ),
           // Shake Sensitivity selector — only active when shake is enabled
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -1099,6 +1201,29 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
 
           const SizedBox(height: 24),
 
+          // Appearance & Storage Section
+          _buildSectionHeader('Appearance & Storage'),
+          _buildSettingsTile(
+            icon: Icons.palette_outlined,
+            title: 'Vault Visual Theme',
+            subtitle: 'Stealth and OLED color palettes (${ref.watch(vaultThemeProvider).name})',
+            trailing: isPro ? null : _buildProBadge(),
+            onTap: () {
+              Navigator.of(context).pushNamed('/vault-theme-selector');
+            },
+          ),
+          _buildSettingsTile(
+            icon: Icons.cleaning_services_outlined,
+            title: 'Storage Optimizer',
+            subtitle: 'Find duplicate photos and videos over 20 MB',
+            trailing: isPro ? null : _buildProBadge(),
+            onTap: () {
+              Navigator.of(context).pushNamed('/vault-storage-optimizer');
+            },
+          ),
+
+          const SizedBox(height: 24),
+
           // Guide Section
           _buildSectionHeader('Guide'),
           _buildSettingsTile(
@@ -1122,10 +1247,186 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
             iconColor: VaultColors.error,
           ),
 
+          // DEV-ONLY: Pro simulation and testing tools.
+          // Gated on kDebugMode alone so this section — including the one-tap
+          // "Toggle Local Pro Entitlement" that calls grantPro() — can NEVER
+          // render in a release or profile APK, regardless of the simulation
+          // flag. This closes the free-Pro bypass in distributed builds.
+          if (kDebugMode) ...[
+            const SizedBox(height: 24),
+            _buildSectionHeader('Developer & Billing Simulation'),
+            ..._buildDevSimulationTiles(context),
+          ],
+
           const SizedBox(height: 40),
         ],
       ),
     );
+  }
+
+  void _showDevSimulationSheet(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => Container(
+        decoration: const BoxDecoration(
+          color: VaultColors.background,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+        child: SafeArea(
+          top: false,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFDCD8CE),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Simulation & Testing Suite',
+                      style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: VaultColors.textPrimary,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close, color: VaultColors.textSecondary),
+                      onPressed: () => Navigator.of(sheetContext).pop(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                ..._buildDevSimulationTiles(context),
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _buildDevSimulationTiles(BuildContext context) {
+    final isPro = ref.watch(isProProvider).valueOrNull ?? false;
+    return [
+      _buildSettingsTile(
+        icon: Icons.science_outlined,
+        title: 'Toggle Local Pro Entitlement',
+        subtitle: isPro
+            ? 'Currently PRO (in secure storage) — tap to revoke'
+            : 'Currently FREE (in secure storage) — tap to grant',
+        iconColor: isPro ? VaultColors.success : VaultColors.accent,
+        onTap: () async {
+          final proService = ref.read(proStatusServiceProvider);
+          final wasPro = await proService.isPro();
+          if (wasPro) {
+            await proService.revokePro();
+          } else {
+            await proService.grantPro();
+          }
+          ref.invalidate(isProProvider);
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                    wasPro ? 'Pro REVOKED locally' : 'Pro GRANTED locally'),
+                backgroundColor:
+                    wasPro ? VaultColors.error : VaultColors.success,
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            );
+          }
+        },
+      ),
+      FutureBuilder<bool>(
+        future: SimulatedBillingStore.hasAccountOwnedPro(),
+        builder: (context, snapshot) {
+          final hasAccountPro = snapshot.data ?? false;
+          return _buildSettingsTile(
+            icon: Icons.account_balance_wallet_outlined,
+            title: 'Simulated Play Account Ownership',
+            subtitle: hasAccountPro
+                ? 'Account OWNS Pro (Restore will succeed) — tap to reset'
+                : 'Account EMPTY (Restore will report none) — tap to mark owned',
+            iconColor: hasAccountPro
+                ? VaultColors.success
+                : VaultColors.textSecondary,
+            onTap: () async {
+              await SimulatedBillingStore.setAccountOwnedPro(!hasAccountPro);
+              setState(() {});
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(!hasAccountPro
+                        ? 'Simulated Play Account now OWNS Pro'
+                        : 'Simulated Play Account RESET to empty'),
+                    backgroundColor: !hasAccountPro
+                        ? VaultColors.success
+                        : VaultColors.error,
+                    behavior: SnackBarBehavior.floating,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                );
+              }
+            },
+          );
+        },
+      ),
+      _buildSettingsTile(
+        icon: Icons.signal_wifi_off_outlined,
+        title: 'Simulate Billing Offline (Checks 22-23)',
+        subtitle: SimulatedBillingStore.simulateOffline
+            ? 'OFFLINE: Paywall displays orange offline banner'
+            : 'ONLINE: Paywall loads ₱99.00 pricing normally',
+        iconColor: SimulatedBillingStore.simulateOffline
+            ? const Color(0xFFEA580C)
+            : VaultColors.textSecondary,
+        onTap: () async {
+          SimulatedBillingStore.simulateOffline =
+              !SimulatedBillingStore.simulateOffline;
+          await ref.read(billingServiceProvider).reloadProductDetails();
+          setState(() {});
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(SimulatedBillingStore.simulateOffline
+                    ? 'Billing simulation set to OFFLINE (Orange banner active)'
+                    : 'Billing simulation set to ONLINE (Pricing active)'),
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
+            );
+          }
+        },
+      ),
+      _buildSettingsTile(
+        icon: Icons.shopping_bag_outlined,
+        title: 'Launch Paywall Sheet',
+        subtitle: 'Simulate purchase or restore directly through paywall modal',
+        iconColor: VaultColors.accent,
+        onTap: () => showPaywallSheet(context),
+      ),
+    ];
   }
 
   Widget _buildSectionHeader(String title) {
@@ -1319,6 +1620,25 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
             const Icon(Icons.arrow_forward_ios,
                 size: 14, color: VaultColors.accent),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProBadge() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+      decoration: BoxDecoration(
+        color: const Color(0xFFD4AF37),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: const Text(
+        'PRO',
+        style: TextStyle(
+          fontFamily: 'Inter',
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+          color: Colors.black,
         ),
       ),
     );

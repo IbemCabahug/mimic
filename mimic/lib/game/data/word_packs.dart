@@ -54,6 +54,7 @@ class WordPack {
   final String category;
   final IconData icon;
   final List<WordPair> pairs;
+  final bool isProOnly;
 
   const WordPack({
     required this.id,
@@ -62,6 +63,7 @@ class WordPack {
     required this.category,
     required this.icon,
     required this.pairs,
+    this.isProOnly = false,
   });
 }
 
@@ -1321,6 +1323,258 @@ class WordPackData {
         ),
       ],
     ),
+    // 6. Philippine Folklore (Pro Pack)
+    WordPack(
+      id: 'philippine_folklore',
+      name: 'Philippine Folklore',
+      description:
+          'Ancient mythical horrors, cryptids, and twilight apparitions of Philippine legend.',
+      category: 'Folklore',
+      icon: Icons.nightlight_round,
+      isProOnly: true,
+      pairs: [
+        WordPair(
+          realWord: 'Tikbalang',
+          mimicWord: 'Centaur',
+          realWordContext:
+              'Tall equine entity stalking shadowy crossroads and mountain ridges at dusk. Describe the disorienting illusion that spins travelers in circles.',
+          mimicWordContext:
+              'A mythological beast combining human torso and equine legs, bearing bows or spears. Talk about how classical legends portray this proud guardian.',
+          realWordProContext:
+              'Inverted hooves leaving backwards tracks, smoke billowing from towering branches, pungent tobacco aroma hanging over midnight footpaths.',
+          mimicWordProContext:
+              'Hellenic marble statues, polished hunting bows, thundering quad hoofbeats charging through grassy open plains under Mediterranean sunlight.',
+        ),
+        WordPair(
+          realWord: 'Manananggal',
+          mimicWord: 'Harpy',
+          realWordContext:
+              'A nocturnal predator that detaches its upper torso to hunt from thatched roofs. Describe the frantic beating of leathery wings heard across midnight towns.',
+          mimicWordContext:
+              'A winged mythological creature of Greek lore with avian talons and ravenous hunger. Set the windstorm it brings when descending from mountain crags.',
+          realWordProContext:
+              'Severed midsection hidden among banana groves, trailing entrails dripping black venom, elongated tongue poking through woven palm thatch.',
+          mimicWordProContext:
+              'Greedy raptor claws snatching feast platters, screeching wind gales, feathers stained with banquet crumbs, cursed storm clouds circling jagged cliffs.',
+        ),
+        WordPair(
+          realWord: 'Kapre',
+          mimicWord: 'Colossus',
+          realWordContext:
+              'A towering dark-skinned hermit residing inside an ancient balete or mango grove. Describe the glowing ember hanging high up in the dense evening canopy.',
+          mimicWordContext:
+              'An enormous ancient stone monument or mythical titan striding across conquered landscapes. Talk about how its sheer scale dwarfs every structure beneath it.',
+          realWordProContext:
+              'Smoldering rustic cigar illuminating twisted branches, thick beard trailing down rough bark, earthy scent of burnt leaves lingering over rural roads.',
+          mimicWordProContext:
+              'Massive weathered granite limbs, crumbling marble armor, footsteps shaking valley bedrock, ancient inscriptions etched across ancient stone shoulders.',
+        ),
+        WordPair(
+          realWord: 'Tiyanak',
+          mimicWord: 'Goblin',
+          realWordContext:
+              'Deceptive jungle prowler mimicking infant cries to lure compassionate villagers into thick brambles. Describe the sudden horror when its razor fangs reveal themselves.',
+          mimicWordContext:
+              'Small grotesque subterranean troublemaker hoarding stolen trinkets and crude daggers. Talk about its wicked laughter echoing through cavern tunnels.',
+          realWordProContext:
+              'Swaddling cloth discarded in damp mud, sudden transformation into wrinkled predatory claws, bloodthirsty crimson eyes flashing behind bamboo clusters.',
+          mimicWordProContext:
+              'Pointed ragged ears, rusty hooked daggers, filthy sack overflowing with pilfered copper coins, squabbling packs lurking in torchlit dungeon corridors.',
+        ),
+        WordPair(
+          realWord: 'Santelmo',
+          mimicWord: 'Phantom Fire',
+          realWordContext:
+              'Floating fiery apparition born from drownings, chasing lonely sailors along muddy riverbanks. Describe how the blazing sphere dances without consuming fuel.',
+          mimicWordContext:
+              'Unearthly spectral combustion flickering across abandoned ships and desolate marshes. Talk about the cold green radiance that guides travelers into swamps.',
+          realWordProContext:
+              'Sizzling floating ember bobbing over tidal shallows, crackling sparks without smoke, haunting glow hovering above marshy water where drowned souls rest.',
+          mimicWordProContext:
+              'Eerie green luminescence dancing along rotting ship masts, icy touch that causes frostbite instead of burns, silent illumination over murky bogs.',
+        ),
+        WordPair(
+          realWord: 'Nuno sa Punso',
+          mimicWord: 'Gnome',
+          realWordContext:
+              'Ancient diminutive elder dwelling beneath earthen mounds who demands polite permission from passersby. Describe the strange swollen illness cast upon rude intruders.',
+          mimicWordContext:
+              'Bearded woodland earth spirit caring for subterranean burrows and polished gemstones. Set the cozy underground workshop packed with tools and clay lanterns.',
+          realWordProContext:
+              'Whispered apologies before stepping over termite dirt mounds, sudden unexplained bruises on ankles, solitary withered elder sitting cross-legged on soil.',
+          mimicWordProContext:
+              'Conical felt hats, leather aprons dusting off glittering geodes, mossy burrow doorways beneath oak roots, carved wooden smoking pipes on miniature benches.',
+        ),
+        WordPair(
+          realWord: 'White Lady',
+          mimicWord: 'Banshee',
+          realWordContext:
+              'Melancholic apparition floating along Balete Drive or foggy mountain highways late at night. Describe how her flowing pale shroud startles lone motorists.',
+          mimicWordContext:
+              'Celtic harbinger of doom whose piercing wails announce impending tragedy for ancient family bloodlines. Talk about the mournful shriek echoing across the moors.',
+          realWordProContext:
+              'Rearview mirror revealing an uninvited passenger in the backseat, translucent flowing gown, pale face obscured by midnight hair, engine stalling on curve.',
+          mimicWordProContext:
+              'Ear-splitting keening that shatters window glass, weeping crimson tears beneath crescent moonlight, disheveled tresses whipping in cold Irish highland gales.',
+        ),
+        WordPair(
+          realWord: 'Aswang',
+          mimicWord: 'Werewolf',
+          realWordContext:
+              'Shape-shifting nocturnal terror disguising as a domestic dog or pig before raiding remote homes. Describe the chilling ritual of quiet surveillance.',
+          mimicWordContext:
+              'Cursed human beast transforming under full moon illumination into an unstoppable howling predator. Set the feral bloodlust driving its nocturnal woodland hunt.',
+          realWordProContext:
+              'Bloodshot eyes reflecting upside down, clicking clatter of long claws pacing corrugated iron roofing, garlic wreaths and stingray tails hung by doorways.',
+          mimicWordProContext:
+              'Silver bullet loaded into chambers, agonizing bone remodeling during lunar eclipse, torn flannel clothing discarded on pine needles, guttural throat snarls.',
+        ),
+        WordPair(
+          realWord: 'Mambabarang',
+          mimicWord: 'Warlock',
+          realWordContext:
+              'Vengeful sorcerer commanding swarms of flesh-burrowing beetles and centipedes using knotted hair dolls. Talk about how personal belongings are used to target victims.',
+          mimicWordContext:
+              'Practitioner of dark arcane arts channeling forbidden incantations from ancient leather tomes. Describe the crackling purple sparks bursting from conjuring wands.',
+          realWordProContext:
+              'Black beetles swarming out of painful stomach lesions, wicker basket vibrating with venomous insects, strand of target hair tied around a wooden doll leg.',
+          mimicWordProContext:
+              'Runic circle chalked on stone floors, obsidian staff channeling eldritch lightning, glowing purple brimstone burning in bronze censers, chanted invocations.',
+        ),
+        WordPair(
+          realWord: 'Sigbin',
+          mimicWord: 'Chupacabra',
+          realWordContext:
+              'Shadowy dog-like cryptid that hops backwards with its head lowered between its hind limbs during holy week. Describe how it seeks hearts in silent villages.',
+          mimicWordContext:
+              'Notorious reptilian livestock predator of the Americas draining cattle through puncture wounds. Set the eerie silence when farm pastures are invaded at night.',
+          realWordProContext:
+              'Flopping oversized ears clapping like whipcracks, pungent odor of decaying flesh trailing behind, backwards hopping gait vanishing into sugarcane fields.',
+          mimicWordProContext:
+              'Row of spiked quills running along curved spines, drained goats discovered inside padlocked pens, glowing red ocular glare staring across barbed wire fences.',
+        ),
+        WordPair(
+          realWord: 'Sirena',
+          mimicWord: 'Mermaid',
+          realWordContext:
+              'Aquatic enchantress dwelling in deep coral trenches whose hypnotic melodies lure fishermen underwater. Describe how coastal communities respect her domain.',
+          mimicWordContext:
+              'Mythic oceanic maiden with iridescent scales gliding through sunlit turquoise lagoons. Talk about the sea-glass combs and pearl strands she leaves on rocks.',
+          realWordProContext:
+              'Drifting seaweed tangled in emerald tresses, shimmering silver caudal fin plunging into swirling whirlpools, overturned wooden outrigger boats adrift at dawn.',
+          mimicWordProContext:
+              'Basking upon coastal boulders, singing gentle nautical lullabies to passing schooners, gathering pink sea shells, tail splashing playfully in ocean foam.',
+        ),
+        WordPair(
+          realWord: 'Bal-bal',
+          mimicWord: 'Ghoul',
+          realWordContext:
+              'Carrion-eating scavenger swooping down from rafters to steal corpses and substitute banana trunks. Describe the panic among mourning relatives during night wakes.',
+          mimicWordContext:
+              'Foul graveyard scavenger digging up fresh burial plots to feast under the cover of gloom. Set the repugnant atmosphere clinging to its underground banquet.',
+          realWordProContext:
+              'Carved banana tree trunk disguised with illusion spells, ripped cloth above funeral caskets, curved razor talons slicing through wooden ceiling planks.',
+          mimicWordProContext:
+              'Overturned marble headstones, excavated damp soil scattered over open trenches, gnawed skeletal marrow, yellowed fangs dripping putrid grave essence.',
+        ),
+        WordPair(
+          realWord: 'Bungisngis',
+          mimicWord: 'Cyclops',
+          realWordContext:
+              'One-eyed laughing colossus renowned for disproportionate strength and continuous boisterous chuckling. Describe how clever villagers trick this dimwitted brute.',
+          mimicWordContext:
+              'Monolithic one-eyed blacksmith forge titan inhabiting volcanic caverns and pastoral pastures. Talk about the crushing boulders hurled across battlefields.',
+          realWordProContext:
+              'Single bulging eye in middle of forehead, colossal tusks pointing upwards, ceaseless booming laughter shaking jungle branches, swinging tree trunks.',
+          mimicWordProContext:
+              'Blacksmith forge bellows fanning volcano coals, crafting thunderbolts for sky gods, herding oversized sheep into stone caves, colossal bronze war hammers.',
+        ),
+        WordPair(
+          realWord: 'Berberoka',
+          mimicWord: 'Kelpie',
+          realWordContext:
+              'River creature that drinks massive amounts of water to strand fish, drowning greedy fishermen when it spits. Talk about the sudden deluge rushing over dry riverbeds.',
+          mimicWordContext:
+              'Deceptive Scottish aquatic equine tempting travelers to mount its dripping back before diving into lochs. Describe the adhesive magical coat that traps riders.',
+          realWordProContext:
+              'Abruptly drained river channels revealing stranded carp, bloated belly releasing catastrophic tidal surges, drowning victims dragged into submerged caverns.',
+          mimicWordProContext:
+              'Dripping mane tangled with river reeds, deceptive docile stance near dark freshwater lochs, hooves glued to victim palms, plunges into fathomless depths.',
+        ),
+        WordPair(
+          realWord: 'Bakunawa',
+          mimicWord: 'Leviathan',
+          realWordContext:
+              'Colossal sea serpent soaring into the celestial sphere to swallow the lunar orb during eclipses. Describe the desperate banging of pots and pans to scare it away.',
+          mimicWordContext:
+              'Primordial abyssal sea beast capable of sinking entire fleets with sweeping ocean waves. Talk about the churning whirlpools signaling its arrival from the deep.',
+          realWordProContext:
+              'Enormous serpentine jaws enclosing the crescent moon, crimson eclipse darkening archipelago waters, villagers clanging brass gongs and kitchen utensils.',
+          mimicWordProContext:
+              'Armored scales deflecting iron harpoons, titanic tail churning white sea foam, breaching above storm-tossed galleons, abyss trenches trembling with roars.',
+        ),
+        WordPair(
+          realWord: 'Batibat',
+          mimicWord: 'Succubus',
+          realWordContext:
+              'Vengeful tree maiden who suffocates sleepers who craft beds from her felled sacred timber. Describe the paralyzing heaviness crushing the chest during sleep.',
+          mimicWordContext:
+              'Seductive demonic entity entering midnight slumber to drain vitality through intimate deceptions. Set the deceptive allure masking its vampiric intentions.',
+          realWordProContext:
+              'Enormous weight pressing on chest preventing breath, waking paralysis inside dark bedrooms, toes wiggling desperately to break fatal suffocating sleep.',
+          mimicWordProContext:
+              'Leathery bat wings curled around silk bedsheets, hypnotic whispers promising forbidden pleasures, cold lips stealing breath, leaving victims pale and exhausted.',
+        ),
+        WordPair(
+          realWord: 'Pugot',
+          mimicWord: 'Dullahan',
+          realWordContext:
+              'Decapitated black apparition lingering near balete trunks, abandoned ruins, and twilight trails. Talk about its shapeshifting into dark beasts to frighten wanderers.',
+          mimicWordContext:
+              'Headless equestrian rider wielding human spinal whips, stopping only where someone is fated to die. Describe the terrifying black carriage drawn by midnight steeds.',
+          realWordProContext:
+              'Severed neck stump dripping shadowy smoke, sudden transformation into a snarling hog, lurking behind ancient Spanish brick ruins in provincial towns.',
+          mimicWordProContext:
+              'Severed head tucked under rider arm grinning evilly, spinal cord whip striking iron gates, midnight coach with wheel spokes crafted from human femur bones.',
+        ),
+        WordPair(
+          realWord: 'Duwende',
+          mimicWord: 'Sprite',
+          realWordContext:
+              'Tiny humanoid spirit categorized as white or black, bestowing either boundless fortune or painful curses. Describe the tiny footprints found near kitchen hearths.',
+          mimicWordContext:
+              'Ethereal winged woodland fairy flitting across flower meadows and hidden clearings. Talk about the shimmering luminescent dust left in its wake.',
+          realWordProContext:
+              'Little shoes discovered under cupboards, anthill gifts of ginger turning into pure gold, swollen tongue afflicting children who stepped on unseen homes.',
+          mimicWordProContext:
+              'Iridescent gossamer wings fluttering around blooming lilies, radiant pastel sparkles, sipping morning dew from acorns, laughing playfully among clover.',
+        ),
+        WordPair(
+          realWord: 'Amomongo',
+          mimicWord: 'Yeti',
+          realWordContext:
+              'Aggressive wild ape-man inhabiting caves around Mount Kanlaon, disemboweling farm animals. Describe how remote rural farmers safeguard their livestock pens.',
+          mimicWordContext:
+              'Fabled abominable snow creature roaming frigid Himalayan blizzards and desolate mountain peaks. Talk about the colossal footprints preserved in crisp snow.',
+          realWordProContext:
+              'Gouged goat carcasses discovered near sugar plantations, sharp curved fingernails ripping through bamboo huts, guttural primates howling across mountains.',
+          mimicWordProContext:
+              'Shaggy thick white fur coated in ice crystals, massive five-toed tracks across snowy ridges, bone-chilling roar carrying across frozen glacial crevasses.',
+        ),
+        WordPair(
+          realWord: 'Biringan',
+          mimicWord: 'Avalon',
+          realWordContext:
+              'Invisible phantom metropolis of Samar glowing with futuristic skyscrapers that vanish into thick jungle. Describe the eerie black rice offered to unwary guests.',
+          mimicWordContext:
+              'Mystical utopian island veiled in enchanted mists where legendary monarchs rest and heal. Set the ethereal beauty of its eternal spring and apple orchards.',
+          realWordProContext:
+              'Gleaming high-tech skyscrapers materializing within dense wilderness, luxury cars on unpaved dirt roads, black food that traps visitors forever in dimensions.',
+          mimicWordProContext:
+              'Misty barge gliding across calm enchanted lakes, blooming apple trees that never wither, silver chalices brimming with restorative elixirs, veiled queens.',
+        ),
+      ],
+    ),
   ];
 
   static const List<String> supportedLanguages = ['en', 'fil', 'ceb'];
@@ -1436,6 +1690,28 @@ class WordPackData {
       WordPair(realWord: 'Glitch', mimicWord: 'Mali'),              // Glitch / Error
       WordPair(realWord: 'Kutob', mimicWord: 'Isip'),               // Premonition / Thought
     ],
+    'philippine_folklore': [
+      WordPair(realWord: 'Tikbalang', mimicWord: 'Kabayo-Tao'),
+      WordPair(realWord: 'Manananggal', mimicWord: 'Ibon-Halimaw'),
+      WordPair(realWord: 'Kapre', mimicWord: 'Higanteng Bato'),
+      WordPair(realWord: 'Tiyanak', mimicWord: 'Duwendeng Pula'),
+      WordPair(realWord: 'Santelmo', mimicWord: 'Multong Apoy'),
+      WordPair(realWord: 'Nuno sa Punso', mimicWord: 'Engkanto ng Lupa'),
+      WordPair(realWord: 'Babaeng Nakaputi', mimicWord: 'Banshee'),
+      WordPair(realWord: 'Aswang', mimicWord: 'Lobo-Tao'),
+      WordPair(realWord: 'Mambabarang', mimicWord: 'Salamangkero'),
+      WordPair(realWord: 'Sigbin', mimicWord: 'Sumisipsip ng Dugo'),
+      WordPair(realWord: 'Sirena', mimicWord: 'Taong-Dagat'),
+      WordPair(realWord: 'Balbal', mimicWord: 'Kain-Bangkay'),
+      WordPair(realWord: 'Bungisngis', mimicWord: 'Higanteng Isa-Mata'),
+      WordPair(realWord: 'Berberoka', mimicWord: 'Kabayo ng Lawa'),
+      WordPair(realWord: 'Bakunawa', mimicWord: 'Halimaw ng Dagat'),
+      WordPair(realWord: 'Batibat', mimicWord: 'Bangungot-Demonyo'),
+      WordPair(realWord: 'Pugot', mimicWord: 'Kabalyerong Pugot'),
+      WordPair(realWord: 'Duwende', mimicWord: 'Engkanto'),
+      WordPair(realWord: 'Amomongo', mimicWord: 'Higanteng Matsing'),
+      WordPair(realWord: 'Biringan', mimicWord: 'Nawawalang Bayan'),
+    ],
   };
 
   static const Map<String, List<WordPair>> _cebPairs = {
@@ -1549,6 +1825,28 @@ class WordPackData {
       WordPair(realWord: 'Glitch', mimicWord: 'Sayop'),             // Glitch / Error
       WordPair(realWord: 'Kutob', mimicWord: 'Hunahuna'),           // Premonition / Thought
     ],
+    'philippine_folklore': [
+      WordPair(realWord: 'Tikbalang', mimicWord: 'Kabayo-Tawo'),
+      WordPair(realWord: 'Manananggal', mimicWord: 'Ibon-Mananap'),
+      WordPair(realWord: 'Kapre', mimicWord: 'Higanteng Bato'),
+      WordPair(realWord: 'Tiyanak', mimicWord: 'Gamayng Halimaw'),
+      WordPair(realWord: 'Santelmo', mimicWord: 'Kalayo sa Kalag'),
+      WordPair(realWord: 'Nuno sa Punso', mimicWord: 'Tawo sa Bungtod'),
+      WordPair(realWord: 'Babaye nga Puti', mimicWord: 'Banshee'),
+      WordPair(realWord: 'Aswang', mimicWord: 'Lobo-Tawo'),
+      WordPair(realWord: 'Mambabarang', mimicWord: 'Kulamnon'),
+      WordPair(realWord: 'Sigbin', mimicWord: 'Sipsip-Dugo'),
+      WordPair(realWord: 'Sirena', mimicWord: 'Kataw'),
+      WordPair(realWord: 'Balbal', mimicWord: 'Tigkaon-Patay'),
+      WordPair(realWord: 'Bungisngis', mimicWord: 'Usa-Mata'),
+      WordPair(realWord: 'Berberoka', mimicWord: 'Kabayo sa Tubig'),
+      WordPair(realWord: 'Bakunawa', mimicWord: 'Higanteng Bitin'),
+      WordPair(realWord: 'Batibat', mimicWord: 'Damgo-Mananap'),
+      WordPair(realWord: 'Pugot', mimicWord: 'Tawo nga Walay Ulo'),
+      WordPair(realWord: 'Duwende', mimicWord: 'Gamayng Diwata'),
+      WordPair(realWord: 'Amomongo', mimicWord: 'Unggoy-Halimaw'),
+      WordPair(realWord: 'Biringan', mimicWord: 'Nawala nga Syudad'),
+    ],
   };
 
   /// Returns the pack list for the given language code ('en', 'fil', 'ceb').
@@ -1589,6 +1887,7 @@ class WordPackData {
         category: p.category,
         icon: p.icon,
         pairs: merged,
+        isProOnly: p.isProOnly,
       );
     }).toList();
   }

@@ -11,6 +11,7 @@ import 'package:mimic/core/providers/provider_registration.dart'
     show vaultConcealServiceProvider, disconnectHandlerProvider, networkServiceProvider;
 import 'package:mimic/vault/security/vault_conceal_service.dart';
 import 'package:mimic/vault/services/billing_service.dart';
+import 'package:mimic/game/services/game_skin_service.dart';
 
 
 
@@ -115,11 +116,13 @@ class _VaultConcealWrapperState extends ConsumerState<_VaultConcealWrapper> {
           }
         });
 
+        final gameTheme = ref.watch(gameThemeDataProvider);
+
         return MaterialApp(
           title: 'Mimic Game',
           navigatorKey: router.navigatorKey,
           debugShowCheckedModeBanner: false,
-          theme: HorrorTheme.themeData,
+          theme: gameTheme,
           themeMode: ThemeMode.dark, // Keep theme consistently in dark horror mode
           initialRoute: MimicGame.loadingRoute,
           onGenerateRoute: router.AppRouter.onGenerateRoute,

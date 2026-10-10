@@ -10,6 +10,7 @@ import 'package:mimic/vault/screens/recovery_phrase_screen.dart';
 import 'package:mimic/vault/screens/gesture_setup_screen.dart';
 import 'package:mimic/vault/security/lockout_service.dart';
 import 'package:mimic/vault/security/duress_service.dart';
+import 'package:mimic/vault/security/decoy_vault_service.dart';
 import 'package:mimic/vault/crypto/vault_crypto.dart';
 import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/security/auto_lock.dart';
@@ -280,6 +281,46 @@ void main() {
     expect(fakePlatform.store['wrong_attempts'], isNull); 
     expect(fakePlatform.store['lockout_set_wall'], isNull);
     expect(fakePlatform.intruderStorageUntouched, isTrue); 
+  });
+
+  testWidgets('PinScreen Decoy PIN navigates to /decoy-vault-home', (WidgetTester tester) async {
+    final fakePlatform = FakePlatformService();
+    final fakeClock = FakeMonotonicClock();
+    final crypto = VaultCrypto(fakePlatform, FakeKeystoreService());
+
+    await crypto.initialize('1234');
+    crypto.lock();
+
+    final duressService = DuressService(fakePlatform);
+    final decoyService = DecoyVaultService(fakePlatform);
+    await decoyService.setDecoyPin('7777');
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          vaultCryptoProvider.overrideWith((ref) => crypto),
+          lockoutServiceProvider.overrideWith((ref) => LockoutService(fakePlatform, fakeClock)),
+          duressServiceProvider.overrideWith((ref) => duressService),
+          decoyVaultServiceProvider.overrideWith((ref) => decoyService),
+        ],
+        child: MaterialApp(
+          initialRoute: '/vault-pin',
+          routes: {
+            '/vault-pin': (_) => const PinScreen(),
+            '/decoy-vault-home': (_) => const Scaffold(body: Text('DECOY_VAULT_HOME')),
+          },
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(find.byType(TextField), '7777');
+    await tester.tap(find.text('Unlock'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('DECOY_VAULT_HOME'), findsOneWidget);
+    AutoLock().dispose();
   });
 
   testWidgets('PinScreen Create Mode initialize throw does not write lockout keys', (WidgetTester tester) async {

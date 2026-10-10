@@ -11,9 +11,11 @@ import '../services/intruder_service.dart';
 import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
 import '../security/duress_service.dart';
+import '../security/decoy_vault_service.dart';
 import '../security/vault_conceal_service.dart';
 import '../security/lockout_service.dart';
 import '../security/secret_entry_trail.dart';
+import '../services/pro_status_service.dart';
 import '../crypto/keystore_service.dart';
 import 'wiped_vault_screen.dart';
 import 'recovery_phrase_screen.dart';
@@ -319,12 +321,32 @@ class _PinScreenState extends ConsumerState<PinScreen> {
       if (isFakePin) {
         _pinController.clear();
         await ref.read(lockoutServiceProvider).reset();
+        await Future.delayed(const Duration(milliseconds: 450));
         if (mounted) {
           setState(() {
             _error = null;
             _wrongAttempts = 0;
           });
           navigator.pushReplacementNamed('/admin-panel');
+        }
+        return;
+      }
+
+      final isPro = await ref.read(proStatusServiceProvider).isPro();
+      final decoyService = ref.read(decoyVaultServiceProvider);
+      final isDecoyPin = isPro && await decoyService.isDecoyPin(pin);
+
+      if (isDecoyPin) {
+        _pinController.clear();
+        await ref.read(lockoutServiceProvider).reset();
+        await Future.delayed(const Duration(milliseconds: 450));
+        if (mounted) {
+          setState(() {
+            _error = null;
+            _wrongAttempts = 0;
+          });
+          AutoLock().init(context, ref);
+          navigator.pushReplacementNamed('/decoy-vault-home');
         }
         return;
       }

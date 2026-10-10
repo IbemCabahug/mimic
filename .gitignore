@@ -32,3 +32,8 @@ notes.md
 # Mimic's own .gitignore already covers *.log; this keeps the repo root clean.
 *.log
 *.err.log
+
+# Secrets - never commit (PixelLab API key lives in scratch/.env)
+.env
+.env.*
+!.env.example

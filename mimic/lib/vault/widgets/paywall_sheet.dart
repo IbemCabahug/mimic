@@ -261,6 +261,13 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
                   description:
                       'Once unlocked, Pro works offline forever with zero servers or telemetry.',
                 ),
+                const SizedBox(height: 12),
+                _buildBenefitTile(
+                  icon: Icons.auto_awesome,
+                  title: 'Game Pro Expansion Included',
+                  description:
+                      'Unlock the Philippine Folklore pack, detailed describing angles, and custom atmospheric HUD skins.',
+                ),
                 const SizedBox(height: 16),
 
                 // Golden Rule Guarantee Callout
