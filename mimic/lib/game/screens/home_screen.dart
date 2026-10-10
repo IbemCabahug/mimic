@@ -11,6 +11,7 @@ import 'package:mimic/game/data/language_store.dart';
 import 'package:mimic/vault/services/pro_status_service.dart';
 import 'package:mimic/vault/services/quick_entry_service.dart';
 import 'package:mimic/vault/security/secret_entry_trail.dart';
+import 'package:mimic/game/widgets/game_skin_selector_dialog.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -566,6 +567,29 @@ Text(
               _buildSettingSwitch('HAPTIC FEEDBACK', true),
               const SizedBox(height: 16),
               _buildLanguageSelector(),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                    showGameSkinDialog(context);
+                  },
+                  icon: const Icon(Icons.palette_outlined, size: 18),
+                  label: Text(
+                    'ATMOSPHERIC SKINS',
+                    style: GoogleFonts.creepster(
+                      fontSize: 16,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: HorrorColors.crimson,
+                    side: const BorderSide(color: HorrorColors.crimson, width: 1.2),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                ),
+              ),
             ],
           ),
           actions: [

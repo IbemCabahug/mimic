@@ -62,6 +62,23 @@ AppDistributionFlavor get kCurrentDistributionFlavor {
 /// storage migration is needed — nothing was ever written to say Pro.
 const bool kBillingEnforced = false;
 
+/// Whether billing simulation tools are active for manual testing (even in release/obfuscated APKs).
+///
+/// PRODUCTION STATE (set false 2026-10-10): simulation is OFF for any distributed
+/// build. With this false, every gate written as `kDebugMode || kBillingSimulationEnabled`
+/// collapses to `kDebugMode`, so a RELEASE APK:
+///   - renders no "Developer & Billing Simulation" section or settings action,
+///   - uses the real Google Play `PlayBillingStore` (not `SimulatedBillingStore`), and
+///   - fails CLOSED on purchase verification (`allowUnverifiedWhenNoKey` = false),
+/// which removes the free "Toggle Local Pro Entitlement" bypass and the fail-open
+/// receipt check. Debug builds keep simulation for testing via `kDebugMode`.
+///
+/// NOTE: a release build now requires the real Google Play public key supplied at
+/// build time via `--dart-define=GOOGLE_PLAY_PUBLIC_KEY=...`; without it the verifier
+/// has no key and correctly refuses to grant Pro (fail closed) rather than granting
+/// it unverified. Do NOT re-enable this for a distributed build.
+const bool kBillingSimulationEnabled = false;
+
 /// Secure-storage key holding the cached entitlement.
 const String proEntitlementKey = 'pro_entitlement';
 

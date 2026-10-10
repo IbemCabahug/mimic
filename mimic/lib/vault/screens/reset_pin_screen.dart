@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../crypto/vault_crypto.dart';
 import '../widgets/vault_scaffold.dart';
 import '../security/duress_service.dart';
+import '../security/decoy_vault_service.dart';
 import '../../core/providers/biometric_providers.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -72,7 +73,12 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
     if (!_isConfirmStep) {
       final isDuressPin = await ref.read(duressServiceProvider).isFakePin(_currentInput);
       if (isDuressPin) {
-        setState(() => _error = 'Vault PIN cannot be the same as Duress PIN');
+        setState(() => _error = 'This PIN is unavailable. Please choose a different PIN.');
+        return;
+      }
+      final isDecoyPin = await ref.read(decoyVaultServiceProvider).hasStoredDecoyPinMatch(_currentInput);
+      if (isDecoyPin) {
+        setState(() => _error = 'This PIN is unavailable. Please choose a different PIN.');
         return;
       }
       // Transition to confirmation step
@@ -112,7 +118,19 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
       if (isDuressPin) {
         if (mounted) {
           setState(() {
-            _error = 'Vault PIN cannot be the same as Duress PIN';
+            _error = 'This PIN is unavailable. Please choose a different PIN.';
+            _currentInput = '';
+            _firstPin = '';
+            _isConfirmStep = false;
+          });
+        }
+        return;
+      }
+      final isDecoyPin = await ref.read(decoyVaultServiceProvider).hasStoredDecoyPinMatch(pin);
+      if (isDecoyPin) {
+        if (mounted) {
+          setState(() {
+            _error = 'This PIN is unavailable. Please choose a different PIN.';
             _currentInput = '';
             _firstPin = '';
             _isConfirmStep = false;

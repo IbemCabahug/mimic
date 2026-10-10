@@ -36,6 +36,14 @@ import 'package:mimic/vault/screens/reset_pin_screen.dart';
 import 'package:mimic/vault/screens/export_vault_screen.dart';
 import 'package:mimic/vault/screens/import_vault_screen.dart';
 import 'package:mimic/vault/screens/set_duress_pin_screen.dart';
+import 'package:mimic/vault/screens/set_decoy_pin_screen.dart';
+import 'package:mimic/vault/screens/decoy_vault_home_screen.dart';
+import 'package:mimic/vault/screens/decoy_photos_screen.dart';
+import 'package:mimic/vault/screens/decoy_notes_screen.dart';
+import 'package:mimic/vault/screens/decoy_documents_screen.dart';
+import 'package:mimic/vault/screens/decoy_settings_screen.dart';
+import 'package:mimic/vault/screens/storage_optimizer_screen.dart';
+import 'package:mimic/vault/screens/vault_theme_selector_screen.dart';
 import 'package:mimic/vault/screens/video_vault_screen.dart';
 import 'package:mimic/vault/screens/vault_diagnostics_screen.dart';
 import 'package:mimic/vault/screens/vault_manual_screen.dart';
@@ -89,6 +97,14 @@ class AppRouter {
   static const String vaultEnterRecoveryRoute = '/vault-enter-recovery';
   static const String vaultResetPinRoute = '/vault-reset-pin';
   static const String vaultSetDuressPinRoute = '/vault-set-duress-pin';
+  static const String vaultSetDecoyPinRoute = '/vault-set-decoy-pin';
+  static const String decoyVaultHomeRoute = '/decoy-vault-home';
+  static const String decoyPhotosRoute = '/decoy-photos';
+  static const String decoyNotesRoute = '/decoy-notes';
+  static const String decoyDocumentsRoute = '/decoy-documents';
+  static const String decoySettingsRoute = '/decoy-settings';
+  static const String storageOptimizerRoute = '/vault-storage-optimizer';
+  static const String vaultThemeSelectorRoute = '/vault-theme-selector';
   static const String vaultExportRoute = '/vault-export';
   static const String vaultImportRoute = '/vault-import';
   static const String vaultVideosRoute = '/vault-videos';
@@ -107,7 +123,7 @@ class AppRouter {
   /// (e.g. '/', '/voting', '/results', '/multiplayer/*').
   static bool isNotVaultRoute(Route<dynamic> route) {
     final name = route.settings.name;
-    return name != null && !name.startsWith('/vault-');
+    return name != null && !name.startsWith('/vault-') && !name.startsWith('/decoy-');
   }
 
   /// Generates the routes dynamically to handle guards and parameter passing.
@@ -305,6 +321,70 @@ class AppRouter {
           builder: (_) => const VaultRouteGuard(
             requireUnlocked: true,
             child: SecureGuard(child: SetDuressPinScreen()),
+          ),
+          settings: settings,
+        );
+      case vaultSetDecoyPinRoute:
+        return MaterialPageRoute(
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: SetDecoyPinScreen()),
+          ),
+          settings: settings,
+        );
+      case decoyVaultHomeRoute:
+        return MaterialPageRoute(
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: false,
+            child: SecureGuard(child: DecoyVaultHomeScreen()),
+          ),
+          settings: settings,
+        );
+      case decoyPhotosRoute:
+        return MaterialPageRoute(
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: false,
+            child: SecureGuard(child: DecoyPhotosScreen()),
+          ),
+          settings: settings,
+        );
+      case decoyNotesRoute:
+        return MaterialPageRoute(
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: false,
+            child: SecureGuard(child: DecoyNotesScreen()),
+          ),
+          settings: settings,
+        );
+      case decoyDocumentsRoute:
+        return MaterialPageRoute(
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: false,
+            child: SecureGuard(child: DecoyDocumentsScreen()),
+          ),
+          settings: settings,
+        );
+      case decoySettingsRoute:
+        return MaterialPageRoute(
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: false,
+            child: SecureGuard(child: DecoySettingsScreen()),
+          ),
+          settings: settings,
+        );
+      case storageOptimizerRoute:
+        return MaterialPageRoute(
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: StorageOptimizerScreen()),
+          ),
+          settings: settings,
+        );
+      case vaultThemeSelectorRoute:
+        return MaterialPageRoute(
+          builder: (_) => const VaultRouteGuard(
+            requireUnlocked: true,
+            child: SecureGuard(child: VaultThemeSelectorScreen()),
           ),
           settings: settings,
         );

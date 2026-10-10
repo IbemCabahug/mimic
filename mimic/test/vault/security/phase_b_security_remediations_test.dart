@@ -316,7 +316,7 @@ void main() {
       });
       await tester.pumpAndSettle();
 
-      expect(find.text('Duress PIN cannot be the same as your Vault PIN'), findsOneWidget);
+      expect(find.text('This PIN is unavailable. Please choose a different PIN.'), findsOneWidget);
       final isEnabled = await duressService.isFakePinEnabled();
       expect(isEnabled, isFalse);
     });
@@ -358,7 +358,7 @@ void main() {
       });
       await tester.pumpAndSettle();
 
-      expect(find.text('Vault PIN cannot be the same as Duress PIN'), findsOneWidget);
+      expect(find.text('This PIN is unavailable. Please choose a different PIN.'), findsOneWidget);
     });
 
     testWidgets('VaultSettingsScreen rejects changing vault PIN to match active duress PIN', (tester) async {
@@ -407,7 +407,7 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 100));
 
-      expect(find.text('Vault PIN cannot be the same as Duress PIN'), findsOneWidget);
+      expect(find.text('This PIN is unavailable. Please choose a different PIN.'), findsOneWidget);
     });
   });
 

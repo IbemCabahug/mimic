@@ -36,7 +36,7 @@ void main() {
     test('ClientRateLimiter enforces capacity and token refills', () async {
       final limiter = ClientRateLimiter(
         capacity: 5.0,
-        refillRatePerSecond: 10.0,
+        refillRatePerSecond: 2.0,
       );
 
       // Consume up to capacity
@@ -47,8 +47,8 @@ void main() {
       // Exhausted
       expect(limiter.tryConsume(), isFalse);
 
-      // Wait 250ms -> should refill ~2.5 tokens
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+      // Wait 600ms -> should refill ~1.2 tokens
+      await Future<void>.delayed(const Duration(milliseconds: 600));
       expect(limiter.tryConsume(), isTrue);
     });
 

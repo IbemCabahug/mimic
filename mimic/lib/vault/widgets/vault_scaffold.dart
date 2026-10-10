@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../security/auto_lock.dart';
 import '../crypto/vault_crypto.dart';
+import '../services/vault_theme_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/router/app_router.dart';
 
@@ -28,6 +29,7 @@ class VaultScaffold extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final crypto = ref.watch(vaultCryptoProvider);
+    final palette = ref.watch(vaultThemeProvider);
     if (!crypto.isUnlocked) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!context.mounted) return;
@@ -38,28 +40,28 @@ class VaultScaffold extends ConsumerWidget {
           AppRouter.isNotVaultRoute,
         );
       });
-      return const Scaffold(
-        backgroundColor: VaultColors.background,
+      return Scaffold(
+        backgroundColor: palette.background,
         body: Center(
-          child: CircularProgressIndicator(color: VaultColors.accent),
+          child: CircularProgressIndicator(color: palette.accent),
         ),
       );
     }
 
     return Theme(
-      data: vaultTheme,
+      data: palette.toThemeData(),
       child: AutoLockWrapper(
         child: Scaffold(
-          backgroundColor: VaultColors.background,
+          backgroundColor: palette.background,
           appBar: AppBar(
             title: title != null
                 ? Text(
                     title!,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontFamily: 'Inter',
                       fontSize: 20,
                       fontWeight: FontWeight.w600,
-                      color: VaultColors.accent,
+                      color: palette.accent,
                     ),
                   )
                 : null,

@@ -145,9 +145,8 @@ ProviderContainer _f27Container(
 }) {
   return ProviderContainer(overrides: [
     platformServiceProvider.overrideWithValue(fake),
-    if (billingEnforced)
-      proStatusServiceProvider
-          .overrideWith((ref) => ProStatusService(fake, billingEnforced: true)),
+    proStatusServiceProvider
+        .overrideWith((ref) => ProStatusService(fake, billingEnforced: billingEnforced)),
     if (role != NetworkRole.none)
       networkServiceProvider.overrideWith((ref) => _StubNetworkService(role)),
   ]);

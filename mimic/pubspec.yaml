@@ -59,6 +59,7 @@ flutter:
     - assets/fonts/Inter-SemiBold.ttf
     - assets/fonts/Inter-Bold.ttf
     - assets/fonts/Creepster-Regular.ttf
+    - assets/images/silhouettes/
 
 flutter_launcher_icons:
   android: true

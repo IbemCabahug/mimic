@@ -10,6 +10,7 @@ import 'package:mimic/game/state/game_state.dart';
 import 'package:mimic/game/widgets/suspicion_meter.dart';
 import 'package:mimic/game/game.dart';
 import 'package:mimic/vault/services/pro_status_service.dart';
+import 'package:mimic/game/widgets/word_silhouette_widget.dart';
 
 enum RevealState { cover, revealed, pass }
 
@@ -334,7 +335,14 @@ class _WordRevealScreenState extends ConsumerState<WordRevealScreen> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 48),
+                const SizedBox(height: 20),
+                // F1: Atmospheric vector silhouette archetype
+                WordSilhouetteWidget.fromWord(
+                  wordToShow,
+                  category: category,
+                  size: 80,
+                ),
+                const SizedBox(height: 20),
                 FlickerWidget(
                   child: Text(
                     wordToShow.toUpperCase(),
