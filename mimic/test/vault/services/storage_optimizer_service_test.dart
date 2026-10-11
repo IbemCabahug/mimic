@@ -64,6 +64,12 @@ class FakeFileVaultService extends FileVaultService {
   Future<List<PhotoMeta>> getAllPhotos() async => photos;
 
   @override
+  Future<Uint8List?> readFile(String id) async => null;
+
+  @override
+  Future<void> updatePhotoHash(String id, String hash) async {}
+
+  @override
   Future<void> deletePhoto(String id) async {
     deletedIds.add(id);
     photos.removeWhere((p) => p.id == id);
@@ -78,6 +84,12 @@ class FakeVideoVaultService extends VideoVaultService {
 
   @override
   Future<List<VideoMeta>> getAllVideos() async => videos;
+
+  @override
+  Future<Uint8List?> getVideo(String id) async => null;
+
+  @override
+  Future<void> updateVideoHash(String id, String hash) async {}
 
   @override
   Future<void> deleteVideo(String id) async {

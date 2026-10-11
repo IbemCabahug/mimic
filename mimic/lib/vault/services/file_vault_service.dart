@@ -1,6 +1,8 @@
 // mimic/lib/vault/services/file_vault_service.dart
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -26,6 +28,8 @@ class PhotoMeta {
   // Smart Vault File Locator: private user tags and caption
   final List<String> tags;
   final String caption;
+  // SHA-256 hash of the raw (pre-encryption) bytes for reliable duplicate detection.
+  final String? contentHash;
 
   PhotoMeta({
     required this.id,
@@ -36,6 +40,7 @@ class PhotoMeta {
     this.folder = '',
     this.tags = const [],
     this.caption = '',
+    this.contentHash,
   });
 
   Map<String, dynamic> toMap() => {
@@ -47,6 +52,7 @@ class PhotoMeta {
         'folder': folder,
         'tags': tags.join(','),
         'caption': caption,
+        'contentHash': contentHash,
       };
 
   factory PhotoMeta.fromMap(Map<String, dynamic> map) => PhotoMeta(
@@ -60,6 +66,7 @@ class PhotoMeta {
         folder: map['folder'] as String? ?? '',
         tags: VaultTags.parseList(map['tags']),
         caption: map['caption'] as String? ?? '',
+        contentHash: map['contentHash'] as String?,
       );
 
   /// Copies this metadata with the given fields replaced.
@@ -71,6 +78,7 @@ class PhotoMeta {
     String? folder,
     List<String>? tags,
     String? caption,
+    String? contentHash,
   }) {
     return PhotoMeta(
       id: id,
@@ -81,7 +89,13 @@ class PhotoMeta {
       folder: folder ?? this.folder,
       tags: tags ?? this.tags,
       caption: caption ?? this.caption,
+      contentHash: contentHash ?? this.contentHash,
     );
+  }
+
+  /// Computes a SHA-256 hash of the given raw bytes.
+  static String computeHash(Uint8List bytes) {
+    return sha256.convert(bytes).toString();
   }
 }
 
@@ -148,6 +162,11 @@ class FileVaultService {
             if (!hasCaption) {
               await db.execute("ALTER TABLE $_tableName ADD COLUMN caption TEXT DEFAULT ''");
             }
+            // Duplicate detection: SHA-256 content hash column
+            final hasContentHash = columns.any((column) => column['name'] == 'contentHash');
+            if (!hasContentHash) {
+              await db.execute('ALTER TABLE $_tableName ADD COLUMN contentHash TEXT');
+            }
           } catch (e) {
             debugPrint('Error updating schema: $e');
           }
@@ -196,12 +215,14 @@ class FileVaultService {
     try {
       await _platformService.saveEncryptedFile(id, encrypted);
 
+      final hash = PhotoMeta.computeHash(bytes);
       final meta = PhotoMeta(
         id: id,
         mimeType: mimeType,
         size: bytes.length,
         createdAt: now,
         originalName: originalName,
+        contentHash: hash,
       );
 
       await _saveMeta(meta);
@@ -312,6 +333,19 @@ class FileVaultService {
       }
       rethrow;
     }
+  }
+
+  /// Persists a computed content hash for a photo that was imported before
+  /// hash tracking was added. Called by the storage optimizer's backfill pass.
+  Future<void> updatePhotoHash(String id, String hash) async {
+    if (kIsWeb) return; // Web uses JSON blob — hash is cosmetic there.
+    await _ensureDb();
+    await _db!.update(
+      _tableName,
+      {'contentHash': hash},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> _saveMeta(PhotoMeta meta) async {

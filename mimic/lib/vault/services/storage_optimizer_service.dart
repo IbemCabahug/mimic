@@ -12,6 +12,10 @@ class OptimizableFile {
   final int sizeBytes;
   final VaultMediaType type;
   final DateTime createdAt;
+  /// SHA-256 hash of the raw content bytes. Null for files imported before
+  /// hash tracking was added; the optimizer falls back to size-based matching
+  /// for those.
+  final String? contentHash;
 
   const OptimizableFile({
     required this.id,
@@ -19,6 +23,7 @@ class OptimizableFile {
     required this.sizeBytes,
     required this.type,
     required this.createdAt,
+    this.contentHash,
   });
 
   String get formattedSize {
@@ -111,36 +116,64 @@ class StorageOptimizerService {
     int videoCount = 0;
     int docCount = 0;
 
-    // 1. Photos
+    // 1. Photos — backfill content hashes for legacy imports without one.
     try {
       final photos = await fileVaultService.getAllPhotos();
       photoCount = photos.length;
       for (final p in photos) {
         final size = p.size;
         photosBytes += size;
+
+        String? hash = p.contentHash;
+        if (hash == null || hash.isEmpty) {
+          // Legacy import: decrypt the blob and compute its hash, then persist
+          // so the next scan doesn't have to decrypt again.
+          try {
+            final bytes = await fileVaultService.readFile(p.id);
+            if (bytes != null && bytes.isNotEmpty) {
+              hash = PhotoMeta.computeHash(bytes);
+              await fileVaultService.updatePhotoHash(p.id, hash);
+            }
+          } catch (_) {}
+        }
+
         allFiles.add(OptimizableFile(
           id: p.id,
           name: p.originalName ?? 'Photo_${p.id}',
           sizeBytes: size,
           type: VaultMediaType.photo,
           createdAt: p.createdAt,
+          contentHash: hash,
         ));
       }
     } catch (_) {}
 
-    // 2. Videos
+    // 2. Videos — backfill content hashes for legacy imports without one.
     try {
       final videos = await videoVaultService.getAllVideos();
       videoCount = videos.length;
       for (final v in videos) {
         final size = v.size;
         videosBytes += size;
+
+        String? hash = v.contentHash;
+        if (hash == null || hash.isEmpty) {
+          try {
+            final bytes = await videoVaultService.getVideo(v.id);
+            if (bytes != null && bytes.isNotEmpty) {
+              hash = PhotoMeta.computeHash(bytes);
+              await videoVaultService.updateVideoHash(v.id, hash);
+            }
+          } catch (_) {}
+        }
+
         allFiles.add(OptimizableFile(
           id: v.id,
           name: v.originalName ?? 'Video_${v.id}',
           sizeBytes: size,
           type: VaultMediaType.video,
           createdAt: v.createdAt,
+          contentHash: hash,
         ));
       }
     } catch (_) {}
@@ -168,13 +201,15 @@ class StorageOptimizerService {
     final largeFiles = allFiles.where((f) => f.sizeBytes >= largeFileThreshold).toList()
       ..sort((a, b) => b.sizeBytes.compareTo(a.sizeBytes));
 
-    // Detect duplicate files by media type and exact byte size
+    // Detect duplicate files by content hash (preferred) or media type + byte size (legacy fallback)
     final map = <String, List<OptimizableFile>>{};
     for (final f in allFiles) {
       if (f.sizeBytes <= 0) continue;
-      // Matching by exact byte size ensures duplicates are detected even if Android
-      // gave them different filenames (e.g. "photo.jpg" vs "photo(1).jpg" or "Photo_uuid")
-      final key = '${f.type.name}_${f.sizeBytes}';
+      // Use the SHA-256 content hash when available; otherwise fall back to
+      // the old type+size key for files imported before hash tracking.
+      final key = f.contentHash != null
+          ? '${f.type.name}_hash_${f.contentHash}'
+          : '${f.type.name}_${f.sizeBytes}';
       map.putIfAbsent(key, () => []).add(f);
     }
 

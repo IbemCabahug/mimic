@@ -2,6 +2,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -30,6 +32,8 @@ class VideoMeta {
   // Smart Vault File Locator: private user tags and caption
   final List<String> tags;
   final String caption;
+  // SHA-256 hash of the raw (pre-encryption) bytes for reliable duplicate detection.
+  final String? contentHash;
 
   VideoMeta({
     required this.id,
@@ -41,6 +45,7 @@ class VideoMeta {
     this.folder = '',
     this.tags = const [],
     this.caption = '',
+    this.contentHash,
   });
 
   Map<String, dynamic> toMap() => {
@@ -53,6 +58,7 @@ class VideoMeta {
         'folder': folder,
         'tags': tags.join(','),
         'caption': caption,
+        'contentHash': contentHash,
       };
 
   factory VideoMeta.fromMap(Map<String, dynamic> map) => VideoMeta(
@@ -67,6 +73,7 @@ class VideoMeta {
         folder: map['folder'] as String? ?? '',
         tags: VaultTags.parseList(map['tags']),
         caption: map['caption'] as String? ?? '',
+        contentHash: map['contentHash'] as String?,
       );
 
   /// Copies this metadata with the given fields replaced.
@@ -79,6 +86,7 @@ class VideoMeta {
     String? folder,
     List<String>? tags,
     String? caption,
+    String? contentHash,
   }) {
     return VideoMeta(
       id: id,
@@ -90,7 +98,19 @@ class VideoMeta {
       folder: folder ?? this.folder,
       tags: tags ?? this.tags,
       caption: caption ?? this.caption,
+      contentHash: contentHash ?? this.contentHash,
     );
+  }
+
+  /// Computes a SHA-256 hash of the given raw bytes.
+  static String computeHash(Uint8List bytes) {
+    return sha256.convert(bytes).toString();
+  }
+
+  /// Computes a SHA-256 hash from a file.
+  static Future<String> computeHashFromFile(File file) async {
+    final bytes = await file.readAsBytes();
+    return sha256.convert(bytes).toString();
   }
 }
 
@@ -234,6 +254,13 @@ class VideoVaultService {
               await db.execute(
                   'ALTER TABLE $_tableName ADD COLUMN caption TEXT DEFAULT \'\'');
             }
+            // Duplicate detection: SHA-256 content hash column
+            final hasContentHash =
+                columns.any((column) => column['name'] == 'contentHash');
+            if (!hasContentHash) {
+              await db.execute(
+                  'ALTER TABLE $_tableName ADD COLUMN contentHash TEXT');
+            }
           } catch (e) {
             debugPrint('Error updating video schema: $e');
           }
@@ -273,6 +300,7 @@ class VideoVaultService {
       // leave a half-written blob at the final path.
       await ctrTemp.rename(dest.path);
 
+      final hash = VideoMeta.computeHash(bytes);
       final meta = VideoMeta(
         id: id,
         mimeType: mimeType,
@@ -280,6 +308,7 @@ class VideoVaultService {
         durationS: durationS,
         createdAt: now,
         originalName: originalName,
+        contentHash: hash,
       );
 
       await _saveMeta(meta);
@@ -331,6 +360,7 @@ class VideoVaultService {
       await _crypto.encryptStreamSystemCtrV3(src, dest);
 
       final size = await src.length();
+      final hash = await VideoMeta.computeHashFromFile(src);
 
       final meta = VideoMeta(
         id: id,
@@ -339,6 +369,7 @@ class VideoVaultService {
         durationS: durationS ?? 0,
         createdAt: now,
         originalName: originalName,
+        contentHash: hash,
       );
 
       await _saveMeta(meta);
@@ -614,6 +645,19 @@ class VideoVaultService {
       }
       rethrow;
     }
+  }
+
+  /// Persists a computed content hash for a video that was imported before
+  /// hash tracking was added. Called by the storage optimizer's backfill pass.
+  Future<void> updateVideoHash(String id, String hash) async {
+    if (kIsWeb) return;
+    await _ensureDb();
+    await _db!.update(
+      _tableName,
+      {'contentHash': hash},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   Future<void> _saveMeta(VideoMeta meta) async {
