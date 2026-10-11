@@ -168,17 +168,21 @@ class StorageOptimizerService {
     final largeFiles = allFiles.where((f) => f.sizeBytes >= largeFileThreshold).toList()
       ..sort((a, b) => b.sizeBytes.compareTo(a.sizeBytes));
 
-    // Detect duplicate files by size and name
+    // Detect duplicate files by media type and exact byte size
     final map = <String, List<OptimizableFile>>{};
     for (final f in allFiles) {
       if (f.sizeBytes <= 0) continue;
-      final key = '${f.type.name}_${f.sizeBytes}_${f.name.toLowerCase()}';
+      // Matching by exact byte size ensures duplicates are detected even if Android
+      // gave them different filenames (e.g. "photo.jpg" vs "photo(1).jpg" or "Photo_uuid")
+      final key = '${f.type.name}_${f.sizeBytes}';
       map.putIfAbsent(key, () => []).add(f);
     }
 
     final duplicateGroups = <DuplicateGroup>[];
     for (final entry in map.entries) {
       if (entry.value.length > 1) {
+        // Sort so the oldest / earliest imported copy is first (the protected original)
+        entry.value.sort((a, b) => a.createdAt.compareTo(b.createdAt));
         duplicateGroups.add(DuplicateGroup(
           key: entry.key,
           sizeBytes: entry.value.first.sizeBytes,
