@@ -308,5 +308,77 @@ void main() {
       );
       expect(reportWithGroup.allDuplicateCopies.map((f) => f.id), equals(['2', '3']));
     });
+
+    test('analyzeVault detects 3 duplicate photos with varying filenames without reading file bytes', () async {
+      final now = DateTime.now();
+      fakePhotos.photos.addAll([
+        PhotoMeta(
+          id: 'photo_1',
+          mimeType: 'image/jpeg',
+          size: 2450123,
+          createdAt: now.subtract(const Duration(minutes: 5)),
+          originalName: 'IMG_2026.jpg',
+        ),
+        PhotoMeta(
+          id: 'photo_2',
+          mimeType: 'image/jpeg',
+          size: 2450123,
+          createdAt: now.subtract(const Duration(minutes: 3)),
+          originalName: 'IMG_2026 (1).jpg',
+        ),
+        PhotoMeta(
+          id: 'photo_3',
+          mimeType: 'image/jpeg',
+          size: 2450123,
+          createdAt: now.subtract(const Duration(minutes: 1)),
+          originalName: 'Photo_photo_3',
+        ),
+        // A unique photo that should NOT be in any duplicate group
+        PhotoMeta(
+          id: 'photo_unique',
+          mimeType: 'image/jpeg',
+          size: 3100000,
+          createdAt: now,
+          originalName: 'unique.jpg',
+        ),
+      ]);
+
+      final report = await optimizer.analyzeVault();
+      expect(report.photoCount, equals(4));
+      expect(report.duplicateGroups.length, equals(1));
+
+      final dupGroup = report.duplicateGroups.first;
+      expect(dupGroup.files.length, equals(3));
+      // Oldest photo is the protected original
+      expect(dupGroup.originalFile.id, equals('photo_1'));
+      // The other two are marked as duplicate copies
+      expect(dupGroup.duplicateCopies.map((f) => f.id).toList(), equals(['photo_2', 'photo_3']));
+      expect(report.potentialDuplicateSavings, equals(2 * 2450123));
+    });
+
+    test('analyzeVault correctly handles explicit content hashes', () async {
+      final now = DateTime.now();
+      fakePhotos.photos.addAll([
+        PhotoMeta(
+          id: 'p_hash_1',
+          mimeType: 'image/jpeg',
+          size: 1000,
+          createdAt: now.subtract(const Duration(seconds: 10)),
+          contentHash: 'hash_abc',
+        ),
+        PhotoMeta(
+          id: 'p_hash_2',
+          mimeType: 'image/jpeg',
+          size: 1000,
+          createdAt: now,
+          contentHash: 'hash_abc',
+        ),
+      ]);
+
+      final report = await optimizer.analyzeVault();
+      expect(report.duplicateGroups.length, equals(1));
+      expect(report.duplicateGroups.first.files.length, equals(2));
+      expect(report.duplicateGroups.first.originalFile.id, equals('p_hash_1'));
+    });
   });
 }

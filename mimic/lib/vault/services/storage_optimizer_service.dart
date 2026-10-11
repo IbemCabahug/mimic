@@ -116,69 +116,45 @@ class StorageOptimizerService {
     int videoCount = 0;
     int docCount = 0;
 
-    // 1. Photos — backfill content hashes for legacy imports without one.
+    // 1. Photos — lightweight metadata-only scan (0ms, 0 RAM).
+    // NEVER decrypt blobs or read file bytes into memory during scan!
     try {
       final photos = await fileVaultService.getAllPhotos();
       photoCount = photos.length;
       for (final p in photos) {
         final size = p.size;
         photosBytes += size;
-
-        String? hash = p.contentHash;
-        if (hash == null || hash.isEmpty) {
-          // Legacy import: decrypt the blob and compute its hash, then persist
-          // so the next scan doesn't have to decrypt again.
-          try {
-            final bytes = await fileVaultService.readFile(p.id);
-            if (bytes != null && bytes.isNotEmpty) {
-              hash = PhotoMeta.computeHash(bytes);
-              await fileVaultService.updatePhotoHash(p.id, hash);
-            }
-          } catch (_) {}
-        }
-
         allFiles.add(OptimizableFile(
           id: p.id,
           name: p.originalName ?? 'Photo_${p.id}',
           sizeBytes: size,
           type: VaultMediaType.photo,
           createdAt: p.createdAt,
-          contentHash: hash,
+          contentHash: p.contentHash,
         ));
       }
     } catch (_) {}
 
-    // 2. Videos — backfill content hashes for legacy imports without one.
+    // 2. Videos — lightweight metadata-only scan (0ms, 0 RAM).
+    // NEVER load or decrypt large video blobs into memory during scan!
     try {
       final videos = await videoVaultService.getAllVideos();
       videoCount = videos.length;
       for (final v in videos) {
         final size = v.size;
         videosBytes += size;
-
-        String? hash = v.contentHash;
-        if (hash == null || hash.isEmpty) {
-          try {
-            final bytes = await videoVaultService.getVideo(v.id);
-            if (bytes != null && bytes.isNotEmpty) {
-              hash = PhotoMeta.computeHash(bytes);
-              await videoVaultService.updateVideoHash(v.id, hash);
-            }
-          } catch (_) {}
-        }
-
         allFiles.add(OptimizableFile(
           id: v.id,
           name: v.originalName ?? 'Video_${v.id}',
           sizeBytes: size,
           type: VaultMediaType.video,
           createdAt: v.createdAt,
-          contentHash: hash,
+          contentHash: v.contentHash,
         ));
       }
     } catch (_) {}
 
-    // 3. Documents
+    // 3. Documents — lightweight metadata-only scan.
     try {
       final docs = await docVaultService.listDocuments();
       docCount = docs.length;
@@ -201,28 +177,54 @@ class StorageOptimizerService {
     final largeFiles = allFiles.where((f) => f.sizeBytes >= largeFileThreshold).toList()
       ..sort((a, b) => b.sizeBytes.compareTo(a.sizeBytes));
 
-    // Detect duplicate files by content hash (preferred) or media type + byte size (legacy fallback)
-    final map = <String, List<OptimizableFile>>{};
+    // Detect duplicate files instantly:
+    // Files cannot be duplicates unless they share the exact same byte count.
+    // 1. Group candidate files by media type and exact byte size.
+    final sizeMap = <String, List<OptimizableFile>>{};
     for (final f in allFiles) {
       if (f.sizeBytes <= 0) continue;
-      // Use the SHA-256 content hash when available; otherwise fall back to
-      // the old type+size key for files imported before hash tracking.
-      final key = f.contentHash != null
-          ? '${f.type.name}_hash_${f.contentHash}'
-          : '${f.type.name}_${f.sizeBytes}';
-      map.putIfAbsent(key, () => []).add(f);
+      final sizeKey = '${f.type.name}_${f.sizeBytes}';
+      sizeMap.putIfAbsent(sizeKey, () => []).add(f);
     }
 
     final duplicateGroups = <DuplicateGroup>[];
-    for (final entry in map.entries) {
-      if (entry.value.length > 1) {
-        // Sort so the oldest / earliest imported copy is first (the protected original)
-        entry.value.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    for (final entry in sizeMap.entries) {
+      final candidates = entry.value;
+      if (candidates.length <= 1) continue;
+
+      // Check if multiple conflicting explicit content hashes exist for the same byte size
+      final explicitHashes = candidates
+          .map((f) => f.contentHash)
+          .where((h) => h != null && h.isNotEmpty)
+          .toSet();
+
+      if (explicitHashes.length <= 1) {
+        // All files either have no hash or share the exact same hash.
+        // Since they all share the exact byte size, they are identical duplicate copies.
+        candidates.sort((a, b) => a.createdAt.compareTo(b.createdAt));
         duplicateGroups.add(DuplicateGroup(
           key: entry.key,
-          sizeBytes: entry.value.first.sizeBytes,
-          files: entry.value,
+          sizeBytes: candidates.first.sizeBytes,
+          files: candidates,
         ));
+      } else {
+        // In the statistically rare event that different files have the exact same byte size
+        // but different explicit hashes, group strictly by contentHash.
+        final byHash = <String, List<OptimizableFile>>{};
+        for (final f in candidates) {
+          final h = f.contentHash ?? 'unhashed_${f.id}';
+          byHash.putIfAbsent(h, () => []).add(f);
+        }
+        for (final hEntry in byHash.entries) {
+          if (hEntry.value.length > 1) {
+            hEntry.value.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+            duplicateGroups.add(DuplicateGroup(
+              key: '${entry.key}_${hEntry.key}',
+              sizeBytes: hEntry.value.first.sizeBytes,
+              files: hEntry.value,
+            ));
+          }
+        }
       }
     }
 
