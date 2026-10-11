@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
 import '../services/billing_service.dart';
 import '../services/pro_status_service.dart';
+import 'redeem_license_sheet.dart';
 
 /// Opens the Mimic Pro paywall bottom sheet.
 Future<void> showPaywallSheet(BuildContext context) {
@@ -130,7 +131,8 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
         });
       } else {
         setState(() {
-          _infoMessage = 'No active Pro purchase found on this Google account.';
+          _infoMessage =
+              'No active Pro purchase found on this Google account. If you paid via GCash or online, please tap "Redeem Activation Code" below to enter your email key.';
         });
       }
     } catch (_) {
@@ -263,10 +265,10 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
                 ),
                 const SizedBox(height: 12),
                 _buildBenefitTile(
-                  icon: Icons.auto_awesome,
-                  title: 'Game Pro Expansion Included',
+                  icon: Icons.palette_outlined,
+                  title: 'Vault Themes & Security Utilities',
                   description:
-                      'Unlock the Philippine Folklore pack, detailed describing angles, and custom atmospheric HUD skins.',
+                      'Unlock all premium vault themes, storage optimizer, and advanced security tools.',
                 ),
                 const SizedBox(height: 16),
 
@@ -487,6 +489,36 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
                               decoration: TextDecoration.underline,
                             ),
                           ),
+                  ),
+                ),
+                const SizedBox(height: 4),
+
+                // Offline / GCash Activation Code Redemption Button
+                Center(
+                  child: TextButton.icon(
+                    onPressed: (_isPurchasing || _isRestoring)
+                        ? null
+                        : () async {
+                            final redeemed = await showRedeemLicenseSheet(context);
+                            if (redeemed == true && mounted) {
+                              ref.invalidate(isProProvider);
+                              setState(() {});
+                            }
+                          },
+                    icon: const Icon(
+                      Icons.vpn_key_rounded,
+                      size: 15,
+                      color: VaultColors.accent,
+                    ),
+                    label: const Text(
+                      'Redeem Activation Code (GCash / Offline)',
+                      style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: VaultColors.accent,
+                      ),
+                    ),
                   ),
                 ),
               ],

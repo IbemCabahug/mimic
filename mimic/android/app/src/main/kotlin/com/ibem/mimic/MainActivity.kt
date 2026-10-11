@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import android.view.WindowManager
+import android.provider.Settings
 import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
 
@@ -22,6 +23,20 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "mimic/device").setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getDeviceId" -> {
+                    try {
+                        val androidId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: ""
+                        result.success(androidId)
+                    } catch (e: Exception) {
+                        result.success("")
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        }
         
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "mimic/storage").setMethodCallHandler { call, result ->
             when (call.method) {

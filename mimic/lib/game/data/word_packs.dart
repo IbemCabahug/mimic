@@ -1331,7 +1331,7 @@ class WordPackData {
           'Ancient mythical horrors, cryptids, and twilight apparitions of Philippine legend.',
       category: 'Folklore',
       icon: Icons.nightlight_round,
-      isProOnly: true,
+      isProOnly: false,
       pairs: [
         WordPair(
           realWord: 'Tikbalang',

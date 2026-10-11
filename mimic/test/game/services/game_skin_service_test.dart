@@ -17,15 +17,19 @@ void main() {
       expect(notifier.state.isProOnly, isFalse);
     });
 
-    test('non-pro user cannot select pro skins', () async {
+    test('all skins are free and can be selected by any user', () async {
       final notifier = GameSkinNotifier();
+      expect(GameSkinPresets.vhsGlitch1986.isProOnly, isFalse);
+      expect(GameSkinPresets.bloodMoonEclipse.isProOnly, isFalse);
+      expect(GameSkinPresets.retroCrtGreen.isProOnly, isFalse);
+
       final success = await notifier.setSkin(
         GameSkinPresets.vhsGlitch1986,
         isPro: false,
       );
 
-      expect(success, isFalse);
-      expect(notifier.state.id, GameSkinId.voidHorror);
+      expect(success, isTrue);
+      expect(notifier.state.id, GameSkinId.vhsGlitch1986);
     });
 
     test('pro user can select pro skins and persist preference', () async {

@@ -1,6 +1,7 @@
 // mimic/lib/vault/screens/vault_settings_screen.dart
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../crypto/vault_crypto.dart';
@@ -24,12 +25,14 @@ import '../../core/router/app_router.dart';
 import 'gesture_setup_screen.dart';
 import '../services/pro_status_service.dart';
 import '../services/billing_service.dart';
+import '../services/license_service.dart';
 import '../services/quick_entry_service.dart';
 import '../services/vault_wipe_service.dart';
 import '../services/video_thumbnail_service.dart';
 import '../services/intruder_service.dart';
 import '../trigger/gesture_store.dart';
 import '../widgets/paywall_sheet.dart';
+import '../widgets/redeem_license_sheet.dart';
 
 class VaultSettingsScreen extends ConsumerStatefulWidget {
   const VaultSettingsScreen({super.key});
@@ -127,6 +130,21 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
         ),
       );
       if (agreed != true) return;
+
+      final hasPermission = await IntruderService.requestCameraPermission();
+      if (!hasPermission) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: const Text('Camera permission is required to capture intruder photos.'),
+              backgroundColor: VaultColors.error,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          );
+        }
+        return;
+      }
     }
     await IntruderService.setEnabled(value);
     if (mounted) {
@@ -732,7 +750,16 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                         Navigator.of(dialogContext).pop(pin);
                       }
                     },
-              child: const Text('Confirm', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+              child: isProcessing
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(VaultColors.accent),
+                      ),
+                    )
+                  : const Text('Confirm', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
             ),
           ],
         ),
@@ -864,6 +891,15 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
         children: [
           // Mimic Pro Supporter / Upgrade Card
           isPro ? _buildProSupporterBanner() : _buildProUpgradeCard(),
+
+          if (!isPro)
+            _buildSettingsTile(
+              icon: Icons.vpn_key_rounded,
+              title: 'Redeem Activation Code',
+              subtitle: 'Unlock Pro with a code from GCash or beta testing',
+              iconColor: VaultColors.accent,
+              onTap: () => showRedeemLicenseSheet(context),
+            ),
 
           // Security Section
           _buildSectionHeader('Security'),
@@ -1341,6 +1377,35 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
             await proService.grantPro();
           }
           ref.invalidate(isProProvider);
+
+          // ── Post-toggle housekeeping ──────────────────────────────────
+          if (wasPro) {
+            // Revoking Pro: clamp the auto-lock timer to the free ceiling
+            // so the displayed subtitle matches reality immediately.
+            await AutoLock().loadIdleTimeout(isPro: false);
+            await _loadIdleTimeoutPref();
+
+            // Reset theme to free default if a Pro-only theme was active.
+            final currentTheme = ref.read(vaultThemeProvider);
+            if (currentTheme.isProOnly) {
+              await ref
+                  .read(vaultThemeProvider.notifier)
+                  .setTheme(VaultThemeId.classic, isPro: true); // force-set
+            }
+
+            // Quick-entry is Pro-only — refresh so subtitle reads "Off".
+            await _loadQuickEntryPref();
+          } else {
+            // Granting Pro: reload timer so Pro ceiling is available.
+            await AutoLock().loadIdleTimeout(isPro: true);
+            await _loadIdleTimeoutPref();
+          }
+
+          // Always refresh decoy / duress pin display so the check icon
+          // and subtitle match the stored state after a Pro flip.
+          await _checkDecoyPin();
+          await _checkDuressPin();
+
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -1425,6 +1490,77 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
         subtitle: 'Simulate purchase or restore directly through paywall modal',
         iconColor: VaultColors.accent,
         onTap: () => showPaywallSheet(context),
+      ),
+      _buildSettingsTile(
+        icon: Icons.key_rounded,
+        title: 'Generate & Test Offline License',
+        subtitle: 'Generate a cryptographic key and auto-redeem to test',
+        iconColor: const Color(0xFFD4AF37),
+        onTap: () {
+          final licenseService = ref.read(licenseServiceProvider);
+          final key = licenseService.generateKey();
+          showDialog<void>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              backgroundColor: VaultColors.surface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: const Text('Generated License Key', style: TextStyle(color: VaultColors.textPrimary, fontSize: 16)),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Valid HMAC-SHA256 lifetime key:', style: TextStyle(color: VaultColors.textSecondary, fontSize: 13)),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.05),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFFDCD8CE)),
+                    ),
+                    child: SelectableText(
+                      key,
+                      style: const TextStyle(
+                        fontFamily: 'Courier',
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: VaultColors.accent,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Clipboard.setData(ClipboardData(text: key));
+                    Navigator.of(ctx).pop();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Key copied to clipboard!')),
+                    );
+                  },
+                  child: const Text('Copy Key'),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    Navigator.of(ctx).pop();
+                    final res = await licenseService.redeemKey(key);
+                    if (res.isSuccess) {
+                      ref.invalidate(isProProvider);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Key auto-redeemed! Mimic Pro is active.')),
+                        );
+                      }
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(backgroundColor: VaultColors.accent),
+                  child: const Text('Auto-Redeem Now', style: TextStyle(color: Colors.white)),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     ];
   }

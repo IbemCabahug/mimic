@@ -60,7 +60,8 @@ AppDistributionFlavor get kCurrentDistributionFlavor {
 /// When Phase-2 billing lands, flip this to true and every gate falls back
 /// to the stored entitlement: installs Play has not granted read free. No
 /// storage migration is needed — nothing was ever written to say Pro.
-const bool kBillingEnforced = false;
+const bool kBillingEnforced =
+    bool.fromEnvironment('BILLING_ENFORCED', defaultValue: false);
 
 /// Whether billing simulation tools are active for manual testing (even in release/obfuscated APKs).
 ///

@@ -70,6 +70,34 @@ class IntruderService {
     await prefs.setBool(prefKeyEnabled, enabled);
   }
 
+  /// Requests and verifies OS camera permission while the owner is in settings.
+  /// Prevents unexpected camera permission popups during lock-screen break-ins.
+  static Future<bool> requestCameraPermission() async {
+    if (kIsWeb) return false;
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) return false;
+      final frontCamera = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+      final controller = CameraController(
+        frontCamera,
+        ResolutionPreset.low,
+        enableAudio: false,
+      );
+      await controller.initialize();
+      await controller.dispose();
+      return true;
+    } catch (e) {
+      assert(() {
+        debugPrint('IntruderService requestCameraPermission failed: $e');
+        return true;
+      }());
+      return false;
+    }
+  }
+
   Future<void> captureIntruder(VaultCrypto crypto) async {
     if (kIsWeb) return;
     if (!await isEnabled()) return;

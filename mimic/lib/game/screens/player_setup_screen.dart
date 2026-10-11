@@ -41,6 +41,9 @@ class _PlayerSetupScreenState extends ConsumerState<PlayerSetupScreen> {
     if (profile != null) {
       _players[0].nameController.text = profile.displayName;
       _players[0].profileId = profile.id;
+    } else {
+      // No profile created yet — give a default name so the game can start.
+      _players[0].nameController.text = 'Player 1';
     }
   }
 

@@ -13,6 +13,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:mimic/core/theme/horror_theme.dart';
 import 'package:mimic/core/animations/horror_animations.dart';
+import 'package:mimic/game/services/stats_service.dart';
 import 'package:mimic/multiplayer/network/network_service.dart';
 import 'package:mimic/multiplayer/screens/host_screen.dart';
 import 'package:mimic/multiplayer/screens/join_screen.dart';
@@ -100,8 +101,14 @@ class _MultiplayerMenuScreenState extends ConsumerState<MultiplayerMenuScreen>
         if (savedName != null && savedName.isNotEmpty) {
           _nameController.text = savedName;
         } else {
-          final randomNum = math.Random().nextInt(900) + 100;
-          _nameController.text = 'Survivor #$randomNum';
+          // Default to the player's profile name if they have one
+          final profileName = ref.read(statsServiceProvider).activeProfile?.displayName;
+          if (profileName != null && profileName.isNotEmpty) {
+            _nameController.text = profileName;
+          } else {
+            final randomNum = math.Random().nextInt(900) + 100;
+            _nameController.text = 'Survivor #$randomNum';
+          }
         }
 
         // Detect active session from provider
@@ -109,8 +116,14 @@ class _MultiplayerMenuScreenState extends ConsumerState<MultiplayerMenuScreen>
         _hasActiveSession = netService.isConnected;
       });
     } catch (_) {
-      final randomNum = math.Random().nextInt(900) + 100;
-      _nameController.text = 'Survivor #$randomNum';
+      // Fallback: try profile name, then random
+      final profileName = ref.read(statsServiceProvider).activeProfile?.displayName;
+      if (profileName != null && profileName.isNotEmpty) {
+        _nameController.text = profileName;
+      } else {
+        final randomNum = math.Random().nextInt(900) + 100;
+        _nameController.text = 'Survivor #$randomNum';
+      }
     }
   }
 

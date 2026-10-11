@@ -40,6 +40,7 @@ dependencies:
   chewie: ^1.7.5
   syncfusion_flutter_pdfviewer: ^33.2.12
   flutter_markdown: ^0.7.7+1
+  url_launcher: ^6.3.3
 
 dev_dependencies:
   flutter_test:

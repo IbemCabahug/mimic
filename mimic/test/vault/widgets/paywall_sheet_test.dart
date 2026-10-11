@@ -287,7 +287,7 @@ void main() {
 
     expect(fakeStore.restoreCalled, isTrue);
     expect(
-      find.text('No active Pro purchase found on this Google account.'),
+      find.textContaining('No active Pro purchase found on this Google account.'),
       findsOneWidget,
     );
   });
