@@ -149,6 +149,7 @@ class _EnterRecoveryScreenState extends ConsumerState<EnterRecoveryScreen> {
     return VaultScaffold(
       title: 'Recovery',
       showLockButton: false,
+      requireUnlocked: false,
       body: SafeArea(
         child: Scrollbar(
           controller: _scrollController,

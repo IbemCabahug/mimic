@@ -15,6 +15,7 @@ class VaultScaffold extends ConsumerWidget {
   final List<Widget>? actions;
   final Widget? floatingActionButton;
   final Widget body;
+  final bool requireUnlocked;
 
   const VaultScaffold({
     super.key,
@@ -24,13 +25,14 @@ class VaultScaffold extends ConsumerWidget {
     this.actions,
     this.floatingActionButton,
     required this.body,
+    this.requireUnlocked = true,
   });
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final crypto = ref.watch(vaultCryptoProvider);
     final palette = ref.watch(vaultThemeProvider);
-    if (!crypto.isUnlocked) {
+    if (requireUnlocked && !crypto.isUnlocked) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!context.mounted) return;
         final currentRoute = ModalRoute.of(context);

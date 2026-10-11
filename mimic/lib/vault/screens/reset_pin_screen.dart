@@ -266,6 +266,7 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
         title: 'Set New PIN',
         showBackButton: false,
         showLockButton: false,
+        requireUnlocked: false,
         body: SafeArea(
           child: LayoutBuilder(
             builder: (context, constraints) {

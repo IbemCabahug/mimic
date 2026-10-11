@@ -40,6 +40,12 @@
 # --- local_auth (biometric) ---
 -keep class androidx.biometric.** { *; }
 
+# --- file_picker ---
+-keep class com.mr.flutter.plugin.filepicker.** { *; }
+
+# --- pointycastle / bouncycastle ---
+-keep class org.bouncycastle.** { *; }
+
 # --- Defensive: native methods, annotations, Java/Kotlin enum reflection ---
 -keepattributes *Annotation*
 -keepclassmembers class * { native <methods>; }

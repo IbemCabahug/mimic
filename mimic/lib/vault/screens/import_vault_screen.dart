@@ -243,6 +243,7 @@ class _ImportVaultScreenState extends ConsumerState<ImportVaultScreen> {
     return VaultScaffold(
       title: _step == 1 ? 'Import Vault' : 'Enter Recovery Phrase',
       showLockButton: false,
+      requireUnlocked: false,
       body: Stack(
         children: [
           SafeArea(
