@@ -43,6 +43,8 @@ class VaultExporter {
     'recovery_blob',
     // Recovery phrase salt (base64-encoded salt used during recovery)
     'recovery_salt',
+    // Secret unlock gesture record (salted PBKDF2 verifier)
+    'vault_gesture_record',
     // SEC-02: vault_salt, vault_pin_hash, and master_key_wrapped are intentionally
     // EXCLUDED. Backups must only be restorable via the 12-word recovery phrase
     // (recovery_blob + recovery_salt). Exporting numeric PIN hashes/salts exposes

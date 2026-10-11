@@ -73,19 +73,16 @@ class VaultEntrance {
       return _store.verifyGesture(taps);
     }
 
-    final salt = await _readVaultSalt();
-    if (salt == null || salt.isEmpty) {
-      if (taps.length != setupPassage.length) {
+    // If no custom gesture is stored yet (fresh install OR imported backup
+    // before gesture setup), accept the default setup passage.
+    if (taps.length != setupPassage.length) {
+      return false;
+    }
+    for (int i = 0; i < setupPassage.length; i++) {
+      if (taps[i] != setupPassage[i]) {
         return false;
       }
-      for (int i = 0; i < setupPassage.length; i++) {
-        if (taps[i] != setupPassage[i]) {
-          return false;
-        }
-      }
-      return true;
     }
-
-    return false;
+    return true;
   }
 }

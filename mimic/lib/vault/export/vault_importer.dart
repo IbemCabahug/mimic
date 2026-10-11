@@ -301,6 +301,7 @@ class VaultImporter {
         'vault_notes',
         'recovery_blob',
         'recovery_salt',
+        'vault_gesture_record',
       ];
       for (final key in secureKeys) {
         final val = payload[key] as String?;

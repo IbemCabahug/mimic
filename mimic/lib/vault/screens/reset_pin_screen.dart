@@ -6,6 +6,8 @@ import '../crypto/vault_crypto.dart';
 import '../widgets/vault_scaffold.dart';
 import '../security/duress_service.dart';
 import '../security/decoy_vault_service.dart';
+import '../trigger/gesture_store.dart';
+import 'gesture_setup_screen.dart';
 import '../../core/providers/biometric_providers.dart';
 import '../../core/theme/app_theme.dart';
 
@@ -159,7 +161,24 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
             backgroundColor: VaultColors.success,
           ),
         );
-        Navigator.of(context).pushNamedAndRemoveUntil('/vault-home', (route) => false);
+        final hasGesture = await GestureStore().hasGesture();
+        if (mounted) {
+          if (!hasGesture) {
+            Navigator.of(context).pushAndRemoveUntil(
+              MaterialPageRoute(
+                builder: (ctx) => GestureSetupScreen(
+                  onComplete: () {
+                    if (!ctx.mounted) return;
+                    Navigator.of(ctx).pushNamedAndRemoveUntil('/vault-home', (route) => false);
+                  },
+                ),
+              ),
+              (route) => false,
+            );
+          } else {
+            Navigator.of(context).pushNamedAndRemoveUntil('/vault-home', (route) => false);
+          }
+        }
       }
     } catch (e) {
       if (mounted) {
