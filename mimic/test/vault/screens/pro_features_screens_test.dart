@@ -39,6 +39,9 @@ class _FakeStorageOptimizerService implements StorageOptimizerService {
 
   @override
   Future<void> deleteOptimizableFile(OptimizableFile file) async {}
+
+  @override
+  Future<int> deleteOptimizableFiles(List<OptimizableFile> files) async => files.length;
 }
 
 void main() {

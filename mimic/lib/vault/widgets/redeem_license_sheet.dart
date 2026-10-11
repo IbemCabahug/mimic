@@ -16,7 +16,7 @@ import '../services/pro_status_service.dart';
 /// Can be customized at build-time via `--dart-define=PAYMENT_CHECKOUT_URL=...`.
 const String kPaymentCheckoutUrl = String.fromEnvironment(
   'PAYMENT_CHECKOUT_URL',
-  defaultValue: 'https://paymongo.page/mimic-pro',
+  defaultValue: 'https://pm.link/org-uqgth9gweyKvi2DJvVkWyXXH/RF4Wp1A',
 );
 
 /// Opens the Mimic Pro offline license redemption sheet.

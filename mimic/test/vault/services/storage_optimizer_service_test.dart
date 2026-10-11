@@ -221,5 +221,80 @@ void main() {
       expect(fakePhotos.deletedIds, contains('p_dup'));
       expect(fakePhotos.photos, isEmpty);
     });
+
+    test('deleteOptimizableFiles batch deletes files and returns count', () async {
+      fakePhotos.photos.addAll([
+        PhotoMeta(
+          id: 'p_batch_1',
+          mimeType: 'image/png',
+          size: 1024,
+          createdAt: DateTime.now(),
+          originalName: 'batch1.png',
+        ),
+        PhotoMeta(
+          id: 'p_batch_2',
+          mimeType: 'image/png',
+          size: 1024,
+          createdAt: DateTime.now(),
+          originalName: 'batch2.png',
+        ),
+      ]);
+
+      final files = [
+        OptimizableFile(
+          id: 'p_batch_1',
+          name: 'batch1.png',
+          sizeBytes: 1024,
+          type: VaultMediaType.photo,
+          createdAt: DateTime.now(),
+        ),
+        OptimizableFile(
+          id: 'p_batch_2',
+          name: 'batch2.png',
+          sizeBytes: 1024,
+          type: VaultMediaType.photo,
+          createdAt: DateTime.now(),
+        ),
+      ];
+
+      final count = await optimizer.deleteOptimizableFiles(files);
+      expect(count, equals(2));
+      expect(fakePhotos.deletedIds, containsAll(['p_batch_1', 'p_batch_2']));
+      expect(fakePhotos.photos, isEmpty);
+    });
+
+    test('DuplicateGroup and StorageOptimizationReport getters identify duplicate copies correctly', () {
+      final f1 = OptimizableFile(id: '1', name: 'a.png', sizeBytes: 100, type: VaultMediaType.photo, createdAt: DateTime.now());
+      final f2 = OptimizableFile(id: '2', name: 'a.png', sizeBytes: 100, type: VaultMediaType.photo, createdAt: DateTime.now());
+      final f3 = OptimizableFile(id: '3', name: 'a.png', sizeBytes: 100, type: VaultMediaType.photo, createdAt: DateTime.now());
+
+      final group = DuplicateGroup(key: 'key', sizeBytes: 100, files: [f1, f2, f3]);
+      expect(group.originalFile.id, equals('1'));
+      expect(group.duplicateCopies.map((f) => f.id), equals(['2', '3']));
+
+      const report = StorageOptimizationReport(
+        photosBytes: 300,
+        videosBytes: 0,
+        docsBytes: 0,
+        totalBytes: 300,
+        photoCount: 3,
+        videoCount: 0,
+        docCount: 0,
+        largeFiles: [],
+        duplicateGroups: [],
+      );
+      final reportWithGroup = StorageOptimizationReport(
+        photosBytes: 300,
+        videosBytes: 0,
+        docsBytes: 0,
+        totalBytes: 300,
+        photoCount: 3,
+        videoCount: 0,
+        docCount: 0,
+        largeFiles: const [],
+        duplicateGroups: [group],
+      );
+      expect(reportWithGroup.allDuplicateCopies.map((f) => f.id), equals(['2', '3']));
+    });
   });
 }

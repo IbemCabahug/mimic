@@ -42,6 +42,13 @@ class DuplicateGroup {
 
   /// The amount of bytes that can be freed by keeping 1 file and deleting all copies.
   int get potentialSavings => sizeBytes * (files.length - 1);
+
+  /// The original file that is kept (first copy).
+  OptimizableFile get originalFile => files.first;
+
+  /// The redundant duplicate copies (all copies except the original).
+  List<OptimizableFile> get duplicateCopies =>
+      files.length > 1 ? files.sublist(1) : const [];
 }
 
 class StorageOptimizationReport {
@@ -69,6 +76,10 @@ class StorageOptimizationReport {
 
   int get potentialDuplicateSavings =>
       duplicateGroups.fold<int>(0, (sum, group) => sum + group.potentialSavings);
+
+  /// All redundant duplicate copies across all groups (preserving originals).
+  List<OptimizableFile> get allDuplicateCopies =>
+      duplicateGroups.expand((group) => group.duplicateCopies).toList();
 
   String formatBytes(int bytes) {
     if (bytes < 1024) return '$bytes B';
@@ -204,6 +215,18 @@ class StorageOptimizerService {
         await docVaultService.deleteDocument(file.id);
         break;
     }
+  }
+
+  /// Deletes a list of optimizable files and returns the count of successfully deleted files.
+  Future<int> deleteOptimizableFiles(List<OptimizableFile> files) async {
+    int deletedCount = 0;
+    for (final file in files) {
+      try {
+        await deleteOptimizableFile(file);
+        deletedCount++;
+      } catch (_) {}
+    }
+    return deletedCount;
   }
 }
 

@@ -312,17 +312,17 @@ class LicenseService {
               'Activation was not authorized. Please check your key.';
           return LicenseValidationResult(isValid: false, errorMessage: msg);
         }
-      } on SocketException catch (e) {
-        return LicenseValidationResult(
-          isValid: false,
-          errorMessage: 'Cannot connect to activation server ($e). Please check your internet connection.',
-        );
+      } on SocketException catch (_) {
+        return LicenseValidationResult.networkRequired;
       } on TimeoutException {
         return const LicenseValidationResult(
           isValid: false,
           errorMessage: 'Activation request timed out. Please try again.',
         );
       } catch (e) {
+        if (e.toString().contains('SocketException')) {
+          return LicenseValidationResult.networkRequired;
+        }
         return LicenseValidationResult(
           isValid: false,
           errorMessage: 'Activation failed: $e',
