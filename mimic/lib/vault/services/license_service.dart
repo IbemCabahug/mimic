@@ -366,8 +366,11 @@ class LicenseService {
 
   /// Computes a 4-byte (32-bit) HMAC-SHA256 signature tag over the payload.
   List<int> _computeTag(List<int> payload) {
+    final hex = payload
+        .map((b) => (b & 0xFF).toRadixString(16).padLeft(2, '0'))
+        .join();
     final hmac = Hmac(sha256, utf8.encode(_secretKey));
-    final digest = hmac.convert(payload);
+    final digest = hmac.convert(utf8.encode(hex));
     return digest.bytes.sublist(0, 4);
   }
 

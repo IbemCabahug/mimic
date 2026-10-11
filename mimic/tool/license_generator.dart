@@ -76,7 +76,8 @@ void main(List<String> args) {
     final payload = [typeCode, ...nonceBytes];
 
     final hmac = Hmac(sha256, utf8.encode(secret));
-    final tag = hmac.convert(payload).bytes.sublist(0, 4);
+    final payloadHex = payload.map((b) => (b & 0xFF).toRadixString(16).padLeft(2, '0')).join();
+    final tag = hmac.convert(utf8.encode(payloadHex)).bytes.sublist(0, 4);
 
     final allBytes = [...payload, ...tag];
     final hex = allBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join().toUpperCase();
@@ -126,7 +127,8 @@ void _verifySingleKey(String rawKey, String secret) {
   final providedTag = bytes.sublist(4, 8);
 
   final hmac = Hmac(sha256, utf8.encode(secret));
-  final expectedTag = hmac.convert(payload).bytes.sublist(0, 4);
+  final payloadHex = payload.map((b) => (b & 0xFF).toRadixString(16).padLeft(2, '0')).join();
+  final expectedTag = hmac.convert(utf8.encode(payloadHex)).bytes.sublist(0, 4);
 
   var diff = 0;
   for (var i = 0; i < 4; i++) {

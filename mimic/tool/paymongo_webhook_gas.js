@@ -129,7 +129,8 @@ function verifyKeySignature(rawKey, secret) {
   const payloadBytes = bytes.slice(0, 4);
   const providedTag = bytes.slice(4, 8);
   
-  const signatureBytes = Utilities.computeHmacSha256Signature(payloadBytes, secret);
+  const payloadHex = payloadBytes.map(b => ('0' + (b & 0xFF).toString(16)).slice(-2)).join('');
+  const signatureBytes = Utilities.computeHmacSha256Signature(payloadHex, secret);
   const expectedTag = signatureBytes.slice(0, 4);
   
   let diff = 0;
@@ -145,7 +146,8 @@ function generateMimicLicenseKey(typeCode, secret) {
     nonceBytes.push(Math.floor(Math.random() * 256));
   }
   const payloadBytes = [typeCode, ...nonceBytes];
-  const signatureBytes = Utilities.computeHmacSha256Signature(payloadBytes, secret);
+  const payloadHex = payloadBytes.map(b => ('0' + (b & 0xFF).toString(16)).slice(-2)).join('');
+  const signatureBytes = Utilities.computeHmacSha256Signature(payloadHex, secret);
   const tagBytes = signatureBytes.slice(0, 4);
   
   const allBytes = [...payloadBytes, ...tagBytes];
