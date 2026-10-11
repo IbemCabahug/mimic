@@ -380,13 +380,27 @@ class LicenseService {
     Map<String, dynamic> body,
   ) async {
     final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 8);
+    client.connectionTimeout = const Duration(seconds: 12);
     try {
       final uri = Uri.parse(url);
       final request = await client.postUrl(uri);
       request.headers.contentType = ContentType.json;
       request.write(jsonEncode(body));
-      final response = await request.close();
+      var response = await request.close();
+
+      // Google Apps Script redirects (302) to an echo endpoint that serves the JSON payload via GET.
+      if (response.statusCode == 302 ||
+          response.statusCode == 301 ||
+          response.statusCode == 303 ||
+          response.statusCode == 307) {
+        final redirectUrl = response.headers.value(HttpHeaders.locationHeader);
+        await response.drain();
+        if (redirectUrl != null && redirectUrl.isNotEmpty) {
+          final getRequest = await client.getUrl(Uri.parse(redirectUrl));
+          response = await getRequest.close();
+        }
+      }
+
       final responseText = await response.transform(utf8.decoder).join();
       return jsonDecode(responseText) as Map<String, dynamic>;
     } finally {

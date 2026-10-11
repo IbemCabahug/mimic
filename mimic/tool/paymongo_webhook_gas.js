@@ -5,6 +5,14 @@ const CONFIG = {
   SUPPORT_EMAIL: 'support@mimic-app.com',
 };
 
+function doGet(e) {
+  return jsonResponse({
+    status: 'online',
+    service: 'Mimic License Activation Webhook',
+    version: '1.5.0'
+  });
+}
+
 function doPost(e) {
   try {
     const postData = JSON.parse(e.postData.contents);
