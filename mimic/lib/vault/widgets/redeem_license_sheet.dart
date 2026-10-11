@@ -52,21 +52,34 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     final text = data?.text;
     if (text != null && text.trim().isNotEmpty) {
-      final formatted = LicenseService.sanitizeAndFormatKey(text);
-      if (formatted != null) {
-        _controller.text = formatted;
-      } else {
-        _controller.text = text.trim().toUpperCase();
+      var cleaned = text.trim().toUpperCase();
+      if (cleaned.startsWith('MIMIC-')) {
+        cleaned = cleaned.substring(6);
+      } else if (cleaned.startsWith('MIMIC')) {
+        cleaned = cleaned.substring(5);
       }
+      cleaned = cleaned.replaceAll(RegExp(r'[^0-9A-F]'), '');
+      if (cleaned.length > 16) cleaned = cleaned.substring(0, 16);
+
+      final buffer = StringBuffer();
+      for (int i = 0; i < cleaned.length; i++) {
+        if (i > 0 && i % 4 == 0) buffer.write('-');
+        buffer.write(cleaned[i]);
+      }
+      _controller.text = buffer.toString();
       setState(() => _errorMessage = null);
     }
   }
 
   Future<void> _handleRedeem() async {
-    final rawInput = _controller.text.trim();
+    var rawInput = _controller.text.trim();
     if (rawInput.isEmpty) {
       setState(() => _errorMessage = 'Please enter your 16-character activation code.');
       return;
+    }
+
+    if (!rawInput.toUpperCase().startsWith('MIMIC')) {
+      rawInput = 'MIMIC-$rawInput';
     }
 
     setState(() {
@@ -280,6 +293,7 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
                 TextField(
                   controller: _controller,
                   textCapitalization: TextCapitalization.characters,
+                  inputFormatters: [_LicenseKeyInputFormatter()],
                   style: const TextStyle(
                     fontFamily: 'Courier',
                     fontSize: 15,
@@ -289,12 +303,20 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
                   ),
                   decoration: InputDecoration(
                     labelText: 'ACTIVATION CODE',
-                    hintText: 'MIMIC-XXXX-XXXX-XXXX-XXXX',
+                    prefixText: 'MIMIC- ',
+                    prefixStyle: const TextStyle(
+                      fontFamily: 'Courier',
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                      color: VaultColors.accent,
+                    ),
+                    hintText: 'XXXX-XXXX-XXXX-XXXX',
                     hintStyle: TextStyle(
                       fontFamily: 'Courier',
                       fontSize: 13,
                       letterSpacing: 1.0,
-                      color: VaultColors.textSecondary.withOpacity(0.5),
+                      color: VaultColors.textSecondary.withOpacity(0.4),
                     ),
                     filled: true,
                     fillColor: Colors.white,
@@ -436,6 +458,40 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
           ),
         ),
       ),
+    );
+  }
+}
+
+/// Automatically strips redundant 'MIMIC-' prefix, uppercase-converts hex chars,
+/// limits to 16 hex characters, and inserts dashes every 4 characters.
+class _LicenseKeyInputFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    var text = newValue.text.toUpperCase();
+    if (text.startsWith('MIMIC-')) {
+      text = text.substring(6);
+    } else if (text.startsWith('MIMIC')) {
+      text = text.substring(5);
+    }
+
+    final hexChars = text.replaceAll(RegExp(r'[^0-9A-F]'), '');
+    final limited = hexChars.length > 16 ? hexChars.substring(0, 16) : hexChars;
+
+    final buffer = StringBuffer();
+    for (int i = 0; i < limited.length; i++) {
+      if (i > 0 && i % 4 == 0) {
+        buffer.write('-');
+      }
+      buffer.write(limited[i]);
+    }
+
+    final formatted = buffer.toString();
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
     );
   }
 }
