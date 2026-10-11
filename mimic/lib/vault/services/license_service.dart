@@ -18,6 +18,7 @@
 // 2. Offline Resilience: If no activation server is configured or in debug/offline mode,
 //    local mathematical HMAC verification runs immediately.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -311,8 +312,21 @@ class LicenseService {
               'Activation was not authorized. Please check your key.';
           return LicenseValidationResult(isValid: false, errorMessage: msg);
         }
-      } catch (_) {
-        return LicenseValidationResult.networkRequired;
+      } on SocketException catch (e) {
+        return LicenseValidationResult(
+          isValid: false,
+          errorMessage: 'Cannot connect to activation server ($e). Please check your internet connection.',
+        );
+      } on TimeoutException {
+        return const LicenseValidationResult(
+          isValid: false,
+          errorMessage: 'Activation request timed out. Please try again.',
+        );
+      } catch (e) {
+        return LicenseValidationResult(
+          isValid: false,
+          errorMessage: 'Activation failed: $e',
+        );
       }
     }
 
@@ -380,28 +394,37 @@ class LicenseService {
     Map<String, dynamic> body,
   ) async {
     final client = HttpClient();
-    client.connectionTimeout = const Duration(seconds: 12);
+    client.connectionTimeout = const Duration(seconds: 25);
     try {
       final uri = Uri.parse(url);
       final request = await client.postUrl(uri);
       request.headers.contentType = ContentType.json;
       request.write(jsonEncode(body));
-      var response = await request.close();
+      var response = await request.close().timeout(const Duration(seconds: 25));
 
-      // Google Apps Script redirects (302) to an echo endpoint that serves the JSON payload via GET.
-      if (response.statusCode == 302 ||
-          response.statusCode == 301 ||
-          response.statusCode == 303 ||
-          response.statusCode == 307) {
+      int redirectCount = 0;
+      while ((response.statusCode == 302 ||
+              response.statusCode == 301 ||
+              response.statusCode == 303 ||
+              response.statusCode == 307) &&
+          redirectCount < 5) {
+        redirectCount++;
         final redirectUrl = response.headers.value(HttpHeaders.locationHeader);
         await response.drain();
         if (redirectUrl != null && redirectUrl.isNotEmpty) {
           final getRequest = await client.getUrl(Uri.parse(redirectUrl));
-          response = await getRequest.close();
+          response = await getRequest.close().timeout(const Duration(seconds: 25));
+        } else {
+          break;
         }
       }
 
       final responseText = await response.transform(utf8.decoder).join();
+      if (response.statusCode != 200) {
+        throw HttpException(
+          'HTTP ${response.statusCode}: ${responseText.length > 80 ? responseText.substring(0, 80) : responseText}',
+        );
+      }
       return jsonDecode(responseText) as Map<String, dynamic>;
     } finally {
       client.close();
