@@ -110,25 +110,31 @@ void main() {
     expect(await service.isPro(), isFalse);
   });
 
-  // Launch window (kBillingEnforced == false, the shipped default): every
+  // Launch window (the pre-flip era, kBillingEnforced == false): every
   // install reads Pro before storage is consulted, so early downloaders
-  // get the features unlocked. The stored key is irrelevant either way.
+  // got the features unlocked. The stored key is irrelevant either way.
+  // The era is now PINNED explicitly (billingEnforced: false) — the shipped
+  // default flipped to true on 2026-10-12 (LIC-05) and can no longer be
+  // relied on to select this era.
   group('pre-billing window (billingEnforced: false)', () {
     test('missing key still answers Pro', () async {
-      final service = ProStatusService(FakePlatformService());
+      final service =
+          ProStatusService(FakePlatformService(), billingEnforced: false);
       expect(await service.isPro(), isTrue);
     });
 
     test('stale free value still answers Pro', () async {
       final platform = FakePlatformService();
       platform.store[proEntitlementKey] = '';
-      expect(await ProStatusService(platform).isPro(), isTrue);
+      expect(
+          await ProStatusService(platform, billingEnforced: false).isPro(),
+          isTrue);
     });
 
     test('a revoked entitlement still answers Pro until billing lands',
         () async {
       final platform = FakePlatformService();
-      final service = ProStatusService(platform);
+      final service = ProStatusService(platform, billingEnforced: false);
       await service.grantPro();
       await service.revokePro();
       expect(platform.store[proEntitlementKey], isNull);
@@ -136,19 +142,23 @@ void main() {
     });
 
     test('storage read error still answers Pro, never throws', () async {
-      final service = ProStatusService(_ThrowingPlatformService());
+      final service =
+          ProStatusService(_ThrowingPlatformService(), billingEnforced: false);
       expect(await service.isPro(), isTrue);
     });
   });
 
   group('distribution channels', () {
-    test('FOSS flavor is identified and unlocked by default', () async {
+    test('FOSS flavor is identified and defaults to enforced fail-closed', () async {
       final service = ProStatusService(
         FakePlatformService(),
         flavor: AppDistributionFlavor.foss,
       );
       expect(service.isFoss, isTrue);
-      expect(await service.isPro(), isTrue);
+      // LIC-05 flip (2026-10-12): FOSS no longer ships unlocked by default —
+      // a FOSS install without an entitlement (or a redeemed license) is free.
+      expect(service.billingEnforced, isTrue);
+      expect(await service.isPro(), isFalse);
     });
 
     test('PlayStore flavor is not FOSS', () async {

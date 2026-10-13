@@ -86,9 +86,21 @@ flutter run
 ```
 
 ### Build Release APK (universal — one file, any supported phone)
-```bash
-flutter build apk --release
+
+Release builds are **fail-closed** (Phase-5 audit LIC-02/LIC-03/LIC-05): they
+require the license secret + activation URL at build time, and billing is
+enforced by default. Always build releases through the wrapper, which refuses
+to build when either define is missing:
+
+```powershell
+$env:MIMIC_LICENSE_SECRET = '<current secret — never commit it>'
+$env:MIMIC_ACTIVATION_URL = 'https://script.google.com/macros/s/<DEPLOY_ID>/exec'
+powershell -File tool\build_release.ps1
 ```
+
+A plain `flutter build apk --release` still compiles, but fails **closed**:
+license keys cannot validate and Pro stays locked until a valid key is redeemed.
+
 > The version code comes from `pubspec.yaml` (`version: x.y.z+N`). It must only
 > ever rise — a lower build number cannot install over a distributed one, and
 > uninstalling Mimic permanently destroys its hardware-bound encryption keys

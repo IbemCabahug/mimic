@@ -24,6 +24,7 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
@@ -106,18 +107,24 @@ class LicenseInfo {
   final String? deviceId;
 }
 
-/// Default offline signing secret key.
-/// Can be overridden at build time using `--dart-define=MIMIC_LICENSE_SECRET=...`.
-const String kDefaultLicenseSecret =
-    'mimic_offline_pro_license_secret_2026_gc_v1';
-
+/// License HMAC secret — supplied ONLY at build time via
+/// `--dart-define=MIMIC_LICENSE_SECRET=...` (use `tool/build_release.ps1`).
+///
+/// Deliberately has NO default value (Phase-5 audit LIC-02/LIC-03): a build
+/// without the define gets an empty secret, and [LicenseService.validateKey]
+/// refuses to validate anything when the secret is empty — fail closed, never
+/// fail open, and no public fallback secret ships inside the APK.
 const String kCompileTimeLicenseSecret = String.fromEnvironment(
   'MIMIC_LICENSE_SECRET',
-  defaultValue: kDefaultLicenseSecret,
+  defaultValue: '',
 );
 
-/// Optional Google Apps Script or cloud activation endpoint URL.
-/// Can be passed at build time via `--dart-define=MIMIC_ACTIVATION_URL=...`.
+/// Google Apps Script activation endpoint URL — supplied at build time via
+/// `--dart-define=MIMIC_ACTIVATION_URL=...` (use `tool/build_release.ps1`).
+///
+/// Empty in debug builds (the offline skip in [LicenseService.redeemKey]
+/// stays available for local testing); release builds refuse to grant Pro
+/// when it is empty (LIC-03 fail-closed).
 const String kCompileTimeActivationUrl = String.fromEnvironment(
   'MIMIC_ACTIVATION_URL',
   defaultValue: '',
@@ -232,6 +239,17 @@ class LicenseService {
 
   /// Validates a license key offline using HMAC-SHA256 signature verification.
   LicenseValidationResult validateKey(String rawInput) {
+    // Fail closed (LIC-02/LIC-03): a build without MIMIC_LICENSE_SECRET has an
+    // empty secret, and HMAC with a public empty key would be forgeable — so
+    // refuse to validate anything at all instead of "verifying" with ''.
+    if (_secretKey.isEmpty) {
+      return const LicenseValidationResult(
+        isValid: false,
+        errorMessage:
+            'License verification is unavailable in this build. Please reinstall the latest release or contact support.',
+      );
+    }
+
     final hex16 = extractHex16(rawInput);
     if (hex16 == null) {
       return LicenseValidationResult.invalidFormat;
@@ -284,7 +302,9 @@ class LicenseService {
     final formattedKey = validation.formattedKey!;
     final deviceId = await getOrCreateDeviceId();
 
-    // 2. If activation server URL is set, enforce device limit check
+    // 2. If activation server URL is set, enforce device limit check.
+    //    Release builds FAIL CLOSED when no URL was configured (LIC-03):
+    //    skipping the check silently is what shipped the broken build.
     if (_activationUrl.isNotEmpty) {
       try {
         final Map<String, dynamic> responseData;
@@ -328,6 +348,16 @@ class LicenseService {
           errorMessage: 'Activation failed: $e',
         );
       }
+    } else if (kReleaseMode) {
+      // LIC-03 fail-closed: a RELEASE build without MIMIC_ACTIVATION_URL must
+      // not silently skip the device-limit check and grant Pro — that is the
+      // exact broken state the Phase-5 audit found in the shipped command.
+      // Debug builds keep the offline skip so local testing still works.
+      return const LicenseValidationResult(
+        isValid: false,
+        errorMessage:
+            'Activation is not configured in this build. Please reinstall the latest release or contact support.',
+      );
     }
 
     // 3. Grant Pro status and persist license locally

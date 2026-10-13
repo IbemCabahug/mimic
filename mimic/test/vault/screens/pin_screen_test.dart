@@ -295,6 +295,11 @@ void main() {
     final decoyService = DecoyVaultService(fakePlatform);
     await decoyService.setDecoyPin('7777');
 
+    // Decoy vault is a Pro feature. Since the LIC-05 flip (2026-10-12) the
+    // default install reads FREE under billing enforcement, so seed a granted
+    // entitlement — exactly what a real Pro install has in secure storage.
+    fakePlatform.store['pro_entitlement'] = 'pro';
+
     await tester.pumpWidget(
       ProviderScope(
         overrides: [

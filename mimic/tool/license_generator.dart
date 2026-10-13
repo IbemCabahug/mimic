@@ -18,15 +18,13 @@ import 'dart:math';
 
 import 'package:crypto/crypto.dart';
 
-const String kDefaultSecret = 'mimic_offline_pro_license_secret_2026_gc_v1';
-
 void main(List<String> args) {
   var count = 1;
   var typeCode = 0x01; // Lifetime Pro
   var typeName = 'Lifetime Pro';
   String? csvPath;
   String? verifyKey;
-  var secret = Platform.environment['MIMIC_LICENSE_SECRET'] ?? kDefaultSecret;
+  String? secret = Platform.environment['MIMIC_LICENSE_SECRET'];
 
   for (var i = 0; i < args.length; i++) {
     final arg = args[i];
@@ -51,6 +49,17 @@ void main(List<String> args) {
       _printHelp();
       return;
     }
+  }
+
+  // Fail closed (LIC-02): the tool must never fall back to a hardcoded
+  // default secret — a missing secret is an error, not a fallback.
+  if (secret == null || secret.isEmpty) {
+    stderr.writeln(
+      'ERROR: no license secret configured.\n'
+      'Set MIMIC_LICENSE_SECRET in your environment, or pass --secret <value>.\n'
+      'The secret is rotated independently — never hardcode it in this tool.',
+    );
+    exit(1);
   }
 
   // Verification Mode

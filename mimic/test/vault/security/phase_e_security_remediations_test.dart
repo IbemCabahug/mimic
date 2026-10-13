@@ -343,7 +343,7 @@ void main() {
       expect(await proService.isPro(), isFalse);
     });
 
-    test('FOSS flavor defaults to pre-billing unlocked state', () async {
+    test('FOSS flavor defaults to billing-enforced fail-closed state (LIC-05 flip)', () async {
       final fakePlatform = FakePlatformService();
       final proService = ProStatusService(
         fakePlatform,
@@ -351,8 +351,22 @@ void main() {
       );
 
       expect(proService.isFoss, isTrue);
-      expect(proService.billingEnforced, isFalse);
-      expect(await proService.isPro(), isTrue);
+      // LIC-05 (Phase-5 audit, 2026-10-12): the shipped default is now
+      // fail-closed for EVERY flavor — an install without a stored entitlement
+      // (or a redeemed license) reads FREE, instead of unlocking Pro by
+      // default. This test previously asserted the opposite (pre-billing
+      // unlocked default) and was updated with the flip.
+      expect(proService.billingEnforced, isTrue);
+      expect(await proService.isPro(), isFalse);
+
+      // The pre-billing unlocked era remains explicitly testable.
+      final legacyEra = ProStatusService(
+        fakePlatform,
+        flavor: AppDistributionFlavor.foss,
+        billingEnforced: false,
+      );
+      expect(legacyEra.billingEnforced, isFalse);
+      expect(await legacyEra.isPro(), isTrue);
     });
   });
 }

@@ -117,7 +117,11 @@ void main() {
     // Developer / Customer generates a valid license key
     final rootPlatform = FakePlatformService();
     final rootProStatus = ProStatusService(rootPlatform, billingEnforced: true);
-    final keyGenerator = LicenseService(platform: rootPlatform, proStatus: rootProStatus);
+    final keyGenerator = LicenseService(
+      platform: rootPlatform,
+      proStatus: rootProStatus,
+      secretKey: 'test_secret_key_123',
+    );
     final licenseKey = keyGenerator.generateKey();
 
     // -------------------------------------------------------------------------
@@ -128,6 +132,7 @@ void main() {
     final phoneAService = LicenseService(
       platform: phoneAPlatform,
       proStatus: phoneAProStatus,
+      secretKey: 'test_secret_key_123',
       activationUrl: 'https://script.google.com/macros/s/exec',
       httpPoster: server.handleActivationRequest,
     );
@@ -148,6 +153,7 @@ void main() {
     final tabletBService = LicenseService(
       platform: tabletBPlatform,
       proStatus: tabletBProStatus,
+      secretKey: 'test_secret_key_123',
       activationUrl: 'https://script.google.com/macros/s/exec',
       httpPoster: server.handleActivationRequest,
     );
@@ -166,6 +172,7 @@ void main() {
     final friendService = LicenseService(
       platform: friendPlatform,
       proStatus: friendProStatus,
+      secretKey: 'test_secret_key_123',
       activationUrl: 'https://script.google.com/macros/s/exec',
       httpPoster: server.handleActivationRequest,
     );
@@ -190,6 +197,7 @@ void main() {
     final reinstalledPhoneAService = LicenseService(
       platform: phoneAPlatform,
       proStatus: phoneAProStatus,
+      secretKey: 'test_secret_key_123',
       activationUrl: 'https://script.google.com/macros/s/exec',
       httpPoster: server.handleActivationRequest,
     );

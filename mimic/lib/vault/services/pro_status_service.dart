@@ -49,19 +49,18 @@ AppDistributionFlavor get kCurrentDistributionFlavor {
   return AppDistributionFlavor.foss;
 }
 
-/// Pre-billing enforcement switch.
+/// Enforcement switch for the stored entitlement.
 ///
-/// While this is false (the current launch window), [ProStatusService.isPro]
-/// answers true for EVERY install — Play billing is not wired yet, and the
-/// owner wants early downloaders to have the features unlocked before
-/// billing separates Pro from free. Nothing protective is gated by Pro
-/// (the golden rule), so opening the gate cannot weaken security.
-///
-/// When Phase-2 billing lands, flip this to true and every gate falls back
-/// to the stored entitlement: installs Play has not granted read free. No
-/// storage migration is needed — nothing was ever written to say Pro.
+/// Default **true** as of the Phase-5 security audit (LIC-05, 2026-10-12):
+/// a build that forgets `--dart-define=BILLING_ENFORCED=...` now fails
+/// CLOSED — installs read free until Google Play billing or a redeemed
+/// offline license grants Pro. Pass `--dart-define=BILLING_ENFORCED=false`
+/// ONLY for an intentionally-unlocked build (owner decision required; the
+/// old default of `false` shipped Pro free to every mis-built release).
+/// Nothing protective is gated by Pro (the golden rule), so enforcing the
+/// gate cannot weaken security — it protects revenue only.
 const bool kBillingEnforced =
-    bool.fromEnvironment('BILLING_ENFORCED', defaultValue: false);
+    bool.fromEnvironment('BILLING_ENFORCED', defaultValue: true);
 
 /// Whether billing simulation tools are active for manual testing (even in release/obfuscated APKs).
 ///

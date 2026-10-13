@@ -569,12 +569,11 @@ void main() {
 
   /// Build a standard MaterialApp containing Riverpod overrides for all vault providers and routing tables.
   ///
-  /// [enforceBilling] pins the Pro-gate era under test. The default true
-  /// overrides proStatusServiceProvider with a billing-enforced service so
-  /// the Pro-gated rows behave exactly as they will once kBillingEnforced
-  /// flips in Phase 2; pass false to test the pre-billing launch window,
-  /// where the shipped default (kBillingEnforced == false) reads Pro for
-  /// every install and no entitlement is needed.
+  /// [enforceBilling] pins the Pro-gate era under test — always explicitly,
+  /// never via the shipped default: `kBillingEnforced` flipped to TRUE on
+  /// 2026-10-12 (Phase-5 audit LIC-05), so `true` = billing-era matrix and
+  /// `false` = the old pre-billing launch window (reads Pro for every install,
+  /// no entitlement needed).
   Widget buildTestApp(Widget homeScreen,
       {bool debugShowCheckedModeBanner = true,
       bool enforceBilling = true}) {
@@ -582,9 +581,8 @@ void main() {
       key: UniqueKey(),
       overrides: [
         platformServiceProvider.overrideWithValue(fakePlatform),
-        if (enforceBilling)
-          proStatusServiceProvider.overrideWith((ref) =>
-              ProStatusService(fakePlatform, billingEnforced: true)),
+        proStatusServiceProvider.overrideWith((ref) =>
+            ProStatusService(fakePlatform, billingEnforced: enforceBilling)),
         vaultCryptoProvider.overrideWith((ref) => fakeCrypto),
         notesServiceProvider.overrideWithValue(fakeNotes),
         fileVaultServiceProvider.overrideWithValue(fakePhotos),
@@ -1292,11 +1290,14 @@ void main() {
       expect(find.text('Lock vault and return to PIN screen'), findsOneWidget);
     });
 
-    testWidgets('F27: the quick-entry tile is HIDDEN for a free user (the install has no Pro entitlement)', (WidgetTester tester) async {
-      // Default fakePlatform: no pro_entitlement key, so isPro() is false.
-      // A tall viewport builds the whole ListView at once — the row must not
-      // exist anywhere, not merely be off-screen (drag sampling jumps past
-      // rows between settle points, which would let findsNothing lie).
+    testWidgets('F27: a free user SEES the quick-entry tile with a PRO badge and no switch', (WidgetTester tester) async {
+      // Spec (vault_settings_screen.dart, F27): the tile is visible to
+      // EVERYONE — free users get a PRO badge instead of the live switch, and
+      // tapping the tile opens the paywall. (This test previously asserted the
+      // tile was HIDDEN for free users — an older spec, stale since the
+      // visible-with-badge redesign; updated 2026-10-12.)
+      // A tall viewport builds the whole ListView at once so the deep row is
+      // definitely in the tree, not merely off-screen.
       tester.view.physicalSize = const Size(800, 3200);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
@@ -1304,7 +1305,19 @@ void main() {
       await tester.pumpWidget(buildTestApp(const VaultSettingsScreen()));
       await tester.pumpAndSettle();
 
-      expect(find.text('Quick entry to the vault'), findsNothing);
+      final tile = find.text('Quick entry to the vault');
+      expect(tile, findsOneWidget);
+      final switchFinder = find.descendant(
+        of: find.ancestor(of: tile, matching: find.byType(ListTile)),
+        matching: find.byType(Switch),
+      );
+      expect(switchFinder, findsNothing,
+          reason: 'Free users must never see the live toggle — only a PRO badge');
+      final badgeFinder = find.descendant(
+        of: find.ancestor(of: tile, matching: find.byType(ListTile)),
+        matching: find.text('PRO'),
+      );
+      expect(badgeFinder, findsOneWidget);
       expect(fakePlatform.secureStore['pro_quick_entry_enabled'], isNull);
     });
 
