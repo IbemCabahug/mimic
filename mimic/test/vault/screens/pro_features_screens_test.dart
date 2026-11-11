@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:mimic/vault/services/pro_offer_policy.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -41,7 +42,8 @@ class _FakeStorageOptimizerService implements StorageOptimizerService {
   Future<void> deleteOptimizableFile(OptimizableFile file) async {}
 
   @override
-  Future<int> deleteOptimizableFiles(List<OptimizableFile> files) async => files.length;
+  Future<int> deleteOptimizableFiles(List<OptimizableFile> files) async =>
+      files.length;
 }
 
 void main() {
@@ -54,7 +56,9 @@ void main() {
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            storageOptimizerServiceProvider.overrideWithValue(_FakeStorageOptimizerService()),
+            storageOptimizerServiceProvider.overrideWithValue(
+              _FakeStorageOptimizerService(),
+            ),
             isProProvider.overrideWith((ref) => false),
           ],
           child: const MaterialApp(home: StorageOptimizerScreen()),
@@ -62,6 +66,15 @@ void main() {
       );
       await tester.pumpAndSettle();
 
+      if (!kProOffersVisible) {
+        expect(
+          find.text('This feature is currently unavailable.'),
+          findsOneWidget,
+        );
+        expect(find.text('Upgrade'), findsNothing);
+        expect(find.text('Mimic Pro Feature'), findsNothing);
+        return;
+      }
       expect(find.text('Storage Optimizer'), findsOneWidget);
       expect(find.text('Vault Storage Used'), findsOneWidget);
       expect(find.text('Mimic Pro Feature'), findsOneWidget);
@@ -70,14 +83,30 @@ void main() {
   });
 
   group('VaultThemeSelectorScreen', () {
-    testWidgets('displays palettes and allows theme selection for Pro', (tester) async {
+    testWidgets('free user sees no locked palettes or badges', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [isProProvider.overrideWith((ref) => false)],
+          child: const MaterialApp(home: VaultThemeSelectorScreen()),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('Classic Violet'), findsOneWidget);
+      if (!kProOffersVisible) {
+        expect(find.text('Deep Ocean'), findsNothing);
+        expect(find.text('PRO'), findsNothing);
+        expect(find.byIcon(Icons.lock_outline), findsNothing);
+      }
+    });
+    testWidgets('displays palettes and allows theme selection for Pro', (
+      tester,
+    ) async {
       SharedPreferences.setMockInitialValues({});
 
       await tester.pumpWidget(
         ProviderScope(
-          overrides: [
-            isProProvider.overrideWith((ref) => true),
-          ],
+          overrides: [isProProvider.overrideWith((ref) => true)],
           child: const MaterialApp(home: VaultThemeSelectorScreen()),
         ),
       );

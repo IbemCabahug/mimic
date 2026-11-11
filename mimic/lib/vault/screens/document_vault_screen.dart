@@ -1,3 +1,4 @@
+import '../services/pro_offer_policy.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -22,7 +23,8 @@ class DocumentVaultScreen extends ConsumerStatefulWidget {
   const DocumentVaultScreen({super.key});
 
   @override
-  ConsumerState<DocumentVaultScreen> createState() => DocumentVaultScreenState();
+  ConsumerState<DocumentVaultScreen> createState() =>
+      DocumentVaultScreenState();
 }
 
 class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
@@ -72,11 +74,9 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
       initialTags: doc.tags,
       initialCaption: doc.caption,
       onSave: (tags, caption) async {
-        await ref.read(documentVaultServiceProvider).updateDocumentDetails(
-              doc.id,
-              tags: tags,
-              caption: caption,
-            );
+        await ref
+            .read(documentVaultServiceProvider)
+            .updateDocumentDetails(doc.id, tags: tags, caption: caption);
         await _loadDocuments();
       },
     );
@@ -102,15 +102,22 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
     final result = list.toList();
     switch (_sortMode) {
       case 'name':
-        result.sort((a, b) => a.fileName.toLowerCase().compareTo(b.fileName.toLowerCase()));
+        result.sort(
+          (a, b) =>
+              a.fileName.toLowerCase().compareTo(b.fileName.toLowerCase()),
+        );
         break;
       case 'size':
         result.sort((a, b) => b.sizeBytes.compareTo(a.sizeBytes));
         break;
       case 'type':
         result.sort((a, b) {
-          final t = a.fileType.toLowerCase().compareTo(b.fileType.toLowerCase());
-          return t != 0 ? t : a.fileName.toLowerCase().compareTo(b.fileName.toLowerCase());
+          final t = a.fileType.toLowerCase().compareTo(
+            b.fileType.toLowerCase(),
+          );
+          return t != 0
+              ? t
+              : a.fileName.toLowerCase().compareTo(b.fileName.toLowerCase());
         });
         break;
       case 'date':
@@ -122,10 +129,13 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
 
   Widget _folderChip(String label, bool selected, VoidCallback onTap) {
     return ChoiceChip(
-      label: Text(label,
-          style: TextStyle(
-              fontFamily: 'Inter',
-              color: selected ? Colors.white : VaultColors.textSecondary)),
+      label: Text(
+        label,
+        style: TextStyle(
+          fontFamily: 'Inter',
+          color: selected ? Colors.white : VaultColors.textSecondary,
+        ),
+      ),
       selected: selected,
       onSelected: (_) => onTap(),
       backgroundColor: VaultColors.surface,
@@ -135,17 +145,38 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
   }
 
   Widget _buildFolderChips() {
-    final folders = documents.map((d) => d.folder).where((f) => f.isNotEmpty).toSet().toList()
-      ..sort();
+    final folders =
+        documents
+            .map((d) => d.folder)
+            .where((f) => f.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
     final hasUnfiled = documents.any((d) => d.folder.isEmpty);
     final chips = <Widget>[
-      _folderChip('All', _selectedFolder == null, () => setState(() => _selectedFolder = null)),
+      _folderChip(
+        'All',
+        _selectedFolder == null,
+        () => setState(() => _selectedFolder = null),
+      ),
     ];
     if (hasUnfiled) {
-      chips.add(_folderChip('Unfiled', _selectedFolder == '', () => setState(() => _selectedFolder = '')));
+      chips.add(
+        _folderChip(
+          'Unfiled',
+          _selectedFolder == '',
+          () => setState(() => _selectedFolder = ''),
+        ),
+      );
     }
     for (final f in folders) {
-      chips.add(_folderChip(f, _selectedFolder == f, () => setState(() => _selectedFolder = f)));
+      chips.add(
+        _folderChip(
+          f,
+          _selectedFolder == f,
+          () => setState(() => _selectedFolder = f),
+        ),
+      );
     }
     return SizedBox(
       height: 44,
@@ -153,7 +184,10 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         children: chips
-            .map((c) => Padding(padding: const EdgeInsets.only(right: 8), child: c))
+            .map(
+              (c) =>
+                  Padding(padding: const EdgeInsets.only(right: 8), child: c),
+            )
             .toList(),
       ),
     );
@@ -161,18 +195,26 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
 
   Future<void> _showMoveToFolder(DocumentMeta doc) async {
     final existingFolders =
-        documents.map((d) => d.folder).where((f) => f.isNotEmpty).toSet().toList()..sort();
+        documents
+            .map((d) => d.folder)
+            .where((f) => f.isNotEmpty)
+            .toSet()
+            .toList()
+          ..sort();
     final newFolderController = TextEditingController();
     final chosen = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Move to folder',
-            style: TextStyle(
-                color: VaultColors.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontFamily: 'Inter')),
+        title: const Text(
+          'Move to folder',
+          style: TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
+        ),
         content: SizedBox(
           width: double.maxFinite,
           child: SingleChildScrollView(
@@ -180,22 +222,46 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 ListTile(
-                  leading: const Icon(Icons.folder_off_outlined, color: VaultColors.textSecondary),
-                  title: const Text('Unfiled', style: TextStyle(fontFamily: 'Inter', color: VaultColors.textPrimary)),
+                  leading: const Icon(
+                    Icons.folder_off_outlined,
+                    color: VaultColors.textSecondary,
+                  ),
+                  title: const Text(
+                    'Unfiled',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      color: VaultColors.textPrimary,
+                    ),
+                  ),
                   onTap: () => Navigator.of(context).pop(''),
                 ),
-                ...existingFolders.map((f) => ListTile(
-                      leading: const Icon(Icons.folder_outlined, color: VaultColors.accent),
-                      title: Text(f, style: const TextStyle(fontFamily: 'Inter', color: VaultColors.textPrimary)),
-                      onTap: () => Navigator.of(context).pop(f),
-                    )),
+                ...existingFolders.map(
+                  (f) => ListTile(
+                    leading: const Icon(
+                      Icons.folder_outlined,
+                      color: VaultColors.accent,
+                    ),
+                    title: Text(
+                      f,
+                      style: const TextStyle(
+                        fontFamily: 'Inter',
+                        color: VaultColors.textPrimary,
+                      ),
+                    ),
+                    onTap: () => Navigator.of(context).pop(f),
+                  ),
+                ),
                 const Divider(),
                 TextField(
                   controller: newFolderController,
                   decoration: const InputDecoration(
-                      hintText: 'New folder name',
-                      hintStyle: TextStyle(fontFamily: 'Inter')),
-                  style: const TextStyle(fontFamily: 'Inter', color: VaultColors.textPrimary),
+                    hintText: 'New folder name',
+                    hintStyle: TextStyle(fontFamily: 'Inter'),
+                  ),
+                  style: const TextStyle(
+                    fontFamily: 'Inter',
+                    color: VaultColors.textPrimary,
+                  ),
                 ),
               ],
             ),
@@ -204,14 +270,20 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(null),
-            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: VaultColors.textTertiary),
+            ),
           ),
           TextButton(
             onPressed: () {
               final name = newFolderController.text.trim();
               if (name.isNotEmpty) Navigator.of(context).pop(name);
             },
-            child: const Text('Create & Move', style: TextStyle(color: VaultColors.accent)),
+            child: const Text(
+              'Create & Move',
+              style: TextStyle(color: VaultColors.accent),
+            ),
           ),
         ],
       ),
@@ -277,13 +349,16 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setDialogState) => AlertDialog(
           backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: const Text(
             'Remove original after import?',
             style: TextStyle(
-                color: VaultColors.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontFamily: 'Inter'),
+              color: VaultColors.textPrimary,
+              fontWeight: FontWeight.w600,
+              fontFamily: 'Inter',
+            ),
           ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
@@ -293,7 +368,9 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                 'Mimic saves an encrypted copy in the vault. The original file '
                 'stays where it is unless you ask to remove it here.',
                 style: TextStyle(
-                    color: VaultColors.textSecondary, fontFamily: 'Inter'),
+                  color: VaultColors.textSecondary,
+                  fontFamily: 'Inter',
+                ),
               ),
               const SizedBox(height: 8),
               const Text(
@@ -302,9 +379,10 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                 'locations). If it cannot be removed, the original is kept '
                 'and Mimic will say so.',
                 style: TextStyle(
-                    fontSize: 12,
-                    color: VaultColors.textTertiary,
-                    fontFamily: 'Inter'),
+                  fontSize: 12,
+                  color: VaultColors.textTertiary,
+                  fontFamily: 'Inter',
+                ),
               ),
               const SizedBox(height: 8),
               CheckboxListTile(
@@ -321,7 +399,9 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                 title: const Text(
                   'Also remove the original',
                   style: TextStyle(
-                      color: VaultColors.textPrimary, fontFamily: 'Inter'),
+                    color: VaultColors.textPrimary,
+                    fontFamily: 'Inter',
+                  ),
                 ),
               ),
             ],
@@ -329,15 +409,23 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel',
-                  style: TextStyle(
-                      color: VaultColors.textTertiary, fontFamily: 'Inter')),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(
+                  color: VaultColors.textTertiary,
+                  fontFamily: 'Inter',
+                ),
+              ),
             ),
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(),
-              child: const Text('Import',
-                  style: TextStyle(
-                      color: VaultColors.accent, fontFamily: 'Inter')),
+              child: const Text(
+                'Import',
+                style: TextStyle(
+                  color: VaultColors.accent,
+                  fontFamily: 'Inter',
+                ),
+              ),
             ),
           ],
         ),
@@ -367,12 +455,14 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
       final service = ref.read(documentVaultServiceProvider);
       final result = removeOriginal
           ? await service.importDocumentAndRemoveOriginal()
-          : await service.importDocument().then((r) => (
+          : await service.importDocument().then(
+              (r) => (
                 id: r.id,
                 tempCopyRemoved: r.tempCopyRemoved,
                 originalRemoved: false,
                 originalNote: null as String?,
-              ));
+              ),
+            );
       await _loadDocuments();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -381,13 +471,17 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(result.originalRemoved
-                    ? 'Saved to vault · Original removed'
-                    : 'Saved to vault'),
+                Text(
+                  result.originalRemoved
+                      ? 'Saved to vault · Original removed'
+                      : 'Saved to vault',
+                ),
                 const SizedBox(height: 2),
                 if (result.originalNote != null)
-                  Text(result.originalNote!,
-                      style: const TextStyle(fontSize: 12)),
+                  Text(
+                    result.originalNote!,
+                    style: const TextStyle(fontSize: 12),
+                  ),
                 if (!result.originalRemoved && result.originalNote == null)
                   const Text(
                     'The file you picked is still in your own storage. Remove '
@@ -409,9 +503,9 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Import failed: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Import failed: $e')));
       }
     } finally {
       AutoLock().endProtectedOperation();
@@ -427,7 +521,11 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text(
           'New Text Note',
-          style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
         ),
         content: TextField(
           controller: controller,
@@ -441,11 +539,17 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: VaultColors.textTertiary),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Create', style: TextStyle(color: VaultColors.accent)),
+            child: const Text(
+              'Create',
+              style: TextStyle(color: VaultColors.accent),
+            ),
           ),
         ],
       ),
@@ -453,10 +557,14 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
 
     if (result == true && mounted) {
       final title = controller.text.trim();
-      final docId = await ref.read(documentVaultServiceProvider).createTextNote(title, '');
+      final docId = await ref
+          .read(documentVaultServiceProvider)
+          .createTextNote(title, '');
       Uint8List? noteBytes;
       try {
-        noteBytes = await ref.read(documentVaultServiceProvider).getDocumentBytes(docId);
+        noteBytes = await ref
+            .read(documentVaultServiceProvider)
+            .getDocumentBytes(docId);
       } on SystemKeyMissingException catch (_) {
         if (!mounted) return;
         showSecureKeyLostSnackBar(context);
@@ -501,7 +609,13 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                   ),
                   child: const Icon(Icons.file_present, color: Colors.white),
                 ),
-                title: const Text('Import File', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                title: const Text(
+                  'Import File',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
                 onTap: () {
                   Navigator.of(context).pop();
                   _importDocument();
@@ -521,7 +635,13 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
                   ),
                   child: const Icon(Icons.text_snippet, color: Colors.white),
                 ),
-                title: const Text('New Text Note', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                title: const Text(
+                  'New Text Note',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
                 onTap: () {
                   Navigator.of(context).pop();
                   _createTextNote();
@@ -547,20 +667,36 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text(
           'Restore to Device',
-          style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
         ),
         content: const Text(
           'This decrypts the document and saves a readable copy to a location you choose. Anyone with access to the device can read it there. After the save succeeds, it will be removed from the vault.',
-          style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textSecondary,
+            fontFamily: 'Inter',
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: VaultColors.textTertiary,
+                fontFamily: 'Inter',
+              ),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Restore', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+            child: const Text(
+              'Restore',
+              style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter'),
+            ),
           ),
         ],
       ),
@@ -577,8 +713,9 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
     _restoreSession.beginRestore([doc.fileName]);
     _restoreSession.markRestoring(0, 1);
 
-    final outcome =
-        await ref.read(documentVaultServiceProvider).restoreDocumentToDisk(doc.id);
+    final outcome = await ref
+        .read(documentVaultServiceProvider)
+        .restoreDocumentToDisk(doc.id);
     if (!mounted) return;
     // Map the outcome onto the row so the pill tells the same story as the
     // snackbar below. 'cancelled' (picker dismissed) is not a failure and not
@@ -614,7 +751,9 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
             'Document was saved, but the vault copy could not be deleted. Delete it from the vault manually.';
         break;
     }
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text(message)));
     // Let the outcome row linger ~4s (same rule as the video vault's restore
     // and the import card), then clear so the pill disappears. Starting
     // another restore cancels this timer first.
@@ -651,111 +790,147 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-            Material(
-              color: Colors.transparent,
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: VaultColors.accent.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.unarchive,
+                      color: VaultColors.accent,
+                    ),
                   ),
-                  child: const Icon(Icons.unarchive, color: VaultColors.accent),
-                ),
-                title: const Text('Restore to Device',
+                  title: const Text(
+                    'Restore to Device',
                     style: TextStyle(
-                        fontFamily: 'Inter', fontWeight: FontWeight.w600)),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _restoreDocument(doc);
-                },
+                      fontFamily: 'Inter',
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _restoreDocument(doc);
+                  },
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Material(
-              color: Colors.transparent,
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
+              const SizedBox(height: 8),
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: VaultColors.accent.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.ios_share,
+                      color: VaultColors.accent,
+                    ),
                   ),
-                  child: const Icon(Icons.ios_share, color: VaultColors.accent),
-                ),
-                title: const Text('Share / export',
+                  title: const Text(
+                    'Share / export',
                     style: TextStyle(
-                        fontFamily: 'Inter', fontWeight: FontWeight.w600)),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _shareDocument(doc);
-                },
+                      fontFamily: 'Inter',
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _shareDocument(doc);
+                  },
+                ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Material(
-              color: Colors.transparent,
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.label_outline, color: VaultColors.accent),
-                ),
-                title: const Text('Tags & Caption',
-                    style: TextStyle(
-                        fontFamily: 'Inter', fontWeight: FontWeight.w600)),
-                trailing: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: const Text('PRO',
+              const SizedBox(height: 8),
+              if (showProFeature(ref.watch(isProProvider).valueOrNull ?? false))
+                Material(
+                  color: Colors.transparent,
+                  child: ListTile(
+                    leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: VaultColors.accent.withValues(alpha: 0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.label_outline,
+                        color: VaultColors.accent,
+                      ),
+                    ),
+                    title: const Text(
+                      'Tags & Caption',
                       style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: VaultColors.accent)),
-                ),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _editDocumentTagsAndCaption(doc);
-                },
-              ),
-            ),
-            const SizedBox(height: 8),
-            Material(
-              color: Colors.transparent,
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
+                        fontFamily: 'Inter',
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    trailing: !kProOffersVisible
+                        ? null
+                        : Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: VaultColors.accent.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'PRO',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: VaultColors.accent,
+                              ),
+                            ),
+                          ),
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      _editDocumentTagsAndCaption(doc);
+                    },
                   ),
-                  child: const Icon(Icons.drive_file_move_outlined,
-                      color: VaultColors.accent),
                 ),
-                title: const Text('Move to Folder',
+              const SizedBox(height: 8),
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: VaultColors.accent.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.drive_file_move_outlined,
+                      color: VaultColors.accent,
+                    ),
+                  ),
+                  title: const Text(
+                    'Move to Folder',
                     style: TextStyle(
-                        fontFamily: 'Inter', fontWeight: FontWeight.w600)),
-                onTap: () {
-                  Navigator.of(sheetContext).pop();
-                  _showMoveToFolder(doc);
-                },
+                      fontFamily: 'Inter',
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.of(sheetContext).pop();
+                    _showMoveToFolder(doc);
+                  },
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
   }
 
   Future<void> _deleteDocument(DocumentMeta doc) async {
@@ -766,20 +941,36 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text(
           'Delete Document',
-          style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
         ),
         content: const Text(
           'Are you sure you want to permanently delete this document?',
-          style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textSecondary,
+            fontFamily: 'Inter',
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: VaultColors.textTertiary,
+                fontFamily: 'Inter',
+              ),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete', style: TextStyle(color: VaultColors.error, fontFamily: 'Inter')),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: VaultColors.error, fontFamily: 'Inter'),
+            ),
           ),
         ],
       ),
@@ -796,7 +987,9 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
     if (doc.fileType == 'txt' || doc.isTextNote) {
       String? content;
       try {
-        content = await ref.read(documentVaultServiceProvider).getTextNote(doc.id);
+        content = await ref
+            .read(documentVaultServiceProvider)
+            .getTextNote(doc.id);
       } on SystemKeyMissingException catch (_) {
         if (!mounted) return;
         showSecureKeyLostSnackBar(context);
@@ -817,7 +1010,9 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
     } else if (doc.fileType == 'pdf') {
       File? tempFile;
       try {
-        tempFile = await ref.read(documentVaultServiceProvider).getDocumentToTempFile(doc.id);
+        tempFile = await ref
+            .read(documentVaultServiceProvider)
+            .getDocumentToTempFile(doc.id);
       } on SystemKeyMissingException catch (_) {
         if (!mounted) return;
         showSecureKeyLostSnackBar(context);
@@ -826,7 +1021,8 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
         final pdfFile = tempFile;
         await Navigator.of(context).push(
           MaterialPageRoute(
-            builder: (context) => PdfViewerScreen(file: pdfFile, title: doc.fileName),
+            builder: (context) =>
+                PdfViewerScreen(file: pdfFile, title: doc.fileName),
           ),
         );
       } else if (tempFile == null && mounted) {
@@ -839,19 +1035,31 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
         context: context,
         builder: (context) => AlertDialog(
           backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
           title: const Text(
             'Preview Not Available',
-            style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+            style: TextStyle(
+              color: VaultColors.textPrimary,
+              fontWeight: FontWeight.w600,
+              fontFamily: 'Inter',
+            ),
           ),
           content: const Text(
             'Preview not available for this file type.',
-            style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+            style: TextStyle(
+              color: VaultColors.textSecondary,
+              fontFamily: 'Inter',
+            ),
           ),
           actions: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('OK', style: TextStyle(color: VaultColors.accent)),
+              child: const Text(
+                'OK',
+                style: TextStyle(color: VaultColors.accent),
+              ),
             ),
           ],
         ),
@@ -921,205 +1129,275 @@ class DocumentVaultScreenState extends ConsumerState<DocumentVaultScreen> {
               icon: const Icon(Icons.add, color: Colors.white),
               label: const Text(
                 'Add',
-                style: TextStyle(color: Colors.white, fontFamily: 'Inter', fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontFamily: 'Inter',
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),
         ],
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: VaultColors.accent))
+          ? const Center(
+              child: CircularProgressIndicator(color: VaultColors.accent),
+            )
           : documents.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.folder_outlined,
-                        size: 80,
-                        color: VaultColors.accent.withValues(alpha: 0.2),
-                      ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'No documents yet',
-                        style: TextStyle(
-                          fontSize: 18,
-                          color: VaultColors.textTertiary,
-                          fontFamily: 'Inter',
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Tap + to add your first document',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: VaultColors.textTertiary.withValues(alpha: 0.7),
-                          fontFamily: 'Inter',
-                        ),
-                      ),
-                    ],
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.folder_outlined,
+                    size: 80,
+                    color: VaultColors.accent.withValues(alpha: 0.2),
                   ),
-                )
-              : Builder(
-                  builder: (context) {
-                    final visible = _visibleDocuments();
-                    return Column(
-                      children: [
-                        VaultSearchBar(
-                          controller: _searchController,
-                          hintText: 'Search documents by name, caption, #tag...',
-                          onQueryChanged: (v) => setState(() => _searchQuery = v),
-                          onClear: () => setState(() {
-                            _searchController.clear();
-                            _searchQuery = '';
-                          }),
-                          selectedTag: _selectedTag,
-                          onTagSelected: (t) => setState(() => _selectedTag = t),
-                          availableTags: _extractAllTags(),
-                          isPro: ref.watch(isProProvider).value ?? false,
-                          onProRequired: () => showPaywallSheet(context),
-                          trailing: PopupMenuButton<String>(
-                            icon: const Icon(Icons.sort, color: VaultColors.textSecondary),
-                            initialValue: _sortMode,
-                            onSelected: (v) => setState(() => _sortMode = v),
-                            itemBuilder: (_) => const [
-                              PopupMenuItem(value: 'date', child: Text('Newest first')),
-                              PopupMenuItem(value: 'name', child: Text('Name (A–Z)')),
-                              PopupMenuItem(value: 'size', child: Text('Largest first')),
-                              PopupMenuItem(value: 'type', child: Text('File type')),
-                            ],
+                  const SizedBox(height: 16),
+                  const Text(
+                    'No documents yet',
+                    style: TextStyle(
+                      fontSize: 18,
+                      color: VaultColors.textTertiary,
+                      fontFamily: 'Inter',
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Tap + to add your first document',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: VaultColors.textTertiary.withValues(alpha: 0.7),
+                      fontFamily: 'Inter',
+                    ),
+                  ),
+                ],
+              ),
+            )
+          : Builder(
+              builder: (context) {
+                final visible = _visibleDocuments();
+                return Column(
+                  children: [
+                    VaultSearchBar(
+                      controller: _searchController,
+                      hintText: 'Search documents by name, caption, #tag...',
+                      onQueryChanged: (v) => setState(() => _searchQuery = v),
+                      onClear: () => setState(() {
+                        _searchController.clear();
+                        _searchQuery = '';
+                      }),
+                      selectedTag: _selectedTag,
+                      onTagSelected: (t) => setState(() => _selectedTag = t),
+                      availableTags: _extractAllTags(),
+                      isPro: ref.watch(isProProvider).value ?? false,
+                      onProRequired: () => showPaywallSheet(context),
+                      trailing: PopupMenuButton<String>(
+                        icon: const Icon(
+                          Icons.sort,
+                          color: VaultColors.textSecondary,
+                        ),
+                        initialValue: _sortMode,
+                        onSelected: (v) => setState(() => _sortMode = v),
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(
+                            value: 'date',
+                            child: Text('Newest first'),
                           ),
-                        ),
-                        _buildFolderChips(),
-                        Expanded(
-                          child: visible.isEmpty
-                              ? Center(
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Icon(
-                                        Icons.search_off,
-                                        size: 80,
-                                        color: VaultColors.accent.withValues(alpha: 0.2),
-                                      ),
-                                      const SizedBox(height: 16),
-                                      const Text(
-                                        'No documents match your search',
-                                        style: TextStyle(
-                                          fontSize: 18,
-                                          color: VaultColors.textTertiary,
-                                          fontFamily: 'Inter',
-                                          fontWeight: FontWeight.w500,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                )
-                              : ListView.builder(
-                                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                                  itemCount: visible.length,
-                                  itemBuilder: (context, index) {
-                                    final doc = visible[index];
-                    final docColor = _getDocColor(doc.fileType);
-
-                    return Dismissible(
-                      key: Key(doc.id),
-                      direction: DismissDirection.endToStart,
-                      background: Container(
-                        alignment: Alignment.centerRight,
-                        padding: const EdgeInsets.only(right: 20),
-                        margin: const EdgeInsets.symmetric(vertical: 4),
-                        decoration: BoxDecoration(
-                          color: VaultColors.error,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        child: const Icon(Icons.delete_outline, color: Colors.white),
+                          PopupMenuItem(
+                            value: 'name',
+                            child: Text('Name (A–Z)'),
+                          ),
+                          PopupMenuItem(
+                            value: 'size',
+                            child: Text('Largest first'),
+                          ),
+                          PopupMenuItem(
+                            value: 'type',
+                            child: Text('File type'),
+                          ),
+                        ],
                       ),
-                      confirmDismiss: (direction) => _deleteDocument(doc).then((_) => false),
-                      onDismissed: (direction) {
-                        HapticFeedback.mediumImpact();
-                      },
-                      child: Material(
-                        color: VaultColors.surface,
-                        borderRadius: BorderRadius.circular(16),
-                        child: InkWell(
-                          borderRadius: BorderRadius.circular(16),
-                          onTap: () => _openDocument(doc),
-                          // Same hold-a-file model as photos and videos; the
-                          // sheet exposes restore without hunting the ⋮ menu.
-                          onLongPress: () => _showDocumentOptions(doc),
-                          child: Container(
-                            margin: const EdgeInsets.symmetric(vertical: 4),
-                            decoration: BoxDecoration(
-                              color: VaultColors.surface,
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.03),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
-                                ),
-                              ],
-                            ),
-                            child: ListTile(
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                              leading: Container(
-                                width: 48,
-                                height: 48,
-                                decoration: BoxDecoration(
-                                  color: docColor.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(12),
-                                ),
-                                child: Icon(_getDocIcon(doc.fileType), color: docColor),
-                              ),
-                              title: Text(
-                                doc.fileName,
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w600,
-                                  color: VaultColors.textPrimary,
-                                  fontFamily: 'Inter',
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              subtitle: Padding(
-                                padding: const EdgeInsets.only(top: 4),
-                                child: Text(
-                                  '${doc.fileType.toUpperCase()} • ${_formatSize(doc.sizeBytes)}',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: VaultColors.textSecondary,
-                                    fontFamily: 'Inter',
+                    ),
+                    _buildFolderChips(),
+                    Expanded(
+                      child: visible.isEmpty
+                          ? Center(
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.search_off,
+                                    size: 80,
+                                    color: VaultColors.accent.withValues(
+                                      alpha: 0.2,
+                                    ),
                                   ),
-                                ),
-                              ),
-                              trailing: PopupMenuButton<String>(
-                                icon: const Icon(Icons.more_vert, color: VaultColors.textTertiary, size: 20),
-                                onSelected: (v) {
-                                  if (v == 'share') _shareDocument(doc);
-                                  if (v == 'move') _showMoveToFolder(doc);
-                                  if (v == 'restore') _restoreDocument(doc);
-                                },
-                                itemBuilder: (_) => const [
-                                  PopupMenuItem(value: 'share', child: Text('Share / export')),
-                                  PopupMenuItem(value: 'restore', child: Text('Restore to device…')),
-                                  PopupMenuItem(value: 'move', child: Text('Move to folder')),
+                                  const SizedBox(height: 16),
+                                  const Text(
+                                    'No documents match your search',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      color: VaultColors.textTertiary,
+                                      fontFamily: 'Inter',
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
                                 ],
                               ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
+                            )
+                          : ListView.builder(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                              itemCount: visible.length,
+                              itemBuilder: (context, index) {
+                                final doc = visible[index];
+                                final docColor = _getDocColor(doc.fileType);
+
+                                return Dismissible(
+                                  key: Key(doc.id),
+                                  direction: DismissDirection.endToStart,
+                                  background: Container(
+                                    alignment: Alignment.centerRight,
+                                    padding: const EdgeInsets.only(right: 20),
+                                    margin: const EdgeInsets.symmetric(
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: VaultColors.error,
+                                      borderRadius: BorderRadius.circular(16),
+                                    ),
+                                    child: const Icon(
+                                      Icons.delete_outline,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                  confirmDismiss: (direction) =>
+                                      _deleteDocument(doc).then((_) => false),
+                                  onDismissed: (direction) {
+                                    HapticFeedback.mediumImpact();
                                   },
-                                ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
+                                  child: Material(
+                                    color: VaultColors.surface,
+                                    borderRadius: BorderRadius.circular(16),
+                                    child: InkWell(
+                                      borderRadius: BorderRadius.circular(16),
+                                      onTap: () => _openDocument(doc),
+                                      // Same hold-a-file model as photos and videos; the
+                                      // sheet exposes restore without hunting the ⋮ menu.
+                                      onLongPress: () =>
+                                          _showDocumentOptions(doc),
+                                      child: Container(
+                                        margin: const EdgeInsets.symmetric(
+                                          vertical: 4,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: VaultColors.surface,
+                                          borderRadius: BorderRadius.circular(
+                                            16,
+                                          ),
+                                          boxShadow: [
+                                            BoxShadow(
+                                              color: Colors.black.withValues(
+                                                alpha: 0.03,
+                                              ),
+                                              blurRadius: 8,
+                                              offset: const Offset(0, 2),
+                                            ),
+                                          ],
+                                        ),
+                                        child: ListTile(
+                                          contentPadding:
+                                              const EdgeInsets.symmetric(
+                                                horizontal: 16,
+                                                vertical: 8,
+                                              ),
+                                          leading: Container(
+                                            width: 48,
+                                            height: 48,
+                                            decoration: BoxDecoration(
+                                              color: docColor.withValues(
+                                                alpha: 0.1,
+                                              ),
+                                              borderRadius:
+                                                  BorderRadius.circular(12),
+                                            ),
+                                            child: Icon(
+                                              _getDocIcon(doc.fileType),
+                                              color: docColor,
+                                            ),
+                                          ),
+                                          title: Text(
+                                            doc.fileName,
+                                            style: const TextStyle(
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w600,
+                                              color: VaultColors.textPrimary,
+                                              fontFamily: 'Inter',
+                                            ),
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                          subtitle: Padding(
+                                            padding: const EdgeInsets.only(
+                                              top: 4,
+                                            ),
+                                            child: Text(
+                                              '${doc.fileType.toUpperCase()} • ${_formatSize(doc.sizeBytes)}',
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                color:
+                                                    VaultColors.textSecondary,
+                                                fontFamily: 'Inter',
+                                              ),
+                                            ),
+                                          ),
+                                          trailing: PopupMenuButton<String>(
+                                            icon: const Icon(
+                                              Icons.more_vert,
+                                              color: VaultColors.textTertiary,
+                                              size: 20,
+                                            ),
+                                            onSelected: (v) {
+                                              if (v == 'share')
+                                                _shareDocument(doc);
+                                              if (v == 'move')
+                                                _showMoveToFolder(doc);
+                                              if (v == 'restore')
+                                                _restoreDocument(doc);
+                                            },
+                                            itemBuilder: (_) => const [
+                                              PopupMenuItem(
+                                                value: 'share',
+                                                child: Text('Share / export'),
+                                              ),
+                                              PopupMenuItem(
+                                                value: 'restore',
+                                                child: Text(
+                                                  'Restore to device…',
+                                                ),
+                                              ),
+                                              PopupMenuItem(
+                                                value: 'move',
+                                                child: Text('Move to folder'),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                    ),
+                  ],
+                );
+              },
+            ),
     );
   }
 }
@@ -1137,7 +1415,8 @@ class DocumentEditorScreen extends ConsumerStatefulWidget {
   });
 
   @override
-  ConsumerState<DocumentEditorScreen> createState() => _DocumentEditorScreenState();
+  ConsumerState<DocumentEditorScreen> createState() =>
+      _DocumentEditorScreenState();
 }
 
 class _DocumentEditorScreenState extends ConsumerState<DocumentEditorScreen> {
@@ -1160,10 +1439,9 @@ class _DocumentEditorScreenState extends ConsumerState<DocumentEditorScreen> {
   }
 
   Future<void> _save() async {
-    await ref.read(documentVaultServiceProvider).updateTextNote(
-      widget.documentId,
-      _controller.text,
-    );
+    await ref
+        .read(documentVaultServiceProvider)
+        .updateTextNote(widget.documentId, _controller.text);
     if (mounted) {
       Navigator.of(context).pop(true);
     }
@@ -1186,7 +1464,11 @@ class _DocumentEditorScreenState extends ConsumerState<DocumentEditorScreen> {
           ),
         ),
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new, color: Color(0xFF3A2DB0), size: 20),
+          icon: const Icon(
+            Icons.arrow_back_ios_new,
+            color: Color(0xFF3A2DB0),
+            size: 20,
+          ),
           onPressed: () => Navigator.of(context).pop(),
         ),
       ),

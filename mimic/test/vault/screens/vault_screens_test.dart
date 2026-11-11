@@ -1,3 +1,4 @@
+import 'package:mimic/vault/services/pro_offer_policy.dart';
 import 'package:mimic/vault/crypto/keystore_service.dart';
 
 // test/vault/screens/vault_screens_test.dart
@@ -1290,12 +1291,9 @@ void main() {
       expect(find.text('Lock vault and return to PIN screen'), findsOneWidget);
     });
 
-    testWidgets('F27: a free user SEES the quick-entry tile with a PRO badge and no switch', (WidgetTester tester) async {
-      // Spec (vault_settings_screen.dart, F27): the tile is visible to
-      // EVERYONE — free users get a PRO badge instead of the live switch, and
-      // tapping the tile opens the paywall. (This test previously asserted the
-      // tile was HIDDEN for free users — an older spec, stale since the
-      // visible-with-badge redesign; updated 2026-10-12.)
+    testWidgets('F27: free users see no premium offers while offers are paused', (WidgetTester tester) async {
+      // Public builds hide locked features. Private staging preserves the
+      // earlier badge/offer presentation without changing entitlement enforcement.
       // A tall viewport builds the whole ListView at once so the deep row is
       // definitely in the tree, not merely off-screen.
       tester.view.physicalSize = const Size(800, 3200);
@@ -1306,6 +1304,23 @@ void main() {
       await tester.pumpAndSettle();
 
       final tile = find.text('Quick entry to the vault');
+      if (!kProOffersVisible) {
+        expect(tile, findsNothing);
+        for (final text in ['PRO', 'Unlock Pro', 'Redeem Activation Code',
+          'Decoy Vault (Ghost Album)', 'Vault Visual Theme', 'Storage Optimizer']) {
+          expect(find.text(text), findsNothing);
+        }
+        expect(find.textContaining('₱'), findsNothing);
+        expect(fakePlatform.secureStore['pro_quick_entry_enabled'], isNull);
+        await tester.tap(find.text('Auto-lock when idle'));
+        await tester.pumpAndSettle();
+        expect(find.text('5 min'), findsOneWidget);
+        expect(find.text('10 min'), findsOneWidget);
+        expect(find.text('15 min'), findsNothing);
+        expect(find.text('30 min'), findsNothing);
+        expect(find.text('Unlock Pro'), findsNothing);
+        return;
+      }
       expect(tile, findsOneWidget);
       final switchFinder = find.descendant(
         of: find.ancestor(of: tile, matching: find.byType(ListTile)),
@@ -1922,7 +1937,7 @@ void main() {
       expect(find.text('GETTING BACK IN'), findsOneWidget);
       expect(find.text('STAYING HIDDEN'), findsOneWidget);
       expect(find.text('LOCKING'), findsOneWidget);
-      expect(find.text('QUICK ENTRY (PRO)'), findsOneWidget);
+      expect(find.text('QUICK ENTRY'), kProOffersVisible ? findsOneWidget : findsNothing);
       expect(find.text('DECOYS AND LOGS'), findsOneWidget);
       expect(find.text('BACKUPS'), findsOneWidget);
       expect(find.text('IF SOMETHING IS WRONG'), findsOneWidget);

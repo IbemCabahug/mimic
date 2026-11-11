@@ -1,4 +1,5 @@
 // mimic/lib/vault/screens/vault_settings_screen.dart
+import '../services/pro_offer_policy.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,7 +14,8 @@ import '../../core/theme/app_theme.dart';
 import '../../core/providers/biometric_providers.dart';
 import '../../core/services/biometric_service.dart';
 import '../../core/services/biometric_unlock_store.dart';
-import '../../core/providers/provider_registration.dart' show vaultConcealServiceProvider;
+import '../../core/providers/provider_registration.dart'
+    show vaultConcealServiceProvider;
 import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
 import '../security/vault_conceal_service.dart';
@@ -38,7 +40,8 @@ class VaultSettingsScreen extends ConsumerStatefulWidget {
   const VaultSettingsScreen({super.key});
 
   @override
-  ConsumerState<VaultSettingsScreen> createState() => _VaultSettingsScreenState();
+  ConsumerState<VaultSettingsScreen> createState() =>
+      _VaultSettingsScreenState();
 }
 
 class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
@@ -73,7 +76,9 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   }
 
   Future<void> _checkDecoyPin() async {
-    final enabled = await ref.read(decoyVaultServiceProvider).isDecoyPinEnabled();
+    final enabled = await ref
+        .read(decoyVaultServiceProvider)
+        .isDecoyPinEnabled();
     if (mounted) {
       setState(() => _hasDecoyPin = enabled);
     }
@@ -136,10 +141,14 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: const Text('Camera permission is required to capture intruder photos.'),
+              content: const Text(
+                'Camera permission is required to capture intruder photos.',
+              ),
               backgroundColor: VaultColors.error,
               behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
           );
         }
@@ -174,13 +183,15 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     }
     if (minutes != null) {
       final isPro = await ref.read(proStatusServiceProvider).isPro();
-      final ceiling =
-          isPro ? AutoLock.absoluteIdleCap : AutoLock.freeIdleCeiling;
+      final ceiling = isPro
+          ? AutoLock.absoluteIdleCap
+          : AutoLock.freeIdleCeiling;
       final wanted = Duration(minutes: minutes);
-      minutes = (wanted < AutoLock.defaultIdleTimeout
-              ? AutoLock.defaultIdleTimeout
-              : (wanted > ceiling ? ceiling : wanted))
-          .inMinutes;
+      minutes =
+          (wanted < AutoLock.defaultIdleTimeout
+                  ? AutoLock.defaultIdleTimeout
+                  : (wanted > ceiling ? ceiling : wanted))
+              .inMinutes;
     }
     if (mounted) {
       setState(() => _idleTimeoutMinutes = minutes);
@@ -287,7 +298,8 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                     title: Text('$minutes min'),
                     value: minutes,
                   ),
-                for (final minutes in proChoices)
+                for (final minutes
+                    in showProFeature(isPro) ? proChoices : <int>[])
                   RadioListTile<int>(
                     title: Row(
                       children: [
@@ -295,7 +307,9 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                         const SizedBox(width: 8),
                         Container(
                           padding: const EdgeInsets.symmetric(
-                              horizontal: 6, vertical: 2),
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
                           decoration: BoxDecoration(
                             color: VaultColors.accent.withValues(alpha: 0.15),
                             borderRadius: BorderRadius.circular(4),
@@ -322,7 +336,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           ),
         ),
         actions: [
-          if (!isPro)
+          if (!isPro && kProOffersVisible)
             TextButton(
               onPressed: () {
                 Navigator.of(dialogContext).pop();
@@ -357,9 +371,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
     // F7: the live timer follows the persisted choice. loadIdleTimeout
     // re-reads storage and clamps to the caller's Pro ceiling, so a stale
     // Pro value on a lapsed install degrades to the free ceiling here too.
-    await AutoLock().loadIdleTimeout(
-      isPro: await proService.isPro(),
-    );
+    await AutoLock().loadIdleTimeout(isPro: await proService.isPro());
   }
 
   Future<void> _checkRecoveryBlob() async {
@@ -393,7 +405,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
   Future<void> _onBiometricSelection(BiometricLayer? selection) async {
     final biometricService = ref.read(biometricServiceProvider);
     final unlockStore = ref.read(biometricUnlockStoreProvider);
-    
+
     if (selection == BiometricLayer.vault) {
       final pin = await _promptForVaultPin();
       if (pin != null && pin.isNotEmpty) {
@@ -414,10 +426,14 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: const Text('Fingerprint changed - unlock with your PIN to re-enable'),
+                content: const Text(
+                  'Fingerprint changed - unlock with your PIN to re-enable',
+                ),
                 backgroundColor: VaultColors.error,
                 behavior: SnackBarBehavior.floating,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             );
             ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
@@ -427,10 +443,14 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: const Text('Biometric unlock is unavailable on this device'),
+                content: const Text(
+                  'Biometric unlock is unavailable on this device',
+                ),
                 backgroundColor: VaultColors.error,
                 behavior: SnackBarBehavior.floating,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             );
             ref.invalidate(biometricEnabledProvider(BiometricLayer.vault));
@@ -480,7 +500,9 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
         context: context,
         builder: (dialogContext) => AlertDialog(
           backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: const Text(
             'Hide app icon?',
             style: TextStyle(fontWeight: FontWeight.bold, fontFamily: 'Inter'),
@@ -492,11 +514,23 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(false),
-              child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(
+                  color: VaultColors.textTertiary,
+                  fontFamily: 'Inter',
+                ),
+              ),
             ),
             TextButton(
               onPressed: () => Navigator.of(dialogContext).pop(true),
-              child: const Text('Hide', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+              child: const Text(
+                'Hide',
+                style: TextStyle(
+                  color: VaultColors.accent,
+                  fontFamily: 'Inter',
+                ),
+              ),
             ),
           ],
         ),
@@ -533,7 +567,9 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
           backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: const Text(
             'Change PIN',
             style: TextStyle(
@@ -554,113 +590,146 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                 const SizedBox(height: 12),
                 Text(
                   error!,
-                  style: const TextStyle(color: VaultColors.error, fontSize: 13, fontFamily: 'Inter'),
+                  style: const TextStyle(
+                    color: VaultColors.error,
+                    fontSize: 13,
+                    fontFamily: 'Inter',
+                  ),
                 ),
               ],
             ],
           ),
           actions: [
             TextButton(
-              onPressed: isProcessing ? null : () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+              onPressed: isProcessing
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(
+                  color: VaultColors.textTertiary,
+                  fontFamily: 'Inter',
+                ),
+              ),
             ),
             TextButton(
-              onPressed: isProcessing ? null : () async {
-                final currentPin = currentPinController.text;
-                final newPin = newPinController.text;
-                final confirmPin = confirmPinController.text;
+              onPressed: isProcessing
+                  ? null
+                  : () async {
+                      final currentPin = currentPinController.text;
+                      final newPin = newPinController.text;
+                      final confirmPin = confirmPinController.text;
 
-                if (currentPin.isEmpty) {
-                  setDialogState(() => error = 'Please enter your current PIN');
-                  return;
-                }
-                if (newPin.length < 4) {
-                  setDialogState(() => error = 'New PIN must be at least 4 digits');
-                  return;
-                }
-                if (newPin != confirmPin) {
-                  setDialogState(() => error = 'PINs do not match');
-                  return;
-                }
-                if (newPin == currentPin) {
-                  setDialogState(() => error = 'New PIN must be different from current PIN');
-                  return;
-                }
+                      if (currentPin.isEmpty) {
+                        setDialogState(
+                          () => error = 'Please enter your current PIN',
+                        );
+                        return;
+                      }
+                      if (newPin.length < 4) {
+                        setDialogState(
+                          () => error = 'New PIN must be at least 4 digits',
+                        );
+                        return;
+                      }
+                      if (newPin != confirmPin) {
+                        setDialogState(() => error = 'PINs do not match');
+                        return;
+                      }
+                      if (newPin == currentPin) {
+                        setDialogState(
+                          () => error =
+                              'New PIN must be different from current PIN',
+                        );
+                        return;
+                      }
 
-                setDialogState(() {
-                  isProcessing = true;
-                  error = null;
-                });
-
-                try {
-                  final crypto = ref.read(vaultCryptoProvider);
-                  final isCurrentValid = await crypto.verifyPin(currentPin);
-                  if (!isCurrentValid) {
-                    if (dialogContext.mounted) {
                       setDialogState(() {
-                        isProcessing = false;
-                        error = 'Incorrect current PIN';
+                        isProcessing = true;
+                        error = null;
                       });
-                    }
-                    return;
-                  }
 
-                  // AUDIT-05: Prevent Master PIN from colliding with active Duress PIN or Decoy PIN
-                  final duressService = ref.read(duressServiceProvider);
-                  final isDuressPin = await duressService.isFakePin(newPin);
-                  if (isDuressPin) {
-                    if (dialogContext.mounted) {
-                      setDialogState(() {
-                        isProcessing = false;
-                        error = 'This PIN is unavailable. Please choose a different PIN.';
-                      });
-                    }
-                    return;
-                  }
+                      try {
+                        final crypto = ref.read(vaultCryptoProvider);
+                        final isCurrentValid = await crypto.verifyPin(
+                          currentPin,
+                        );
+                        if (!isCurrentValid) {
+                          if (dialogContext.mounted) {
+                            setDialogState(() {
+                              isProcessing = false;
+                              error = 'Incorrect current PIN';
+                            });
+                          }
+                          return;
+                        }
 
-                  final isDecoyPin = await ref.read(decoyVaultServiceProvider).hasStoredDecoyPinMatch(newPin);
-                  if (isDecoyPin) {
-                    if (dialogContext.mounted) {
-                      setDialogState(() {
-                        isProcessing = false;
-                        error = 'This PIN is unavailable. Please choose a different PIN.';
-                      });
-                    }
-                    return;
-                  }
+                        // AUDIT-05: Prevent Master PIN from colliding with active Duress PIN or Decoy PIN
+                        final duressService = ref.read(duressServiceProvider);
+                        final isDuressPin = await duressService.isFakePin(
+                          newPin,
+                        );
+                        if (isDuressPin) {
+                          if (dialogContext.mounted) {
+                            setDialogState(() {
+                              isProcessing = false;
+                              error =
+                                  'This PIN is unavailable. Please choose a different PIN.';
+                            });
+                          }
+                          return;
+                        }
 
-                  // Preserve the data key (DEK): changePin re-wraps the SAME key under the new PIN.
-                  // NEVER delete the salt/hash or call initialize() here — that creates a new key
-                  // and permanently orphans all encrypted photos, videos, and documents.
-                  await crypto.changePin(newPin);
+                        final isDecoyPin = await ref
+                            .read(decoyVaultServiceProvider)
+                            .hasStoredDecoyPinMatch(newPin);
+                        if (isDecoyPin) {
+                          if (dialogContext.mounted) {
+                            setDialogState(() {
+                              isProcessing = false;
+                              error =
+                                  'This PIN is unavailable. Please choose a different PIN.';
+                            });
+                          }
+                          return;
+                        }
 
-                  // AUDIT-04: Invalidate biometric secret on PIN change
-                  try {
-                    await ref.read(biometricUnlockStoreProvider).clearBioSecret();
-                  } catch (_) {}
+                        // Preserve the data key (DEK): changePin re-wraps the SAME key under the new PIN.
+                        // NEVER delete the salt/hash or call initialize() here — that creates a new key
+                        // and permanently orphans all encrypted photos, videos, and documents.
+                        await crypto.changePin(newPin);
 
-                  if (dialogContext.mounted) {
-                    Navigator.of(dialogContext).pop();
-                  }
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: const Text('PIN changed successfully'),
-                        backgroundColor: VaultColors.success,
-                        behavior: SnackBarBehavior.floating,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      ),
-                    );
-                  }
-                } catch (e) {
-                  if (dialogContext.mounted) {
-                    setDialogState(() {
-                      isProcessing = false;
-                      error = 'Failed to change PIN: $e';
-                    });
-                  }
-                }
-              },
+                        // AUDIT-04: Invalidate biometric secret on PIN change
+                        try {
+                          await ref
+                              .read(biometricUnlockStoreProvider)
+                              .clearBioSecret();
+                        } catch (_) {}
+
+                        if (dialogContext.mounted) {
+                          Navigator.of(dialogContext).pop();
+                        }
+                        if (context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: const Text('PIN changed successfully'),
+                              backgroundColor: VaultColors.success,
+                              behavior: SnackBarBehavior.floating,
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                            ),
+                          );
+                        }
+                      } catch (e) {
+                        if (dialogContext.mounted) {
+                          setDialogState(() {
+                            isProcessing = false;
+                            error = 'Failed to change PIN: $e';
+                          });
+                        }
+                      }
+                    },
               child: isProcessing
                   ? const SizedBox(
                       width: 16,
@@ -672,7 +741,11 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                     )
                   : const Text(
                       'Change',
-                      style: TextStyle(color: VaultColors.accent, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+                      style: TextStyle(
+                        color: VaultColors.accent,
+                        fontWeight: FontWeight.w600,
+                        fontFamily: 'Inter',
+                      ),
                     ),
             ),
           ],
@@ -693,7 +766,9 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
           backgroundColor: Colors.white,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
           title: const Text(
             'Confirm Vault PIN',
             style: TextStyle(
@@ -710,15 +785,27 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                 const SizedBox(height: 12),
                 Text(
                   error!,
-                  style: const TextStyle(color: VaultColors.error, fontSize: 13, fontFamily: 'Inter'),
+                  style: const TextStyle(
+                    color: VaultColors.error,
+                    fontSize: 13,
+                    fontFamily: 'Inter',
+                  ),
                 ),
               ],
             ],
           ),
           actions: [
             TextButton(
-              onPressed: isProcessing ? null : () => Navigator.of(dialogContext).pop(),
-              child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+              onPressed: isProcessing
+                  ? null
+                  : () => Navigator.of(dialogContext).pop(),
+              child: const Text(
+                'Cancel',
+                style: TextStyle(
+                  color: VaultColors.textTertiary,
+                  fontFamily: 'Inter',
+                ),
+              ),
             ),
             TextButton(
               onPressed: isProcessing
@@ -756,10 +843,18 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                       height: 18,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(VaultColors.accent),
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          VaultColors.accent,
+                        ),
                       ),
                     )
-                  : const Text('Confirm', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+                  : const Text(
+                      'Confirm',
+                      style: TextStyle(
+                        color: VaultColors.accent,
+                        fontFamily: 'Inter',
+                      ),
+                    ),
             ),
           ],
         ),
@@ -775,10 +870,16 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
       obscureText: true,
       keyboardType: TextInputType.number,
       maxLength: 8,
-      style: const TextStyle(color: VaultColors.textPrimary, fontFamily: 'Inter'),
+      style: const TextStyle(
+        color: VaultColors.textPrimary,
+        fontFamily: 'Inter',
+      ),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: const TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter'),
+        labelStyle: const TextStyle(
+          color: VaultColors.textTertiary,
+          fontFamily: 'Inter',
+        ),
         counterText: '',
         filled: true,
         fillColor: VaultColors.surface,
@@ -814,12 +915,21 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
         ),
         content: const Text(
           'This will permanently delete all encrypted files, notes, audio recordings, and break-in logs. This action cannot be undone.',
-          style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textSecondary,
+            fontFamily: 'Inter',
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: VaultColors.textTertiary,
+                fontFamily: 'Inter',
+              ),
+            ),
           ),
           TextButton(
             onPressed: () async {
@@ -847,14 +957,20 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                     content: const Text('All vault data cleared'),
                     backgroundColor: VaultColors.error,
                     behavior: SnackBarBehavior.floating,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 );
               }
             },
             child: const Text(
               'Delete Everything',
-              style: TextStyle(color: VaultColors.error, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+              style: TextStyle(
+                color: VaultColors.error,
+                fontWeight: FontWeight.w600,
+                fontFamily: 'Inter',
+              ),
             ),
           ),
         ],
@@ -879,9 +995,12 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
         // kDebugMode alone (not kBillingSimulationEnabled) so a release or
         // profile APK can never surface it, even if the simulation flag is
         // accidentally re-enabled. See pro_status_service.dart (P0-1 teardown).
-        if (kDebugMode)
+        if (kDebugMode && kProOffersVisible)
           IconButton(
-            icon: const Icon(Icons.build_circle_outlined, color: VaultColors.accent),
+            icon: const Icon(
+              Icons.build_circle_outlined,
+              color: VaultColors.accent,
+            ),
             tooltip: 'Billing Simulation Suite',
             onPressed: () => _showDevSimulationSheet(context),
           ),
@@ -890,13 +1009,14 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
         children: [
           // Mimic Pro Supporter / Upgrade Card
-          isPro ? _buildProSupporterBanner() : _buildProUpgradeCard(),
+          if (kProOffersVisible)
+            isPro ? _buildProSupporterBanner() : _buildProUpgradeCard(),
 
-          if (!isPro)
+          if (!isPro && kProOffersVisible)
             _buildSettingsTile(
               icon: Icons.vpn_key_rounded,
               title: 'Redeem Activation Code',
-              subtitle: 'Unlock Pro with a code from GCash or beta testing',
+              subtitle: 'Activate an existing license',
               iconColor: VaultColors.accent,
               onTap: () => showRedeemLicenseSheet(context),
             ),
@@ -926,7 +1046,11 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
               Navigator.of(context).pushNamed('/vault-recovery-phrase');
             },
             trailing: _hasRecoveryBlob
-                ? const Icon(Icons.check_circle, color: VaultColors.success, size: 20)
+                ? const Icon(
+                    Icons.check_circle,
+                    color: VaultColors.success,
+                    size: 20,
+                  )
                 : null,
           ),
           _buildSettingsTile(
@@ -950,7 +1074,11 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
               );
             },
             trailing: _hasGesture
-                ? const Icon(Icons.check_circle, color: VaultColors.success, size: 20)
+                ? const Icon(
+                    Icons.check_circle,
+                    color: VaultColors.success,
+                    size: 20,
+                  )
                 : null,
           ),
           _buildSettingsTile(
@@ -963,26 +1091,46 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Consumer(
               builder: (context, ref, child) {
-                final isVault = ref.watch(biometricEnabledProvider(BiometricLayer.vault)).valueOrNull ?? false;
-                final isAdmin = ref.watch(biometricEnabledProvider(BiometricLayer.admin)).valueOrNull ?? false;
-                final selected = isVault ? 'vault' : (isAdmin ? 'admin' : 'off');
-                
+                final isVault =
+                    ref
+                        .watch(biometricEnabledProvider(BiometricLayer.vault))
+                        .valueOrNull ??
+                    false;
+                final isAdmin =
+                    ref
+                        .watch(biometricEnabledProvider(BiometricLayer.admin))
+                        .valueOrNull ??
+                    false;
+                final selected = isVault
+                    ? 'vault'
+                    : (isAdmin ? 'admin' : 'off');
+
                 if (_isLoadingBiometric) {
                   return const Padding(
                     padding: EdgeInsets.all(16.0),
                     child: Center(
                       child: SizedBox(
-                        width: 24, height: 24,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: VaultColors.accent)
-                      )
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: VaultColors.accent,
+                        ),
+                      ),
                     ),
                   );
                 }
-                
+
                 return Column(
                   children: [
                     RadioListTile<String>(
-                      title: const Text('Off', style: TextStyle(color: VaultColors.textPrimary, fontSize: 14)),
+                      title: const Text(
+                        'Off',
+                        style: TextStyle(
+                          color: VaultColors.textPrimary,
+                          fontSize: 14,
+                        ),
+                      ),
                       value: 'off',
                       groupValue: selected,
                       onChanged: (val) => _onBiometricSelection(null),
@@ -991,19 +1139,33 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                       dense: true,
                     ),
                     RadioListTile<String>(
-                      title: const Text('Vault (shortcut)', style: TextStyle(color: VaultColors.textPrimary, fontSize: 14)),
+                      title: const Text(
+                        'Vault (shortcut)',
+                        style: TextStyle(
+                          color: VaultColors.textPrimary,
+                          fontSize: 14,
+                        ),
+                      ),
                       value: 'vault',
                       groupValue: selected,
-                      onChanged: (val) => _onBiometricSelection(BiometricLayer.vault),
+                      onChanged: (val) =>
+                          _onBiometricSelection(BiometricLayer.vault),
                       activeColor: VaultColors.accent,
                       contentPadding: EdgeInsets.zero,
                       dense: true,
                     ),
                     RadioListTile<String>(
-                      title: const Text('Admin panel (decoy)', style: TextStyle(color: VaultColors.textPrimary, fontSize: 14)),
+                      title: const Text(
+                        'Admin panel (decoy)',
+                        style: TextStyle(
+                          color: VaultColors.textPrimary,
+                          fontSize: 14,
+                        ),
+                      ),
                       value: 'admin',
                       groupValue: selected,
-                      onChanged: (val) => _onBiometricSelection(BiometricLayer.admin),
+                      onChanged: (val) =>
+                          _onBiometricSelection(BiometricLayer.admin),
                       activeColor: VaultColors.accent,
                       contentPadding: EdgeInsets.zero,
                       dense: true,
@@ -1020,7 +1182,11 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                 ? 'Duress PIN active — opens admin panel instead of your vault'
                 : 'Fake PIN that opens the admin panel instead of your vault',
             trailing: _hasDuressPin
-                ? const Icon(Icons.check_circle, color: VaultColors.success, size: 20)
+                ? const Icon(
+                    Icons.check_circle,
+                    color: VaultColors.success,
+                    size: 20,
+                  )
                 : null,
             onTap: () {
               Navigator.of(context)
@@ -1028,29 +1194,34 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                   .then((_) => _checkDuressPin());
             },
           ),
-          _buildSettingsTile(
-            icon: Icons.hide_source_outlined,
-            title: 'Decoy Vault (Ghost Album)',
-            subtitle: !isPro
-                ? 'Fake PIN that opens a harmless decoy vault for plausible deniability'
-                : _hasDecoyPin
-                    ? 'Decoy PIN active — opens harmless ghost vault'
-                    : 'Fake PIN that opens a harmless decoy vault for plausible deniability',
-            trailing: !isPro
-                ? _buildProBadge()
-                : _hasDecoyPin
-                    ? const Icon(Icons.check_circle, color: VaultColors.success, size: 20)
-                    : null,
-            onTap: () {
-              if (!isPro) {
-                showPaywallSheet(context);
-                return;
-              }
-              Navigator.of(context)
-                  .pushNamed('/vault-set-decoy-pin')
-                  .then((_) => _checkDecoyPin());
-            },
-          ),
+          if (showProFeature(isPro))
+            _buildSettingsTile(
+              icon: Icons.hide_source_outlined,
+              title: 'Decoy Vault (Ghost Album)',
+              subtitle: !isPro
+                  ? 'Fake PIN that opens a harmless decoy vault for plausible deniability'
+                  : _hasDecoyPin
+                  ? 'Decoy PIN active — opens harmless ghost vault'
+                  : 'Fake PIN that opens a harmless decoy vault for plausible deniability',
+              trailing: !isPro
+                  ? _buildProBadge()
+                  : _hasDecoyPin
+                  ? const Icon(
+                      Icons.check_circle,
+                      color: VaultColors.success,
+                      size: 20,
+                    )
+                  : null,
+              onTap: () {
+                if (!isPro) {
+                  showPaywallSheet(context);
+                  return;
+                }
+                Navigator.of(context)
+                    .pushNamed('/vault-set-decoy-pin')
+                    .then((_) => _checkDecoyPin());
+              },
+            ),
           _buildSettingsTile(
             icon: Icons.vibration,
             title: 'Shake to Hide',
@@ -1080,27 +1251,26 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           // direction is never gated). The subtitle carries the honest
           // warning the spec requires: what the shortcut skips, and the
           // coercion note.
-          _buildSettingsTile(
-            icon: Icons.bolt_outlined,
-            title: 'Quick entry to the vault',
-            subtitle: isPro
-                ? '${_quickEntrySubtitle()}: long-press the MIMIC '
-                    'title on the game home to skip the tap gesture. Your '
-                    'PIN, biometrics, lockout and break-in log are unchanged, '
-                    'and anyone holding your unlocked phone can reach this '
-                    'screen and turn it on.'
-                : 'Long-press the MIMIC title on the game home to skip the tap gesture',
-            trailing: isPro
-                ? Switch(
-                    value: _quickEntryEnabled ?? false,
-                    onChanged: _onQuickEntryToggle,
-                    activeThumbColor: VaultColors.accent,
-                  )
-                : _buildProBadge(),
-            onTap: isPro
-                ? () {}
-                : () => showPaywallSheet(context),
-          ),
+          if (showProFeature(isPro))
+            _buildSettingsTile(
+              icon: Icons.bolt_outlined,
+              title: 'Quick entry to the vault',
+              subtitle: isPro
+                  ? '${_quickEntrySubtitle()}: long-press the MIMIC '
+                        'title on the game home to skip the tap gesture. Your '
+                        'PIN, biometrics, lockout and break-in log are unchanged, '
+                        'and anyone holding your unlocked phone can reach this '
+                        'screen and turn it on.'
+                  : 'Long-press the MIMIC title on the game home to skip the tap gesture',
+              trailing: isPro
+                  ? Switch(
+                      value: _quickEntryEnabled ?? false,
+                      onChanged: _onQuickEntryToggle,
+                      activeThumbColor: VaultColors.accent,
+                    )
+                  : _buildProBadge(),
+              onTap: isPro ? () {} : () => showPaywallSheet(context),
+            ),
           // Shake Sensitivity selector — only active when shake is enabled
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -1138,7 +1308,11 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                       : null,
                   style: ButtonStyle(
                     textStyle: WidgetStatePropertyAll(
-                      const TextStyle(fontSize: 13, fontFamily: 'Inter', fontWeight: FontWeight.w600),
+                      const TextStyle(
+                        fontSize: 13,
+                        fontFamily: 'Inter',
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
                   ),
                 ),
@@ -1160,18 +1334,21 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           _buildSettingsTile(
             icon: Icons.visibility_off,
             title: 'Stealth Mode',
-            subtitle: 'Hides all vault hints across the game. Secret unlock patterns still work.',
+            subtitle:
+                'Hides all vault hints across the game. Secret unlock patterns still work.',
             onTap: null,
             trailing: Switch(
               value: stealth,
-              onChanged: (value) => ref.read(stealthModeProvider.notifier).setStealthMode(value),
+              onChanged: (value) =>
+                  ref.read(stealthModeProvider.notifier).setStealthMode(value),
               activeThumbColor: VaultColors.accent,
             ),
           ),
           _buildSettingsTile(
             icon: Icons.visibility_off,
             title: 'Hide App Icon',
-            subtitle: 'Removes Mimic from the app drawer. Reopen via Android Settings > Apps > Mimic > Open.',
+            subtitle:
+                'Removes Mimic from the app drawer. Reopen via Android Settings > Apps > Mimic > Open.',
             onTap: null,
             trailing: Switch(
               value: !iconVisible,
@@ -1238,25 +1415,29 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           const SizedBox(height: 24),
 
           // Appearance & Storage Section
-          _buildSectionHeader('Appearance & Storage'),
-          _buildSettingsTile(
-            icon: Icons.palette_outlined,
-            title: 'Vault Visual Theme',
-            subtitle: 'Stealth and OLED color palettes (${ref.watch(vaultThemeProvider).name})',
-            trailing: isPro ? null : _buildProBadge(),
-            onTap: () {
-              Navigator.of(context).pushNamed('/vault-theme-selector');
-            },
-          ),
-          _buildSettingsTile(
-            icon: Icons.cleaning_services_outlined,
-            title: 'Storage Optimizer',
-            subtitle: 'Find duplicate photos and videos over 20 MB',
-            trailing: isPro ? null : _buildProBadge(),
-            onTap: () {
-              Navigator.of(context).pushNamed('/vault-storage-optimizer');
-            },
-          ),
+          if (showProFeature(isPro))
+            _buildSectionHeader('Appearance & Storage'),
+          if (showProFeature(isPro))
+            _buildSettingsTile(
+              icon: Icons.palette_outlined,
+              title: 'Vault Visual Theme',
+              subtitle:
+                  'Stealth and OLED color palettes (${ref.watch(vaultThemeProvider).name})',
+              trailing: isPro ? null : _buildProBadge(),
+              onTap: () {
+                Navigator.of(context).pushNamed('/vault-theme-selector');
+              },
+            ),
+          if (showProFeature(isPro))
+            _buildSettingsTile(
+              icon: Icons.cleaning_services_outlined,
+              title: 'Storage Optimizer',
+              subtitle: 'Find duplicate photos and videos over 20 MB',
+              trailing: isPro ? null : _buildProBadge(),
+              onTap: () {
+                Navigator.of(context).pushNamed('/vault-storage-optimizer');
+              },
+            ),
 
           const SizedBox(height: 24),
 
@@ -1288,7 +1469,7 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           // "Toggle Local Pro Entitlement" that calls grantPro() — can NEVER
           // render in a release or profile APK, regardless of the simulation
           // flag. This closes the free-Pro bypass in distributed builds.
-          if (kDebugMode) ...[
+          if (kDebugMode && kProOffersVisible) ...[
             const SizedBox(height: 24),
             _buildSectionHeader('Developer & Billing Simulation'),
             ..._buildDevSimulationTiles(context),
@@ -1342,7 +1523,10 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                       ),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.close, color: VaultColors.textSecondary),
+                      icon: const Icon(
+                        Icons.close,
+                        color: VaultColors.textSecondary,
+                      ),
                       onPressed: () => Navigator.of(sheetContext).pop(),
                     ),
                   ],
@@ -1410,12 +1594,15 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
                 content: Text(
-                    wasPro ? 'Pro REVOKED locally' : 'Pro GRANTED locally'),
-                backgroundColor:
-                    wasPro ? VaultColors.error : VaultColors.success,
+                  wasPro ? 'Pro REVOKED locally' : 'Pro GRANTED locally',
+                ),
+                backgroundColor: wasPro
+                    ? VaultColors.error
+                    : VaultColors.success,
                 behavior: SnackBarBehavior.floating,
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             );
           }
@@ -1440,15 +1627,18 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text(!hasAccountPro
-                        ? 'Simulated Play Account now OWNS Pro'
-                        : 'Simulated Play Account RESET to empty'),
+                    content: Text(
+                      !hasAccountPro
+                          ? 'Simulated Play Account now OWNS Pro'
+                          : 'Simulated Play Account RESET to empty',
+                    ),
                     backgroundColor: !hasAccountPro
                         ? VaultColors.success
                         : VaultColors.error,
                     behavior: SnackBarBehavior.floating,
                     shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12)),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
                   ),
                 );
               }
@@ -1473,12 +1663,15 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text(SimulatedBillingStore.simulateOffline
-                    ? 'Billing simulation set to OFFLINE (Orange banner active)'
-                    : 'Billing simulation set to ONLINE (Pricing active)'),
+                content: Text(
+                  SimulatedBillingStore.simulateOffline
+                      ? 'Billing simulation set to OFFLINE (Orange banner active)'
+                      : 'Billing simulation set to ONLINE (Pricing active)',
+                ),
                 behavior: SnackBarBehavior.floating,
                 shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12)),
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
             );
           }
@@ -1503,13 +1696,24 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
             context: context,
             builder: (ctx) => AlertDialog(
               backgroundColor: VaultColors.surface,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              title: const Text('Generated License Key', style: TextStyle(color: VaultColors.textPrimary, fontSize: 16)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+              ),
+              title: const Text(
+                'Generated License Key',
+                style: TextStyle(color: VaultColors.textPrimary, fontSize: 16),
+              ),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Valid HMAC-SHA256 lifetime key:', style: TextStyle(color: VaultColors.textSecondary, fontSize: 13)),
+                  const Text(
+                    'Valid HMAC-SHA256 lifetime key:',
+                    style: TextStyle(
+                      color: VaultColors.textSecondary,
+                      fontSize: 13,
+                    ),
+                  ),
                   const SizedBox(height: 12),
                   Container(
                     padding: const EdgeInsets.all(12),
@@ -1549,13 +1753,22 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                       ref.invalidate(isProProvider);
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Key auto-redeemed! Mimic Pro is active.')),
+                          const SnackBar(
+                            content: Text(
+                              'Key auto-redeemed! Mimic Pro is active.',
+                            ),
+                          ),
                         );
                       }
                     }
                   },
-                  style: ElevatedButton.styleFrom(backgroundColor: VaultColors.accent),
-                  child: const Text('Auto-Redeem Now', style: TextStyle(color: Colors.white)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: VaultColors.accent,
+                  ),
+                  child: const Text(
+                    'Auto-Redeem Now',
+                    style: TextStyle(color: Colors.white),
+                  ),
                 ),
               ],
             ),
@@ -1605,7 +1818,10 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
       child: Material(
         color: Colors.transparent,
         child: ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          contentPadding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 4,
+          ),
           leading: Container(
             width: 44,
             height: 44,
@@ -1632,7 +1848,13 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
               fontFamily: 'Inter',
             ),
           ),
-          trailing: trailing ?? const Icon(Icons.chevron_right, color: VaultColors.textTertiary, size: 20),
+          trailing:
+              trailing ??
+              const Icon(
+                Icons.chevron_right,
+                color: VaultColors.textTertiary,
+                size: 20,
+              ),
           onTap: onTap,
         ),
       ),
@@ -1691,7 +1913,11 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                 ],
               ),
             ),
-            const Icon(Icons.chevron_right, size: 20, color: VaultColors.textSecondary),
+            const Icon(
+              Icons.chevron_right,
+              size: 20,
+              color: VaultColors.textSecondary,
+            ),
           ],
         ),
       ),
@@ -1753,8 +1979,11 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
                 ],
               ),
             ),
-            const Icon(Icons.arrow_forward_ios,
-                size: 14, color: VaultColors.accent),
+            const Icon(
+              Icons.arrow_forward_ios,
+              size: 14,
+              color: VaultColors.accent,
+            ),
           ],
         ),
       ),

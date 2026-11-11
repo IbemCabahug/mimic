@@ -10,6 +10,8 @@
 // never the horror theme: this screen lives inside the vault, where the
 // game is the decoy and everything looks like an ordinary utility app.
 
+import '../services/pro_status_service.dart';
+import '../services/pro_offer_policy.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -39,8 +41,9 @@ class _VaultManualScreenState extends ConsumerState<VaultManualScreen> {
 
   Future<void> _decideFirstRun() async {
     try {
-      final seen =
-          await ref.read(onboardingServiceProvider).isVaultManualSeen();
+      final seen = await ref
+          .read(onboardingServiceProvider)
+          .isVaultManualSeen();
       if (mounted) {
         setState(() {
           _firstRun = !seen;
@@ -73,7 +76,10 @@ class _VaultManualScreenState extends ConsumerState<VaultManualScreen> {
   /// errors so an exit can never be blocked by a write.
   void _markSeenQuietly() {
     unawaited(
-      ref.read(onboardingServiceProvider).markVaultManualSeen().catchError((_) {}),
+      ref
+          .read(onboardingServiceProvider)
+          .markVaultManualSeen()
+          .catchError((_) {}),
     );
   }
 
@@ -99,7 +105,10 @@ class _VaultManualScreenState extends ConsumerState<VaultManualScreen> {
             if (showFirstRun) const _FirstRunBanner(),
             Expanded(
               child: ListView(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 8,
+                ),
                 children: [
                   const _ManualSection(
                     icon: Icons.help_outline,
@@ -152,25 +161,28 @@ class _VaultManualScreenState extends ConsumerState<VaultManualScreen> {
                           'before locking itself after inactivity. Locking wipes '
                           'the key from memory — the files stay encrypted, and '
                           'leaving the app locks it too.',
-                      'The shorter idle windows are free; the longer ones are Pro. '
+                      'Choose an available idle window in Settings. '
                           'Whatever you pick, the platform backstop closes the vault '
                           'eventually, so it never stays open forever.',
                     ],
                   ),
-                  const _ManualSection(
-                    icon: Icons.touch_app_outlined,
-                    title: 'QUICK ENTRY (PRO)',
-                    lines: [
-                      'Off by default. Turn on Settings > Quick entry to skip the tap '
-                          'sequence: from then on, a long-press on the MIMIC title on '
-                          'the game home screen goes straight to the PIN screen.',
-                      'The PIN is still required. Nothing is skipped except the '
-                          'sequence itself, so a stranger who long-presses the logo '
-                          'sees nothing at all unless the PIN follows.',
-                      'Turn it off any time; the long-press goes back to being an '
-                          'ordinary, dead press on the title.',
-                    ],
-                  ),
+                  if (showProFeature(
+                    ref.watch(isProProvider).valueOrNull ?? false,
+                  ))
+                    const _ManualSection(
+                      icon: Icons.touch_app_outlined,
+                      title: 'QUICK ENTRY',
+                      lines: [
+                        'Off by default. Turn on Settings > Quick entry to skip the tap '
+                            'sequence: from then on, a long-press on the MIMIC title on '
+                            'the game home screen goes straight to the PIN screen.',
+                        'The PIN is still required. Nothing is skipped except the '
+                            'sequence itself, so a stranger who long-presses the logo '
+                            'sees nothing at all unless the PIN follows.',
+                        'Turn it off any time; the long-press goes back to being an '
+                            'ordinary, dead press on the title.',
+                      ],
+                    ),
                   const _ManualSection(
                     icon: Icons.theater_comedy_outlined,
                     title: 'DECOYS AND LOGS',
@@ -327,9 +339,9 @@ class _FirstRunBanner extends StatelessWidget {
               'stays available from the ? button on the home screen and from '
               'Settings > Field Manual.',
               style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: VaultColors.textPrimary,
-                    height: 1.4,
-                  ),
+                color: VaultColors.textPrimary,
+                height: 1.4,
+              ),
             ),
           ),
         ],
@@ -361,9 +373,9 @@ class _GotItBar extends StatelessWidget {
             'It will not open on its own again.',
             textAlign: TextAlign.center,
             style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: VaultColors.textSecondary,
-                  height: 1.35,
-                ),
+              color: VaultColors.textSecondary,
+              height: 1.35,
+            ),
           ),
           const SizedBox(height: 10),
           SizedBox(
@@ -394,4 +406,3 @@ class _GotItBar extends StatelessWidget {
     );
   }
 }
-

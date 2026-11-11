@@ -1,4 +1,5 @@
 // lib/vault/screens/video_vault_screen.dart
+import '../services/pro_offer_policy.dart';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -81,7 +82,10 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     // rebuilds progressively as frames land via videoThumbnailCacheProvider.
     ref.read(videoThumbnailCacheProvider.notifier).wipe();
     _loadVideos();
-    ref.listenManual(vaultCryptoProvider, (VaultCrypto? prev, VaultCrypto next) {
+    ref.listenManual(vaultCryptoProvider, (
+      VaultCrypto? prev,
+      VaultCrypto next,
+    ) {
       if (prev != null && prev.isUnlocked && !next.isUnlocked) {
         if (mounted) {
           ref.read(videoThumbnailCacheProvider.notifier).wipe();
@@ -121,17 +125,26 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
             builder: (context, setState) {
               return AlertDialog(
                 backgroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
                 title: const Text(
                   'Important Warning',
-                  style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+                  style: TextStyle(
+                    color: VaultColors.textPrimary,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'Inter',
+                  ),
                 ),
                 content: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     const Text(
                       'Media originals are REMOVED from the gallery and are permanently lost if the app is uninstalled or its data is cleared before restoring — back up via Settings → Export and keep the 12-word recovery phrase.',
-                      style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+                      style: TextStyle(
+                        color: VaultColors.textSecondary,
+                        fontFamily: 'Inter',
+                      ),
                     ),
                     const SizedBox(height: 16),
                     Row(
@@ -149,7 +162,10 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
                         const Expanded(
                           child: Text(
                             "Don't show again",
-                            style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+                            style: TextStyle(
+                              color: VaultColors.textSecondary,
+                              fontFamily: 'Inter',
+                            ),
                           ),
                         ),
                       ],
@@ -159,7 +175,13 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
                 actions: [
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(false),
-                    child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(
+                        color: VaultColors.textTertiary,
+                        fontFamily: 'Inter',
+                      ),
+                    ),
                   ),
                   TextButton(
                     onPressed: () async {
@@ -168,7 +190,13 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
                       }
                       if (context.mounted) Navigator.of(context).pop(true);
                     },
-                    child: const Text('Continue', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+                    child: const Text(
+                      'Continue',
+                      style: TextStyle(
+                        color: VaultColors.accent,
+                        fontFamily: 'Inter',
+                      ),
+                    ),
                   ),
                 ],
               );
@@ -192,21 +220,24 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
       // file 'Saved' and the successful one 'Failed'.
       final savedRows = <int>[];
       final failedRows = <int, String>{};
-      final result = await ref.read(videoVaultServiceProvider).pickAndEncryptVideo(
-        context,
-        // The picker just reported the batch size: list the whole queue now.
-        onPicked: (total) => _importSession.setTotal(total),
-        onFileStart: (index, pos, name) {
-          _importSession.ensureSlot(index, name);
-          _importSession.markEncrypting(index, pos);
-        },
-        onFileSaved: (index) => savedRows.add(index),
-        onFileFailed: (index, detail) => failedRows[index] = detail,
-        onWaitingDeleteConfirm: () => _importSession.markWaitingDeleteConfirm(),
-        // The pill's ✕ / the sheet's Cancel set this flag; the service checks
-        // it before each NEXT file, so the in-flight video always finishes.
-        isCancelled: () => _importSession.cancelRequested,
-      );
+      final result = await ref
+          .read(videoVaultServiceProvider)
+          .pickAndEncryptVideo(
+            context,
+            // The picker just reported the batch size: list the whole queue now.
+            onPicked: (total) => _importSession.setTotal(total),
+            onFileStart: (index, pos, name) {
+              _importSession.ensureSlot(index, name);
+              _importSession.markEncrypting(index, pos);
+            },
+            onFileSaved: (index) => savedRows.add(index),
+            onFileFailed: (index, detail) => failedRows[index] = detail,
+            onWaitingDeleteConfirm: () =>
+                _importSession.markWaitingDeleteConfirm(),
+            // The pill's ✕ / the sheet's Cancel set this flag; the service checks
+            // it before each NEXT file, so the in-flight video always finishes.
+            isCancelled: () => _importSession.cancelRequested,
+          );
       sessionActive = false;
       // Outcome rows: per-file Saved / Saved-original-kept. The snackbar
       // verdicts below stay as the second signal; the card is the first.
@@ -237,9 +268,13 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
         }
       }
       if (wasCancelled && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
             content: Text(
-                'Import cancelled — ${result.successfulIds.length} of ${result.totalAttempted} imported. Unimported originals are still in the gallery.')));
+              'Import cancelled — ${result.successfulIds.length} of ${result.totalAttempted} imported. Unimported originals are still in the gallery.',
+            ),
+          ),
+        );
       }
       if (result.successfulIds.isNotEmpty) {
         await _loadVideos();
@@ -251,9 +286,9 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
           result.failedFileName,
           result.error,
         );
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
       }
       // Let the outcome rows linger so the user sees them, then clear. The
       // timer is cancellable: dispose() stops it, and a new import cancels it
@@ -267,9 +302,9 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     } catch (e) {
       if (mounted) {
         final msg = _formatImportError(0, 0, null, e);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
         _importSession.clear();
       }
     } finally {
@@ -286,8 +321,12 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
   ) {
     final String reason;
     final errStr = error?.toString() ?? '';
-    final isLocked = errStr.contains('Vault is locked') || errStr.contains('locked');
-    final isDamaged = error is CorruptedMediaFileException || errStr.contains('damaged') || errStr.contains('corrupted');
+    final isLocked =
+        errStr.contains('Vault is locked') || errStr.contains('locked');
+    final isDamaged =
+        error is CorruptedMediaFileException ||
+        errStr.contains('damaged') ||
+        errStr.contains('corrupted');
 
     final name = (failedFileName != null && failedFileName.isNotEmpty)
         ? '"$failedFileName"'
@@ -329,98 +368,145 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-            Material(
-              color: Colors.transparent,
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: VaultColors.accent.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.unarchive,
+                      color: VaultColors.accent,
+                    ),
                   ),
-                  child: const Icon(Icons.unarchive, color: VaultColors.accent),
+                  title: const Text(
+                    'Restore to Gallery',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _restoreVideo(video);
+                  },
                 ),
-                title: const Text('Restore to Gallery', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _restoreVideo(video);
-                },
               ),
-            ),
-            const SizedBox(height: 8),
-            Material(
-              color: Colors.transparent,
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
+              const SizedBox(height: 8),
+              if (showProFeature(ref.watch(isProProvider).valueOrNull ?? false))
+                Material(
+                  color: Colors.transparent,
+                  child: ListTile(
+                    leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: VaultColors.accent.withValues(alpha: 0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.label_outline,
+                        color: VaultColors.accent,
+                      ),
+                    ),
+                    title: const Text(
+                      'Tags & Caption',
+                      style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    trailing: !kProOffersVisible
+                        ? null
+                        : Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: VaultColors.accent.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'PRO',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: VaultColors.accent,
+                              ),
+                            ),
+                          ),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _editVideoTagsAndCaption(video);
+                    },
                   ),
-                  child: const Icon(Icons.label_outline, color: VaultColors.accent),
                 ),
-                title: const Text('Tags & Caption', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
-                trailing: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(4),
+              const SizedBox(height: 8),
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: VaultColors.accent.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.drive_file_move_outlined,
+                      color: VaultColors.accent,
+                    ),
                   ),
-                  child: const Text('PRO', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: VaultColors.accent)),
+                  title: const Text(
+                    'Move to Folder',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _showMoveToFolder(video);
+                  },
                 ),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _editVideoTagsAndCaption(video);
-                },
               ),
-            ),
-            const SizedBox(height: 8),
-            Material(
-              color: Colors.transparent,
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
+              const SizedBox(height: 8),
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: VaultColors.error.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.delete, color: VaultColors.error),
                   ),
-                  child: const Icon(Icons.drive_file_move_outlined, color: VaultColors.accent),
-                ),
-                title: const Text('Move to Folder', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _showMoveToFolder(video);
-                },
-              ),
-            ),
-            const SizedBox(height: 8),
-            Material(
-              color: Colors.transparent,
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: VaultColors.error.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
+                  title: const Text(
+                    'Delete Permanently',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontWeight: FontWeight.w600,
+                      color: VaultColors.error,
+                    ),
                   ),
-                  child: const Icon(Icons.delete, color: VaultColors.error),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _deleteVideo(video);
+                  },
                 ),
-                title: const Text('Delete Permanently', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600, color: VaultColors.error)),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _deleteVideo(video);
-                },
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
   }
 
   Future<void> _restoreVideo(VideoMeta video) async {
@@ -431,20 +517,36 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text(
           'Restore to Gallery',
-          style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
         ),
         content: const Text(
           'This decrypts the video and writes it back into the device gallery, where other apps with media access can see it. After the gallery confirms the save, the encrypted vault copy is removed.',
-          style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textSecondary,
+            fontFamily: 'Inter',
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: VaultColors.textTertiary,
+                fontFamily: 'Inter',
+              ),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Restore', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+            child: const Text(
+              'Restore',
+              style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter'),
+            ),
           ),
         ],
       ),
@@ -466,8 +568,9 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
   Future<void> _runRestore(List<VideoMeta> videos) async {
     final service = ref.read(videoVaultServiceProvider);
     _restoreLingerTimer?.cancel();
-    _restoreSession
-        .beginRestore(videos.map((v) => v.originalName ?? '${v.id}.mp4').toList());
+    _restoreSession.beginRestore(
+      videos.map((v) => v.originalName ?? '${v.id}.mp4').toList(),
+    );
     var restored = 0;
     var failed = 0;
     for (var i = 0; i < videos.length; i++) {
@@ -496,7 +599,9 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
         _restoreSession.markCancelled(i);
       } catch (e) {
         _restoreSession.markFailed(
-            i, e.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''));
+          i,
+          e.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''),
+        );
         failed++;
       }
     }
@@ -509,12 +614,17 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     }
     if (!mounted) return;
     HapticFeedback.mediumImpact();
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(_restoreSession.cancelRequested
-            ? 'Restore cancelled — $restored restored, the rest are still in the vault.'
-            : failed == 0
-                ? 'Restored $restored video(s) to the gallery.'
-                : 'Restored $restored of ${videos.length}; $failed failed (their vault copies were kept).')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          _restoreSession.cancelRequested
+              ? 'Restore cancelled — $restored restored, the rest are still in the vault.'
+              : failed == 0
+              ? 'Restored $restored video(s) to the gallery.'
+              : 'Restored $restored of ${videos.length}; $failed failed (their vault copies were kept).',
+        ),
+      ),
+    );
     // Let the outcome rows linger ~4s (same rule as the import card), then
     // clear so the pill disappears. A new restore cancels this timer first.
     if (_restoreSession.isActive && !_restoreSession.isWorking) {
@@ -537,30 +647,46 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Restore $count video(s) to the gallery?',
-            style: const TextStyle(
-                color: VaultColors.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontFamily: 'Inter')),
+        title: Text(
+          'Restore $count video(s) to the gallery?',
+          style: const TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
+        ),
         content: const Text(
-            'This decrypts the selected videos and writes them back into the device gallery, where other apps with media access can see them. After each save is confirmed, the vault copy is removed.',
-            style: TextStyle(
-                color: VaultColors.textSecondary, fontFamily: 'Inter')),
+          'This decrypts the selected videos and writes them back into the device gallery, where other apps with media access can see them. After each save is confirmed, the vault copy is removed.',
+          style: TextStyle(
+            color: VaultColors.textSecondary,
+            fontFamily: 'Inter',
+          ),
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel',
-                  style: TextStyle(
-                      color: VaultColors.textTertiary, fontFamily: 'Inter'))),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: VaultColors.textTertiary,
+                fontFamily: 'Inter',
+              ),
+            ),
+          ),
           TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Restore',
-                  style: TextStyle(color: VaultColors.accent))),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text(
+              'Restore',
+              style: TextStyle(color: VaultColors.accent),
+            ),
+          ),
         ],
       ),
     );
     if (confirmed != true || !mounted) return;
-    final chosen = _visibleVideos().where((v) => _selection.contains(v.id)).toList();
+    final chosen = _visibleVideos()
+        .where((v) => _selection.contains(v.id))
+        .toList();
     _clearSelection();
     await _runRestore(chosen);
   }
@@ -573,20 +699,36 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text(
           'Delete Video',
-          style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
         ),
         content: const Text(
           'Are you sure you want to permanently delete this video?',
-          style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textSecondary,
+            fontFamily: 'Inter',
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: VaultColors.textTertiary,
+                fontFamily: 'Inter',
+              ),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete', style: TextStyle(color: VaultColors.error, fontFamily: 'Inter')),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: VaultColors.error, fontFamily: 'Inter'),
+            ),
           ),
         ],
       ),
@@ -620,11 +762,9 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
       initialTags: video.tags,
       initialCaption: video.caption,
       onSave: (tags, caption) async {
-        await ref.read(videoVaultServiceProvider).updateVideoDetails(
-              video.id,
-              tags: tags,
-              caption: caption,
-            );
+        await ref
+            .read(videoVaultServiceProvider)
+            .updateVideoDetails(video.id, tags: tags, caption: caption);
         await _loadVideos();
       },
     );
@@ -651,13 +791,20 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     return list;
   }
 
-  Widget _folderChip(String label, bool selected, VoidCallback onTap,
-      {VoidCallback? onLongPress}) {
+  Widget _folderChip(
+    String label,
+    bool selected,
+    VoidCallback onTap, {
+    VoidCallback? onLongPress,
+  }) {
     final chip = ChoiceChip(
-      label: Text(label,
-          style: TextStyle(
-              fontFamily: 'Inter',
-              color: selected ? Colors.white : VaultColors.textSecondary)),
+      label: Text(
+        label,
+        style: TextStyle(
+          fontFamily: 'Inter',
+          color: selected ? Colors.white : VaultColors.textSecondary,
+        ),
+      ),
       selected: selected,
       onSelected: (_) => onTap(),
       backgroundColor: VaultColors.surface,
@@ -670,25 +817,35 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
   }
 
   Widget _buildFolderChips() {
-    final folders = _videos
-        .map((v) => v.folder)
-        .where((f) => f.isNotEmpty)
-        .toSet()
-        .toList()
-      ..sort();
+    final folders =
+        _videos.map((v) => v.folder).where((f) => f.isNotEmpty).toSet().toList()
+          ..sort();
     final hasUnfiled = _videos.any((v) => v.folder.isEmpty);
     final chips = <Widget>[
-      _folderChip('All', _selectedFolder == null,
-          () => setState(() => _selectedFolder = null)),
+      _folderChip(
+        'All',
+        _selectedFolder == null,
+        () => setState(() => _selectedFolder = null),
+      ),
     ];
     if (hasUnfiled) {
-      chips.add(_folderChip('Unfiled', _selectedFolder == '',
-          () => setState(() => _selectedFolder = '')));
+      chips.add(
+        _folderChip(
+          'Unfiled',
+          _selectedFolder == '',
+          () => setState(() => _selectedFolder = ''),
+        ),
+      );
     }
     for (final f in folders) {
-      chips.add(_folderChip(f, _selectedFolder == f,
+      chips.add(
+        _folderChip(
+          f,
+          _selectedFolder == f,
           () => setState(() => _selectedFolder = f),
-          onLongPress: () => _removeFolder(f)));
+          onLongPress: () => _removeFolder(f),
+        ),
+      );
     }
     if (chips.length == 1) return const SizedBox.shrink();
     return SizedBox(
@@ -697,8 +854,10 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         children: chips
-            .map((c) => Padding(
-                padding: const EdgeInsets.only(right: 8), child: c))
+            .map(
+              (c) =>
+                  Padding(padding: const EdgeInsets.only(right: 8), child: c),
+            )
             .toList(),
       ),
     );
@@ -708,23 +867,27 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
   /// dialog background is white, but ListTile/TextField text otherwise
   /// inherits the app's dark-theme font (white), turning invisible.
   Future<String?> _pickFolder({String? exclude}) async {
-    final existingFolders = _videos
-        .map((v) => v.folder)
-        .where((f) => f.isNotEmpty && f != exclude)
-        .toSet()
-        .toList()
-      ..sort();
+    final existingFolders =
+        _videos
+            .map((v) => v.folder)
+            .where((f) => f.isNotEmpty && f != exclude)
+            .toSet()
+            .toList()
+          ..sort();
     final newFolderController = TextEditingController();
     return showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Move to folder',
-            style: TextStyle(
-                color: VaultColors.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontFamily: 'Inter')),
+        title: const Text(
+          'Move to folder',
+          style: TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
+        ),
         content: SizedBox(
           width: double.maxFinite,
           child: SingleChildScrollView(
@@ -732,31 +895,46 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 ListTile(
-                  leading: const Icon(Icons.folder_off_outlined,
-                      color: VaultColors.textSecondary),
-                  title: const Text('Unfiled',
-                      style: TextStyle(
-                          fontFamily: 'Inter',
-                          color: VaultColors.textPrimary)),
+                  leading: const Icon(
+                    Icons.folder_off_outlined,
+                    color: VaultColors.textSecondary,
+                  ),
+                  title: const Text(
+                    'Unfiled',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      color: VaultColors.textPrimary,
+                    ),
+                  ),
                   onTap: () => Navigator.of(context).pop(''),
                 ),
-                ...existingFolders.map((f) => ListTile(
-                      leading: const Icon(Icons.folder_outlined,
-                          color: VaultColors.accent),
-                      title: Text(f,
-                          style: const TextStyle(
-                              fontFamily: 'Inter',
-                              color: VaultColors.textPrimary)),
-                      onTap: () => Navigator.of(context).pop(f),
-                    )),
+                ...existingFolders.map(
+                  (f) => ListTile(
+                    leading: const Icon(
+                      Icons.folder_outlined,
+                      color: VaultColors.accent,
+                    ),
+                    title: Text(
+                      f,
+                      style: const TextStyle(
+                        fontFamily: 'Inter',
+                        color: VaultColors.textPrimary,
+                      ),
+                    ),
+                    onTap: () => Navigator.of(context).pop(f),
+                  ),
+                ),
                 const Divider(),
                 TextField(
                   controller: newFolderController,
                   decoration: const InputDecoration(
-                      hintText: 'New folder name',
-                      hintStyle: TextStyle(fontFamily: 'Inter')),
+                    hintText: 'New folder name',
+                    hintStyle: TextStyle(fontFamily: 'Inter'),
+                  ),
                   style: const TextStyle(
-                      fontFamily: 'Inter', color: VaultColors.textPrimary),
+                    fontFamily: 'Inter',
+                    color: VaultColors.textPrimary,
+                  ),
                 ),
               ],
             ),
@@ -765,16 +943,20 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(null),
-            child: const Text('Cancel',
-                style: TextStyle(color: VaultColors.textTertiary)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: VaultColors.textTertiary),
+            ),
           ),
           TextButton(
             onPressed: () {
               final name = newFolderController.text.trim();
               if (name.isNotEmpty) Navigator.of(context).pop(name);
             },
-            child: const Text('Create & Move',
-                style: TextStyle(color: VaultColors.accent)),
+            child: const Text(
+              'Create & Move',
+              style: TextStyle(color: VaultColors.accent),
+            ),
           ),
         ],
       ),
@@ -801,33 +983,46 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Remove folder "$folder"?',
-            style: const TextStyle(
-                color: VaultColors.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontFamily: 'Inter')),
+        title: Text(
+          'Remove folder "$folder"?',
+          style: const TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
+        ),
         content: Text(
           '$count ${count == 1 ? 'item' : 'items'} will be moved out first — '
-              'removing a folder never deletes anything. Where should they go?',
+          'removing a folder never deletes anything. Where should they go?',
           style: const TextStyle(
-              fontFamily: 'Inter', color: VaultColors.textPrimary),
+            fontFamily: 'Inter',
+            color: VaultColors.textPrimary,
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(null),
-            child: const Text('Cancel',
-                style: TextStyle(color: VaultColors.textTertiary)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: VaultColors.textTertiary),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop('unfiled'),
-            child: const Text('Move to Unfiled',
-                style: TextStyle(color: VaultColors.textSecondary)),
+            child: const Text(
+              'Move to Unfiled',
+              style: TextStyle(color: VaultColors.textSecondary),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop('choose'),
-            child: const Text('Choose folder...',
-                style: TextStyle(
-                    color: VaultColors.accent, fontWeight: FontWeight.w600)),
+            child: const Text(
+              'Choose folder...',
+              style: TextStyle(
+                color: VaultColors.accent,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ],
       ),
@@ -851,9 +1046,14 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
     setState(() {
       if (_selectedFolder == folder) _selectedFolder = null;
     });
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Folder "$folder" removed — items are safe in '
-            '${target.isEmpty ? 'Unfiled' : target}')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Folder "$folder" removed — items are safe in '
+          '${target.isEmpty ? 'Unfiled' : target}',
+        ),
+      ),
+    );
   }
 
   // ── Multi-select batch operations ────────────────────────────────────
@@ -866,9 +1066,14 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
       await service.moveVideo(id, chosen);
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Moved ${ids.length} video(s) to '
-            '${chosen.isEmpty ? 'Unfiled' : chosen}')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Moved ${ids.length} video(s) to '
+          '${chosen.isEmpty ? 'Unfiled' : chosen}',
+        ),
+      ),
+    );
     _clearSelection();
     await _loadVideos();
   }
@@ -880,26 +1085,39 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Delete $count video(s)?',
-            style: const TextStyle(
-                color: VaultColors.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontFamily: 'Inter')),
+        title: Text(
+          'Delete $count video(s)?',
+          style: const TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
+        ),
         content: const Text(
-            'This permanently removes the selected videos from the vault.',
-            style: TextStyle(
-                color: VaultColors.textSecondary, fontFamily: 'Inter')),
+          'This permanently removes the selected videos from the vault.',
+          style: TextStyle(
+            color: VaultColors.textSecondary,
+            fontFamily: 'Inter',
+          ),
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel',
-                  style: TextStyle(
-                      color: VaultColors.textTertiary, fontFamily: 'Inter'))),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: VaultColors.textTertiary,
+                fontFamily: 'Inter',
+              ),
+            ),
+          ),
           TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Delete',
-                  style: TextStyle(
-                      color: VaultColors.error, fontFamily: 'Inter'))),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: VaultColors.error, fontFamily: 'Inter'),
+            ),
+          ),
         ],
       ),
     );
@@ -956,8 +1174,10 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
           ? FloatingActionButton.extended(
               backgroundColor: VaultColors.accent,
               onPressed: null,
-              label: Text('${_selection.length} selected',
-                  style: const TextStyle(color: Colors.white)),
+              label: Text(
+                '${_selection.length} selected',
+                style: const TextStyle(color: Colors.white),
+              ),
             )
           : Column(
               // Import status pill + the + FAB form one cluster bottom-right.
@@ -988,282 +1208,323 @@ class _VideoVaultScreenState extends ConsumerState<VideoVaultScreen> {
               ],
             ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: VaultColors.accent))
+          ? const Center(
+              child: CircularProgressIndicator(color: VaultColors.accent),
+            )
           : _videos.isEmpty
-              ? Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Expanded(
-                      child: Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                        Icons.video_library_outlined,
-                        size: 80,
-                        color: VaultColors.accent.withValues(alpha: 0.2),
-                      ),
-                            const SizedBox(height: 16),
-                            const Text(
-                              'No videos yet',
-                              style: TextStyle(
-                                fontSize: 18,
-                                color: VaultColors.textTertiary,
-                                fontFamily: 'Inter',
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Tap + to import your first video',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: VaultColors.textTertiary.withValues(alpha: 0.7),
-                                fontFamily: 'Inter',
-                              ),
-                            ),
-                          ],
+          ? Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.video_library_outlined,
+                          size: 80,
+                          color: VaultColors.accent.withValues(alpha: 0.2),
                         ),
-                      ),
-                    ),
-                  ],
-                )
-              : Column(
-                  children: [
-                    VaultSearchBar(
-                      controller: _searchController,
-                      hintText: 'Search videos by name, caption, #tag...',
-                      onQueryChanged: (v) => setState(() => _searchQuery = v),
-                      onClear: () => setState(() {
-                        _searchController.clear();
-                        _searchQuery = '';
-                      }),
-                      selectedTag: _selectedTag,
-                      onTagSelected: (t) => setState(() => _selectedTag = t),
-                      availableTags: _extractAllTags(),
-                      isPro: ref.watch(isProProvider).value ?? false,
-                      onProRequired: () => showPaywallSheet(context),
-                    ),
-                    _buildFolderChips(),
-                    if (_selection.isNotEmpty)
-                      Material(
-                        color: VaultColors.surface,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 4),
-                          child: Row(
-                            children: [
-                              Text('${_selection.length} selected',
-                                  style: const TextStyle(
-                                      fontFamily: 'Inter',
-                                      color: VaultColors.textSecondary)),
-                              const Spacer(),
-                              TextButton.icon(
-                                onPressed: _moveSelection,
-                                icon: const Icon(Icons.drive_file_move_outlined,
-                                    size: 20, color: VaultColors.accent),
-                                label: const Text('Move',
-                                    style: TextStyle(
-                                        fontFamily: 'Inter',
-                                        color: VaultColors.accent)),
-                              ),
-                              TextButton.icon(
-                                onPressed: _restoreSelection,
-                                icon: const Icon(Icons.unarchive,
-                                    size: 20, color: VaultColors.accent),
-                                label: const Text('Restore',
-                                    style: TextStyle(
-                                        fontFamily: 'Inter',
-                                        color: VaultColors.accent)),
-                              ),
-                              TextButton.icon(
-                                onPressed: _deleteSelection,
-                                icon: const Icon(Icons.delete,
-                                    size: 20, color: VaultColors.error),
-                                label: const Text('Delete',
-                                    style: TextStyle(
-                                        fontFamily: 'Inter',
-                                        color: VaultColors.error)),
-                              ),
-                            ],
+                        const SizedBox(height: 16),
+                        const Text(
+                          'No videos yet',
+                          style: TextStyle(
+                            fontSize: 18,
+                            color: VaultColors.textTertiary,
+                            fontFamily: 'Inter',
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Tap + to import your first video',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: VaultColors.textTertiary.withValues(
+                              alpha: 0.7,
+                            ),
+                            fontFamily: 'Inter',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : Column(
+              children: [
+                VaultSearchBar(
+                  controller: _searchController,
+                  hintText: 'Search videos by name, caption, #tag...',
+                  onQueryChanged: (v) => setState(() => _searchQuery = v),
+                  onClear: () => setState(() {
+                    _searchController.clear();
+                    _searchQuery = '';
+                  }),
+                  selectedTag: _selectedTag,
+                  onTagSelected: (t) => setState(() => _selectedTag = t),
+                  availableTags: _extractAllTags(),
+                  isPro: ref.watch(isProProvider).value ?? false,
+                  onProRequired: () => showPaywallSheet(context),
+                ),
+                _buildFolderChips(),
+                if (_selection.isNotEmpty)
+                  Material(
+                    color: VaultColors.surface,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
                       ),
-                    Expanded(
-                      child: _visibleVideos().isEmpty
-                          ? Center(
-                              child: Text(
-                                (_searchQuery.isNotEmpty || _selectedTag != null)
-                                    ? 'No videos match your search'
-                                    : 'No videos in this folder',
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  color: VaultColors.textTertiary,
-                                  fontFamily: 'Inter',
-                                ),
+                      child: Row(
+                        children: [
+                          Text(
+                            '${_selection.length} selected',
+                            style: const TextStyle(
+                              fontFamily: 'Inter',
+                              color: VaultColors.textSecondary,
+                            ),
+                          ),
+                          const Spacer(),
+                          TextButton.icon(
+                            onPressed: _moveSelection,
+                            icon: const Icon(
+                              Icons.drive_file_move_outlined,
+                              size: 20,
+                              color: VaultColors.accent,
+                            ),
+                            label: const Text(
+                              'Move',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                color: VaultColors.accent,
                               ),
-                            )
-                          : GridView.builder(
-                              padding: const EdgeInsets.all(8),
-                              gridDelegate:
-                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: _restoreSelection,
+                            icon: const Icon(
+                              Icons.unarchive,
+                              size: 20,
+                              color: VaultColors.accent,
+                            ),
+                            label: const Text(
+                              'Restore',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                color: VaultColors.accent,
+                              ),
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: _deleteSelection,
+                            icon: const Icon(
+                              Icons.delete,
+                              size: 20,
+                              color: VaultColors.error,
+                            ),
+                            label: const Text(
+                              'Delete',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                color: VaultColors.error,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                Expanded(
+                  child: _visibleVideos().isEmpty
+                      ? Center(
+                          child: Text(
+                            (_searchQuery.isNotEmpty || _selectedTag != null)
+                                ? 'No videos match your search'
+                                : 'No videos in this folder',
+                            style: const TextStyle(
+                              fontSize: 15,
+                              color: VaultColors.textTertiary,
+                              fontFamily: 'Inter',
+                            ),
+                          ),
+                        )
+                      : GridView.builder(
+                          padding: const EdgeInsets.all(8),
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
                                 crossAxisCount: 2,
                                 crossAxisSpacing: 8,
                                 mainAxisSpacing: 8,
                                 childAspectRatio: 1.2,
                               ),
-                              itemCount: _visibleVideos().length,
-                              itemBuilder: (context, index) {
-                                final video = _visibleVideos()[index];
-                                final frame = thumbnails[video.id];
-                                final selected = _selection.contains(video.id);
-                                if (frame == null) {
-                                  // F23: this tile is visible but has no frame yet — jump
-                                  // the queue so what the owner is looking at fills first.
-                                  ref
-                                      .read(videoThumbnailServiceProvider)
-                                      .request(video.id, priority: true);
+                          itemCount: _visibleVideos().length,
+                          itemBuilder: (context, index) {
+                            final video = _visibleVideos()[index];
+                            final frame = thumbnails[video.id];
+                            final selected = _selection.contains(video.id);
+                            if (frame == null) {
+                              // F23: this tile is visible but has no frame yet — jump
+                              // the queue so what the owner is looking at fills first.
+                              ref
+                                  .read(videoThumbnailServiceProvider)
+                                  .request(video.id, priority: true);
+                            }
+                            return GestureDetector(
+                              onTap: () {
+                                if (_selection.isNotEmpty) {
+                                  _toggleSelection(video.id);
+                                } else {
+                                  _playVideo(video);
                                 }
-                                return GestureDetector(
-                                  onTap: () {
-                                    if (_selection.isNotEmpty) {
-                                      _toggleSelection(video.id);
-                                    } else {
-                                      _playVideo(video);
-                                    }
-                                  },
-                                  onLongPress: () {
-                                    if (_selection.isEmpty) {
-                                      _toggleSelection(video.id);
-                                    } else {
-                                      _showOptions(video);
-                                    }
-                                  },
-                                  child: Container(
-                                    decoration: BoxDecoration(
-                                      color: VaultColors.surface,
-                                      borderRadius: BorderRadius.circular(12),
-                                      border: Border.all(
-                                          color: selected
-                                              ? VaultColors.accent
-                                              : VaultColors.textTertiary
-                                                  .withValues(alpha: 0.1),
-                                          width: selected ? 2 : 1),
-                                    ),
-                                    child: ClipRRect(
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: Stack(
-                                        fit: StackFit.expand,
-                                        children: [
-                                          if (frame != null)
-                                            Image.memory(
-                                              frame,
-                                              fit: BoxFit.cover,
-                                              gaplessPlayback: true,
-                                              errorBuilder: (_, _, _) =>
-                                                  const Center(
+                              },
+                              onLongPress: () {
+                                if (_selection.isEmpty) {
+                                  _toggleSelection(video.id);
+                                } else {
+                                  _showOptions(video);
+                                }
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: VaultColors.surface,
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: selected
+                                        ? VaultColors.accent
+                                        : VaultColors.textTertiary.withValues(
+                                            alpha: 0.1,
+                                          ),
+                                    width: selected ? 2 : 1,
+                                  ),
+                                ),
+                                child: ClipRRect(
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Stack(
+                                    fit: StackFit.expand,
+                                    children: [
+                                      if (frame != null)
+                                        Image.memory(
+                                          frame,
+                                          fit: BoxFit.cover,
+                                          gaplessPlayback: true,
+                                          errorBuilder: (_, _, _) =>
+                                              const Center(
                                                 child: Icon(
                                                   Icons.play_circle_fill,
                                                   size: 50,
                                                   color: VaultColors.accent,
                                                 ),
                                               ),
-                                            )
-                                          else
-                                            const Center(
-                                              child: Icon(
-                                                Icons.play_circle_fill,
-                                                size: 50,
-                                                color: VaultColors.accent,
-                                              ),
+                                        )
+                                      else
+                                        const Center(
+                                          child: Icon(
+                                            Icons.play_circle_fill,
+                                            size: 50,
+                                            color: VaultColors.accent,
+                                          ),
+                                        ),
+                                      if (selected)
+                                        Positioned.fill(
+                                          child: DecoratedBox(
+                                            decoration: BoxDecoration(
+                                              color: VaultColors.accent
+                                                  .withValues(alpha: 0.35),
                                             ),
-                                          if (selected)
-                                            Positioned.fill(
-                                              child: DecoratedBox(
-                                                decoration: BoxDecoration(
-                                                  color: VaultColors.accent
-                                                      .withValues(alpha: 0.35),
-                                                ),
-                                              ),
-                                            ),
-                                          // No badge circle: selected state is the
-                                          // accent border + the tint above.
-                                          // Long-press enters selection; tap
-                                          // toggles.
-                                          if (frame != null)
-                                            Positioned.fill(
-                                              child: DecoratedBox(
-                                                decoration: BoxDecoration(
-                                                  gradient: LinearGradient(
-                                                    begin: Alignment.topCenter,
-                                                    end: Alignment.bottomCenter,
-                                                    stops: const [0.45, 1.0],
-                                                    colors: [
-                                                      Colors.transparent,
-                                                      Colors.black.withValues(alpha: 0.55),
-                                                    ],
+                                          ),
+                                        ),
+                                      // No badge circle: selected state is the
+                                      // accent border + the tint above.
+                                      // Long-press enters selection; tap
+                                      // toggles.
+                                      if (frame != null)
+                                        Positioned.fill(
+                                          child: DecoratedBox(
+                                            decoration: BoxDecoration(
+                                              gradient: LinearGradient(
+                                                begin: Alignment.topCenter,
+                                                end: Alignment.bottomCenter,
+                                                stops: const [0.45, 1.0],
+                                                colors: [
+                                                  Colors.transparent,
+                                                  Colors.black.withValues(
+                                                    alpha: 0.55,
                                                   ),
-                                                ),
+                                                ],
                                               ),
                                             ),
-                                          Positioned(
-                                            bottom: 8,
-                                            left: 8,
-                                            right: 8,
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                          ),
+                                        ),
+                                      Positioned(
+                                        bottom: 8,
+                                        left: 8,
+                                        right: 8,
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              video.originalName ??
+                                                  'Video ${index + 1}',
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                // F23-FIX: tile sits over a dark photo/frame with a
+                                                // black scrim — dark VaultColors.textPrimary (#1A1A1A)
+                                                // is unreadable there, so overlay text is white.
+                                                color: Colors.white,
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                                fontFamily: 'Inter',
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Row(
+                                              mainAxisAlignment:
+                                                  MainAxisAlignment
+                                                      .spaceBetween,
                                               children: [
                                                 Text(
-                                                  video.originalName ??
-                                                      'Video ${index + 1}',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: const TextStyle(
-                                        // F23-FIX: tile sits over a dark photo/frame with a
-                                        // black scrim — dark VaultColors.textPrimary (#1A1A1A)
-                                        // is unreadable there, so overlay text is white.
-                                        color: Colors.white,
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w600,
-                                        fontFamily: 'Inter',
+                                                  _formatDuration(
+                                                    video.durationS,
+                                                  ),
+                                                  style: TextStyle(
+                                                    color: Colors.white
+                                                        .withValues(
+                                                          alpha: 0.85,
+                                                        ),
+                                                    fontSize: 10,
+                                                    fontFamily: 'Inter',
+                                                  ),
+                                                ),
+                                                Text(
+                                                  '${(video.size / (1024 * 1024)).toStringAsFixed(1)} MB',
+                                                  style: TextStyle(
+                                                    color: Colors.white
+                                                        .withValues(
+                                                          alpha: 0.85,
+                                                        ),
+                                                    fontSize: 10,
+                                                    fontFamily: 'Inter',
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(height: 2),
-                                    Row(
-                                      mainAxisAlignment:
-                                          MainAxisAlignment.spaceBetween,
-                                      children: [
-                                        Text(
-                                          _formatDuration(video.durationS),
-                                          style: TextStyle(
-                                            color: Colors.white.withValues(alpha: 0.85),
-                                            fontSize: 10,
-                                            fontFamily: 'Inter',
-                                          ),
-                                        ),
-                                        Text(
-                                          '${(video.size / (1024 * 1024)).toStringAsFixed(1)} MB',
-                                          style: TextStyle(
-                                            color: Colors.white.withValues(alpha: 0.85),
-                                            fontSize: 10,
-                                            fontFamily: 'Inter',
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ],
-                          ),
+                            );
+                          },
                         ),
-                      ),
-                    );
-                  },
                 ),
-              ),
-            ],
-          ),
+              ],
+            ),
     );
   }
 }

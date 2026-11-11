@@ -1,3 +1,4 @@
+import '../services/pro_offer_policy.dart';
 import 'dart:async';
 import 'dart:collection';
 import 'dart:typed_data';
@@ -135,17 +136,26 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
             builder: (context, setState) {
               return AlertDialog(
                 backgroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
                 title: const Text(
                   'Important Warning',
-                  style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+                  style: TextStyle(
+                    color: VaultColors.textPrimary,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: 'Inter',
+                  ),
                 ),
                 content: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     const Text(
                       'Media originals are REMOVED from the gallery and are permanently lost if the app is uninstalled or its data is cleared before restoring — back up via Settings → Export and keep the 12-word recovery phrase.',
-                      style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+                      style: TextStyle(
+                        color: VaultColors.textSecondary,
+                        fontFamily: 'Inter',
+                      ),
                     ),
                     const SizedBox(height: 16),
                     Row(
@@ -165,7 +175,10 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                         const Expanded(
                           child: Text(
                             "Don't show again",
-                            style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+                            style: TextStyle(
+                              color: VaultColors.textSecondary,
+                              fontFamily: 'Inter',
+                            ),
                           ),
                         ),
                       ],
@@ -175,7 +188,13 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                 actions: [
                   TextButton(
                     onPressed: () => Navigator.of(context).pop(false),
-                    child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+                    child: const Text(
+                      'Cancel',
+                      style: TextStyle(
+                        color: VaultColors.textTertiary,
+                        fontFamily: 'Inter',
+                      ),
+                    ),
                   ),
                   TextButton(
                     onPressed: () async {
@@ -184,7 +203,13 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                       }
                       if (context.mounted) Navigator.of(context).pop(true);
                     },
-                    child: const Text('Continue', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+                    child: const Text(
+                      'Continue',
+                      style: TextStyle(
+                        color: VaultColors.accent,
+                        fontFamily: 'Inter',
+                      ),
+                    ),
                   ),
                 ],
               );
@@ -208,21 +233,24 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
       // file 'Saved' and the successful one 'Failed'.
       final savedRows = <int>[];
       final failedRows = <int, String>{};
-      final result = await ref.read(fileVaultServiceProvider).pickAndEncryptImage(
-        context,
-        // The picker just reported the batch size: list the whole queue now.
-        onPicked: (total) => _importSession.setTotal(total),
-        onFileStart: (index, pos, name) {
-          _importSession.ensureSlot(index, name);
-          _importSession.markEncrypting(index, pos);
-        },
-        onFileSaved: (index) => savedRows.add(index),
-        onFileFailed: (index, detail) => failedRows[index] = detail,
-        onWaitingDeleteConfirm: () => _importSession.markWaitingDeleteConfirm(),
-        // The pill's ✕ / the sheet's Cancel set this flag; the service checks
-        // it before each NEXT file, so the in-flight photo always finishes.
-        isCancelled: () => _importSession.cancelRequested,
-      );
+      final result = await ref
+          .read(fileVaultServiceProvider)
+          .pickAndEncryptImage(
+            context,
+            // The picker just reported the batch size: list the whole queue now.
+            onPicked: (total) => _importSession.setTotal(total),
+            onFileStart: (index, pos, name) {
+              _importSession.ensureSlot(index, name);
+              _importSession.markEncrypting(index, pos);
+            },
+            onFileSaved: (index) => savedRows.add(index),
+            onFileFailed: (index, detail) => failedRows[index] = detail,
+            onWaitingDeleteConfirm: () =>
+                _importSession.markWaitingDeleteConfirm(),
+            // The pill's ✕ / the sheet's Cancel set this flag; the service checks
+            // it before each NEXT file, so the in-flight photo always finishes.
+            isCancelled: () => _importSession.cancelRequested,
+          );
       sessionActive = false;
       // Outcome rows: per-photo Saved / Saved-original-kept. originalsKept ==
       // true means the source was left on the device (dialog denied, platform
@@ -255,9 +283,13 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
         // Unimported originals untouched + already-saved originals kept: the
         // cancel skipped the batch-delete phase entirely, so the gallery is
         // exactly as it was before for every file not imported.
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
             content: Text(
-                'Import cancelled — ${result.successfulIds.length} of ${result.totalAttempted} imported. Unimported originals are still in the gallery.')));
+              'Import cancelled — ${result.successfulIds.length} of ${result.totalAttempted} imported. Unimported originals are still in the gallery.',
+            ),
+          ),
+        );
       }
       if (result.successfulIds.isNotEmpty) {
         await _loadPhotos();
@@ -269,9 +301,9 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
           result.failedFileName,
           result.error,
         );
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
       }
       // Let the outcome rows linger so the user sees them, then clear. The
       // timer is cancellable: dispose() stops it, and a new import cancels it
@@ -285,9 +317,9 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     } catch (e) {
       if (mounted) {
         final msg = _formatImportError(0, 0, null, e);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(msg)));
         _importSession.clear();
       }
     } finally {
@@ -304,8 +336,12 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   ) {
     final String reason;
     final errStr = error?.toString() ?? '';
-    final isLocked = errStr.contains('Vault is locked') || errStr.contains('locked');
-    final isDamaged = error is CorruptedMediaFileException || errStr.contains('damaged') || errStr.contains('corrupted');
+    final isLocked =
+        errStr.contains('Vault is locked') || errStr.contains('locked');
+    final isDamaged =
+        error is CorruptedMediaFileException ||
+        errStr.contains('damaged') ||
+        errStr.contains('corrupted');
 
     final name = (failedFileName != null && failedFileName.isNotEmpty)
         ? '"$failedFileName"'
@@ -334,7 +370,9 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   }
 
   Future<void> _captureFromCamera() async {
-    final id = await ref.read(fileVaultServiceProvider).captureAndEncryptImage();
+    final id = await ref
+        .read(fileVaultServiceProvider)
+        .captureAndEncryptImage();
     if (id != null) await _loadPhotos();
   }
 
@@ -352,98 +390,145 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-            Material(
-              color: Colors.transparent,
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: VaultColors.accent.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.unarchive,
+                      color: VaultColors.accent,
+                    ),
                   ),
-                  child: const Icon(Icons.unarchive, color: VaultColors.accent),
+                  title: const Text(
+                    'Restore to Gallery',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _restorePhoto(photo);
+                  },
                 ),
-                title: const Text('Restore to Gallery', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _restorePhoto(photo);
-                },
               ),
-            ),
-            const SizedBox(height: 8),
-            Material(
-              color: Colors.transparent,
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
+              const SizedBox(height: 8),
+              if (showProFeature(ref.watch(isProProvider).valueOrNull ?? false))
+                Material(
+                  color: Colors.transparent,
+                  child: ListTile(
+                    leading: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: VaultColors.accent.withValues(alpha: 0.1),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.label_outlined,
+                        color: VaultColors.accent,
+                      ),
+                    ),
+                    title: const Text(
+                      'Tags & Caption',
+                      style: TextStyle(
+                        fontFamily: 'Inter',
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    trailing: !kProOffersVisible
+                        ? null
+                        : Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: VaultColors.accent.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'PRO',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: VaultColors.accent,
+                              ),
+                            ),
+                          ),
+                    onTap: () {
+                      Navigator.of(context).pop();
+                      _editPhotoTagsAndCaption(photo);
+                    },
                   ),
-                  child: const Icon(Icons.label_outlined, color: VaultColors.accent),
                 ),
-                title: const Text('Tags & Caption', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
-                trailing: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(4),
+              const SizedBox(height: 8),
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: VaultColors.accent.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.drive_file_move_outlined,
+                      color: VaultColors.accent,
+                    ),
                   ),
-                  child: const Text('PRO', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: VaultColors.accent)),
+                  title: const Text(
+                    'Move to Folder',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _showMoveToFolder(photo);
+                  },
                 ),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _editPhotoTagsAndCaption(photo);
-                },
               ),
-            ),
-            const SizedBox(height: 8),
-            Material(
-              color: Colors.transparent,
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: VaultColors.accent.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
+              const SizedBox(height: 8),
+              Material(
+                color: Colors.transparent,
+                child: ListTile(
+                  leading: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: VaultColors.error.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.delete, color: VaultColors.error),
                   ),
-                  child: const Icon(Icons.drive_file_move_outlined, color: VaultColors.accent),
-                ),
-                title: const Text('Move to Folder', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _showMoveToFolder(photo);
-                },
-              ),
-            ),
-            const SizedBox(height: 8),
-            Material(
-              color: Colors.transparent,
-              child: ListTile(
-                leading: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: VaultColors.error.withValues(alpha: 0.1),
-                    shape: BoxShape.circle,
+                  title: const Text(
+                    'Delete Permanently',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      fontWeight: FontWeight.w600,
+                      color: VaultColors.error,
+                    ),
                   ),
-                  child: const Icon(Icons.delete, color: VaultColors.error),
+                  onTap: () {
+                    Navigator.of(context).pop();
+                    _deletePhoto(photo);
+                  },
                 ),
-                title: const Text('Delete Permanently', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600, color: VaultColors.error)),
-                onTap: () {
-                  Navigator.of(context).pop();
-                  _deletePhoto(photo);
-                },
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
-    ),
-  );
+    );
   }
 
   Future<void> _restorePhoto(PhotoMeta photo) async {
@@ -454,20 +539,36 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text(
           'Restore to Gallery',
-          style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
         ),
         content: const Text(
           'This decrypts the photo and writes it back into the device gallery, where other apps with media access can see it. After the gallery confirms the save, the encrypted vault copy is removed.',
-          style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textSecondary,
+            fontFamily: 'Inter',
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: VaultColors.textTertiary,
+                fontFamily: 'Inter',
+              ),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Restore', style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter')),
+            child: const Text(
+              'Restore',
+              style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter'),
+            ),
           ),
         ],
       ),
@@ -488,8 +589,9 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   Future<void> _runRestore(List<PhotoMeta> photos) async {
     final service = ref.read(fileVaultServiceProvider);
     _restoreLingerTimer?.cancel();
-    _restoreSession
-        .beginRestore(photos.map((p) => p.originalName ?? 'photo').toList());
+    _restoreSession.beginRestore(
+      photos.map((p) => p.originalName ?? 'photo').toList(),
+    );
     var restored = 0;
     var failed = 0;
     for (var i = 0; i < photos.length; i++) {
@@ -512,7 +614,9 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
         _restoreSession.markCancelled(i);
       } catch (e) {
         _restoreSession.markFailed(
-            i, e.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''));
+          i,
+          e.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''),
+        );
         failed++;
       }
     }
@@ -526,12 +630,17 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     }
     if (!mounted) return;
     HapticFeedback.mediumImpact();
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(_restoreSession.cancelRequested
-            ? 'Restore cancelled — $restored restored, the rest are still in the vault.'
-            : failed == 0
-                ? 'Restored $restored photo(s) to the gallery.'
-                : 'Restored $restored of ${photos.length}; $failed failed (their vault copies were kept).')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          _restoreSession.cancelRequested
+              ? 'Restore cancelled — $restored restored, the rest are still in the vault.'
+              : failed == 0
+              ? 'Restored $restored photo(s) to the gallery.'
+              : 'Restored $restored of ${photos.length}; $failed failed (their vault copies were kept).',
+        ),
+      ),
+    );
     // Let the outcome rows linger ~4s (same rule as the import card), then
     // clear so the pill disappears. A new restore cancels this timer first.
     if (_restoreSession.isActive && !_restoreSession.isWorking) {
@@ -550,20 +659,36 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text(
           'Delete Photo',
-          style: TextStyle(color: VaultColors.textPrimary, fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
         ),
         content: const Text(
           'Are you sure you want to permanently delete this photo?',
-          style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: VaultColors.textSecondary,
+            fontFamily: 'Inter',
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: VaultColors.textTertiary,
+                fontFamily: 'Inter',
+              ),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete', style: TextStyle(color: VaultColors.error, fontFamily: 'Inter')),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: VaultColors.error, fontFamily: 'Inter'),
+            ),
           ),
         ],
       ),
@@ -589,11 +714,9 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
       initialTags: photo.tags,
       initialCaption: photo.caption,
       onSave: (tags, caption) async {
-        await ref.read(fileVaultServiceProvider).updatePhotoDetails(
-              photo.id,
-              tags: tags,
-              caption: caption,
-            );
+        await ref
+            .read(fileVaultServiceProvider)
+            .updatePhotoDetails(photo.id, tags: tags, caption: caption);
         await _loadPhotos();
       },
     );
@@ -628,13 +751,20 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     return list;
   }
 
-  Widget _folderChip(String label, bool selected, VoidCallback onTap,
-      {VoidCallback? onLongPress}) {
+  Widget _folderChip(
+    String label,
+    bool selected,
+    VoidCallback onTap, {
+    VoidCallback? onLongPress,
+  }) {
     final chip = ChoiceChip(
-      label: Text(label,
-          style: TextStyle(
-              fontFamily: 'Inter',
-              color: selected ? Colors.white : VaultColors.textSecondary)),
+      label: Text(
+        label,
+        style: TextStyle(
+          fontFamily: 'Inter',
+          color: selected ? Colors.white : VaultColors.textSecondary,
+        ),
+      ),
       selected: selected,
       onSelected: (_) => onTap(),
       backgroundColor: VaultColors.surface,
@@ -647,25 +777,35 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   }
 
   Widget _buildFolderChips() {
-    final folders = _photos
-        .map((p) => p.folder)
-        .where((f) => f.isNotEmpty)
-        .toSet()
-        .toList()
-      ..sort();
+    final folders =
+        _photos.map((p) => p.folder).where((f) => f.isNotEmpty).toSet().toList()
+          ..sort();
     final hasUnfiled = _photos.any((p) => p.folder.isEmpty);
     final chips = <Widget>[
-      _folderChip('All', _selectedFolder == null,
-          () => setState(() => _selectedFolder = null)),
+      _folderChip(
+        'All',
+        _selectedFolder == null,
+        () => setState(() => _selectedFolder = null),
+      ),
     ];
     if (hasUnfiled) {
-      chips.add(_folderChip('Unfiled', _selectedFolder == '',
-          () => setState(() => _selectedFolder = '')));
+      chips.add(
+        _folderChip(
+          'Unfiled',
+          _selectedFolder == '',
+          () => setState(() => _selectedFolder = ''),
+        ),
+      );
     }
     for (final f in folders) {
-      chips.add(_folderChip(f, _selectedFolder == f,
+      chips.add(
+        _folderChip(
+          f,
+          _selectedFolder == f,
           () => setState(() => _selectedFolder = f),
-          onLongPress: () => _removeFolder(f)));
+          onLongPress: () => _removeFolder(f),
+        ),
+      );
     }
     if (chips.length == 1) return const SizedBox.shrink();
     return SizedBox(
@@ -674,8 +814,10 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 16),
         children: chips
-            .map((c) => Padding(
-                padding: const EdgeInsets.only(right: 8), child: c))
+            .map(
+              (c) =>
+                  Padding(padding: const EdgeInsets.only(right: 8), child: c),
+            )
             .toList(),
       ),
     );
@@ -685,23 +827,27 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   /// dialog background is white, but ListTile/TextField text otherwise
   /// inherits the app's dark-theme font (white), turning invisible.
   Future<String?> _pickFolder({String? exclude}) async {
-    final existingFolders = _photos
-        .map((p) => p.folder)
-        .where((f) => f.isNotEmpty && f != exclude)
-        .toSet()
-        .toList()
-      ..sort();
+    final existingFolders =
+        _photos
+            .map((p) => p.folder)
+            .where((f) => f.isNotEmpty && f != exclude)
+            .toSet()
+            .toList()
+          ..sort();
     final newFolderController = TextEditingController();
     return showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: const Text('Move to folder',
-            style: TextStyle(
-                color: VaultColors.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontFamily: 'Inter')),
+        title: const Text(
+          'Move to folder',
+          style: TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
+        ),
         content: SizedBox(
           width: double.maxFinite,
           child: SingleChildScrollView(
@@ -709,31 +855,46 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 ListTile(
-                  leading: const Icon(Icons.folder_off_outlined,
-                      color: VaultColors.textSecondary),
-                  title: const Text('Unfiled',
-                      style: TextStyle(
-                          fontFamily: 'Inter',
-                          color: VaultColors.textPrimary)),
+                  leading: const Icon(
+                    Icons.folder_off_outlined,
+                    color: VaultColors.textSecondary,
+                  ),
+                  title: const Text(
+                    'Unfiled',
+                    style: TextStyle(
+                      fontFamily: 'Inter',
+                      color: VaultColors.textPrimary,
+                    ),
+                  ),
                   onTap: () => Navigator.of(context).pop(''),
                 ),
-                ...existingFolders.map((f) => ListTile(
-                      leading: const Icon(Icons.folder_outlined,
-                          color: VaultColors.accent),
-                      title: Text(f,
-                          style: const TextStyle(
-                              fontFamily: 'Inter',
-                              color: VaultColors.textPrimary)),
-                      onTap: () => Navigator.of(context).pop(f),
-                    )),
+                ...existingFolders.map(
+                  (f) => ListTile(
+                    leading: const Icon(
+                      Icons.folder_outlined,
+                      color: VaultColors.accent,
+                    ),
+                    title: Text(
+                      f,
+                      style: const TextStyle(
+                        fontFamily: 'Inter',
+                        color: VaultColors.textPrimary,
+                      ),
+                    ),
+                    onTap: () => Navigator.of(context).pop(f),
+                  ),
+                ),
                 const Divider(),
                 TextField(
                   controller: newFolderController,
                   decoration: const InputDecoration(
-                      hintText: 'New folder name',
-                      hintStyle: TextStyle(fontFamily: 'Inter')),
+                    hintText: 'New folder name',
+                    hintStyle: TextStyle(fontFamily: 'Inter'),
+                  ),
                   style: const TextStyle(
-                      fontFamily: 'Inter', color: VaultColors.textPrimary),
+                    fontFamily: 'Inter',
+                    color: VaultColors.textPrimary,
+                  ),
                 ),
               ],
             ),
@@ -742,16 +903,20 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(null),
-            child: const Text('Cancel',
-                style: TextStyle(color: VaultColors.textTertiary)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: VaultColors.textTertiary),
+            ),
           ),
           TextButton(
             onPressed: () {
               final name = newFolderController.text.trim();
               if (name.isNotEmpty) Navigator.of(context).pop(name);
             },
-            child: const Text('Create & Move',
-                style: TextStyle(color: VaultColors.accent)),
+            child: const Text(
+              'Create & Move',
+              style: TextStyle(color: VaultColors.accent),
+            ),
           ),
         ],
       ),
@@ -778,33 +943,46 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
       builder: (dialogContext) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Remove folder "$folder"?',
-            style: const TextStyle(
-                color: VaultColors.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontFamily: 'Inter')),
+        title: Text(
+          'Remove folder "$folder"?',
+          style: const TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
+        ),
         content: Text(
           '$count ${count == 1 ? 'item' : 'items'} will be moved out first — '
-              'removing a folder never deletes anything. Where should they go?',
+          'removing a folder never deletes anything. Where should they go?',
           style: const TextStyle(
-              fontFamily: 'Inter', color: VaultColors.textPrimary),
+            fontFamily: 'Inter',
+            color: VaultColors.textPrimary,
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(null),
-            child: const Text('Cancel',
-                style: TextStyle(color: VaultColors.textTertiary)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: VaultColors.textTertiary),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop('unfiled'),
-            child: const Text('Move to Unfiled',
-                style: TextStyle(color: VaultColors.textSecondary)),
+            child: const Text(
+              'Move to Unfiled',
+              style: TextStyle(color: VaultColors.textSecondary),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop('choose'),
-            child: const Text('Choose folder...',
-                style: TextStyle(
-                    color: VaultColors.accent, fontWeight: FontWeight.w600)),
+            child: const Text(
+              'Choose folder...',
+              style: TextStyle(
+                color: VaultColors.accent,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
           ),
         ],
       ),
@@ -828,9 +1006,14 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     setState(() {
       if (_selectedFolder == folder) _selectedFolder = null;
     });
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Folder "$folder" removed — items are safe in '
-            '${target.isEmpty ? 'Unfiled' : target}')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Folder "$folder" removed — items are safe in '
+          '${target.isEmpty ? 'Unfiled' : target}',
+        ),
+      ),
+    );
   }
 
   // ── Multi-select batch operations ────────────────────────────────────
@@ -843,9 +1026,14 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
       await service.movePhoto(id, chosen);
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text('Moved ${ids.length} photo(s) to '
-            '${chosen.isEmpty ? 'Unfiled' : chosen}')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Moved ${ids.length} photo(s) to '
+          '${chosen.isEmpty ? 'Unfiled' : chosen}',
+        ),
+      ),
+    );
     _clearSelection();
     await _loadPhotos();
   }
@@ -857,26 +1045,39 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Delete $count photo(s)?',
-            style: const TextStyle(
-                color: VaultColors.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontFamily: 'Inter')),
+        title: Text(
+          'Delete $count photo(s)?',
+          style: const TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
+        ),
         content: const Text(
-            'This permanently removes the selected photos from the vault.',
-            style: TextStyle(
-                color: VaultColors.textSecondary, fontFamily: 'Inter')),
+          'This permanently removes the selected photos from the vault.',
+          style: TextStyle(
+            color: VaultColors.textSecondary,
+            fontFamily: 'Inter',
+          ),
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel',
-                  style: TextStyle(
-                      color: VaultColors.textTertiary, fontFamily: 'Inter'))),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: VaultColors.textTertiary,
+                fontFamily: 'Inter',
+              ),
+            ),
+          ),
           TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Delete',
-                  style: TextStyle(
-                      color: VaultColors.error, fontFamily: 'Inter'))),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: VaultColors.error, fontFamily: 'Inter'),
+            ),
+          ),
         ],
       ),
     );
@@ -902,27 +1103,39 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
       builder: (context) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Text('Restore $count photo(s) to the gallery?',
-            style: const TextStyle(
-                color: VaultColors.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontFamily: 'Inter')),
+        title: Text(
+          'Restore $count photo(s) to the gallery?',
+          style: const TextStyle(
+            color: VaultColors.textPrimary,
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
+        ),
         content: const Text(
-            'This decrypts the selected photos and writes them back into the device gallery, where other apps with media access can see them. After each save is confirmed, the vault copy is removed.',
-            style: TextStyle(
-                color: VaultColors.textSecondary, fontFamily: 'Inter')),
+          'This decrypts the selected photos and writes them back into the device gallery, where other apps with media access can see them. After each save is confirmed, the vault copy is removed.',
+          style: TextStyle(
+            color: VaultColors.textSecondary,
+            fontFamily: 'Inter',
+          ),
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.of(context).pop(false),
-              child: const Text('Cancel',
-                  style: TextStyle(
-                      color: VaultColors.textTertiary,
-                      fontFamily: 'Inter'))),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: VaultColors.textTertiary,
+                fontFamily: 'Inter',
+              ),
+            ),
+          ),
           TextButton(
-              onPressed: () => Navigator.of(context).pop(true),
-              child: const Text('Restore',
-                  style: TextStyle(
-                      color: VaultColors.accent, fontFamily: 'Inter'))),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text(
+              'Restore',
+              style: TextStyle(color: VaultColors.accent, fontFamily: 'Inter'),
+            ),
+          ),
         ],
       ),
     );
@@ -930,8 +1143,9 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
     // Collect from the CURRENT selection before clearing, then hand the whole
     // batch to the restore session (pill + sheet + cancel), like the video
     // vault's bulk restore.
-    final chosen =
-        _visiblePhotos().where((p) => _selection.contains(p.id)).toList();
+    final chosen = _visiblePhotos()
+        .where((p) => _selection.contains(p.id))
+        .toList();
     _clearSelection();
     await _runRestore(chosen);
   }
@@ -971,15 +1185,21 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                   .read(fileVaultServiceProvider)
                   .restorePhotoToGallery(id);
               if (mounted) {
-                messenger.showSnackBar(const SnackBar(
-                    content: Text('Photo restored to gallery successfully.')));
+                messenger.showSnackBar(
+                  const SnackBar(
+                    content: Text('Photo restored to gallery successfully.'),
+                  ),
+                );
               }
             } catch (e) {
               if (mounted) {
-                messenger.showSnackBar(SnackBar(
-                    content: Text(e
-                        .toString()
-                        .replaceFirst(RegExp(r'^Exception:\s*'), ''))));
+                messenger.showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      e.toString().replaceFirst(RegExp(r'^Exception:\s*'), ''),
+                    ),
+                  ),
+                );
               }
             }
             await _loadPhotos();
@@ -1014,7 +1234,13 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                   ),
                   child: const Icon(Icons.photo_library, color: Colors.white),
                 ),
-                title: const Text('Choose from Gallery', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                title: const Text(
+                  'Choose from Gallery',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
                 onTap: () {
                   Navigator.of(context).pop();
                   _importFromGallery();
@@ -1034,7 +1260,13 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                   ),
                   child: const Icon(Icons.camera_alt, color: Colors.white),
                 ),
-                title: const Text('Take a Photo', style: TextStyle(fontFamily: 'Inter', fontWeight: FontWeight.w600)),
+                title: const Text(
+                  'Take a Photo',
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
                 onTap: () {
                   Navigator.of(context).pop();
                   _captureFromCamera();
@@ -1063,9 +1295,12 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
       floatingActionButton: _selection.isNotEmpty
           ? FloatingActionButton.extended(
               backgroundColor: VaultColors.accent,
-              onPressed: null, // visual only; real actions live in the bar below
-              label: Text('${_selection.length} selected',
-                  style: const TextStyle(color: Colors.white)),
+              onPressed:
+                  null, // visual only; real actions live in the bar below
+              label: Text(
+                '${_selection.length} selected',
+                style: const TextStyle(color: Colors.white),
+              ),
             )
           : Column(
               // Import status pill + the + FAB form one cluster bottom-right
@@ -1095,175 +1330,208 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
               ],
             ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: VaultColors.accent))
+          ? const Center(
+              child: CircularProgressIndicator(color: VaultColors.accent),
+            )
           : _photos.isEmpty
-              ? Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Expanded(
-                      child: Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(
-                              Icons.photo_outlined,
-                              size: 80,
-                              color: VaultColors.accent.withValues(alpha: 0.2),
-                            ),
-                            const SizedBox(height: 16),
-                            const Text(
-                              'No photos yet',
-                              style: TextStyle(
-                                fontSize: 18,
-                                color: VaultColors.textTertiary,
-                                fontFamily: 'Inter',
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Tap + to import your first photo',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: VaultColors.textTertiary.withValues(alpha: 0.7),
-                                fontFamily: 'Inter',
-                              ),
-                            ),
-                          ],
+          ? Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.photo_outlined,
+                          size: 80,
+                          color: VaultColors.accent.withValues(alpha: 0.2),
                         ),
-                      ),
-                    ),
-                  ],
-                )
-              : Column(
-                  children: [
-                    VaultSearchBar(
-                      controller: _searchController,
-                      hintText: 'Search photos by name, caption, #tag...',
-                      onQueryChanged: (v) => setState(() => _searchQuery = v),
-                      onClear: () => setState(() {
-                        _searchController.clear();
-                        _searchQuery = '';
-                      }),
-                      selectedTag: _selectedTag,
-                      onTagSelected: (t) => setState(() => _selectedTag = t),
-                      availableTags: _extractAllTags(),
-                      isPro: ref.watch(isProProvider).value ?? false,
-                      onProRequired: () => showPaywallSheet(context),
-                    ),
-                    _buildFolderChips(),
-                    if (_selection.isNotEmpty)
-                      Material(
-                        color: VaultColors.surface,
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 16, vertical: 4),
-                          child: Row(
-                            children: [
-                              Text('${_selection.length} selected',
-                                  style: const TextStyle(
-                                      fontFamily: 'Inter',
-                                      color: VaultColors.textSecondary)),
-                              const Spacer(),
-                              TextButton.icon(
-                                onPressed: _moveSelection,
-                                icon: const Icon(Icons.drive_file_move_outlined,
-                                    size: 20, color: VaultColors.accent),
-                                label: const Text('Move',
-                                    style: TextStyle(
-                                        fontFamily: 'Inter',
-                                        color: VaultColors.accent)),
-                              ),
-                              TextButton.icon(
-                                onPressed: _restoreSelection,
-                                icon: const Icon(Icons.unarchive,
-                                    size: 20, color: VaultColors.accent),
-                                label: const Text('Restore',
-                                    style: TextStyle(
-                                        fontFamily: 'Inter',
-                                        color: VaultColors.accent)),
-                              ),
-                              TextButton.icon(
-                                onPressed: _deleteSelection,
-                                icon: const Icon(Icons.delete,
-                                    size: 20, color: VaultColors.error),
-                                label: const Text('Delete',
-                                    style: TextStyle(
-                                        fontFamily: 'Inter',
-                                        color: VaultColors.error)),
-                              ),
-                            ],
+                        const SizedBox(height: 16),
+                        const Text(
+                          'No photos yet',
+                          style: TextStyle(
+                            fontSize: 18,
+                            color: VaultColors.textTertiary,
+                            fontFamily: 'Inter',
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Tap + to import your first photo',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: VaultColors.textTertiary.withValues(
+                              alpha: 0.7,
+                            ),
+                            fontFamily: 'Inter',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            )
+          : Column(
+              children: [
+                VaultSearchBar(
+                  controller: _searchController,
+                  hintText: 'Search photos by name, caption, #tag...',
+                  onQueryChanged: (v) => setState(() => _searchQuery = v),
+                  onClear: () => setState(() {
+                    _searchController.clear();
+                    _searchQuery = '';
+                  }),
+                  selectedTag: _selectedTag,
+                  onTagSelected: (t) => setState(() => _selectedTag = t),
+                  availableTags: _extractAllTags(),
+                  isPro: ref.watch(isProProvider).value ?? false,
+                  onProRequired: () => showPaywallSheet(context),
+                ),
+                _buildFolderChips(),
+                if (_selection.isNotEmpty)
+                  Material(
+                    color: VaultColors.surface,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
                       ),
-                    Expanded(
-                      child: _visiblePhotos().isEmpty
-                          ? Center(
-                              child: Text(
-                                (_searchQuery.isNotEmpty || _selectedTag != null)
-                                    ? 'No matching photos found'
-                                    : 'No photos in this folder',
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  color: VaultColors.textTertiary,
-                                  fontFamily: 'Inter',
-                                ),
+                      child: Row(
+                        children: [
+                          Text(
+                            '${_selection.length} selected',
+                            style: const TextStyle(
+                              fontFamily: 'Inter',
+                              color: VaultColors.textSecondary,
+                            ),
+                          ),
+                          const Spacer(),
+                          TextButton.icon(
+                            onPressed: _moveSelection,
+                            icon: const Icon(
+                              Icons.drive_file_move_outlined,
+                              size: 20,
+                              color: VaultColors.accent,
+                            ),
+                            label: const Text(
+                              'Move',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                color: VaultColors.accent,
                               ),
-                            )
-                          : GridView.builder(
-                              padding: const EdgeInsets.all(2),
-                              gridDelegate:
-                                  const SliverGridDelegateWithFixedCrossAxisCount(
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: _restoreSelection,
+                            icon: const Icon(
+                              Icons.unarchive,
+                              size: 20,
+                              color: VaultColors.accent,
+                            ),
+                            label: const Text(
+                              'Restore',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                color: VaultColors.accent,
+                              ),
+                            ),
+                          ),
+                          TextButton.icon(
+                            onPressed: _deleteSelection,
+                            icon: const Icon(
+                              Icons.delete,
+                              size: 20,
+                              color: VaultColors.error,
+                            ),
+                            label: const Text(
+                              'Delete',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                color: VaultColors.error,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                Expanded(
+                  child: _visiblePhotos().isEmpty
+                      ? Center(
+                          child: Text(
+                            (_searchQuery.isNotEmpty || _selectedTag != null)
+                                ? 'No matching photos found'
+                                : 'No photos in this folder',
+                            style: const TextStyle(
+                              fontSize: 15,
+                              color: VaultColors.textTertiary,
+                              fontFamily: 'Inter',
+                            ),
+                          ),
+                        )
+                      : GridView.builder(
+                          padding: const EdgeInsets.all(2),
+                          gridDelegate:
+                              const SliverGridDelegateWithFixedCrossAxisCount(
                                 crossAxisCount: 3,
                                 crossAxisSpacing: 2,
                                 mainAxisSpacing: 2,
                               ),
-                              itemCount: _visiblePhotos().length,
-                              itemBuilder: (context, index) {
-                                final photo = _visiblePhotos()[index];
-                                final thumbPx = (MediaQuery.of(context).size.width / 3 * MediaQuery.of(context).devicePixelRatio).round().clamp(150, 600);
-                                final selected = _selection.contains(photo.id);
-                                return GestureDetector(
-                                  onTap: () {
-                                    if (_selection.isNotEmpty) {
-                                      _toggleSelection(photo.id);
-                                    } else {
-                                      _openViewer(index);
-                                    }
-                                  },
-                                  onLongPress: () {
-                                    if (_selection.isEmpty) {
-                                      _toggleSelection(photo.id);
-                                    } else {
-                                      _showOptions(photo);
-                                    }
-                                  },
-                                  child: Stack(
-                                    fit: StackFit.expand,
-                                    children: [
-                                      _PhotoThumbnail(
-                                        key: ValueKey(photo.id),
-                                        photoId: photo.id,
-                                        thumbPx: thumbPx,
-                                        loadBytes: _loadPhotoBytes,
-                                      ),
-                                      if (selected)
-                                        Container(
-                                          color: VaultColors.accent
-                                              .withValues(alpha: 0.35),
-                                        ),
-                                      // No badge circle: selected state is
-                                      // the tint above (photos) / border +
-                                      // tint (videos). Long-press enters
-                                      // selection; tap toggles.
-                                    ],
-                                  ),
-                                );
+                          itemCount: _visiblePhotos().length,
+                          itemBuilder: (context, index) {
+                            final photo = _visiblePhotos()[index];
+                            final thumbPx =
+                                (MediaQuery.of(context).size.width /
+                                        3 *
+                                        MediaQuery.of(context).devicePixelRatio)
+                                    .round()
+                                    .clamp(150, 600);
+                            final selected = _selection.contains(photo.id);
+                            return GestureDetector(
+                              onTap: () {
+                                if (_selection.isNotEmpty) {
+                                  _toggleSelection(photo.id);
+                                } else {
+                                  _openViewer(index);
+                                }
                               },
-                            ),
-                    ),
-                  ],
+                              onLongPress: () {
+                                if (_selection.isEmpty) {
+                                  _toggleSelection(photo.id);
+                                } else {
+                                  _showOptions(photo);
+                                }
+                              },
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  _PhotoThumbnail(
+                                    key: ValueKey(photo.id),
+                                    photoId: photo.id,
+                                    thumbPx: thumbPx,
+                                    loadBytes: _loadPhotoBytes,
+                                  ),
+                                  if (selected)
+                                    Container(
+                                      color: VaultColors.accent.withValues(
+                                        alpha: 0.35,
+                                      ),
+                                    ),
+                                  // No badge circle: selected state is
+                                  // the tint above (photos) / border +
+                                  // tint (videos). Long-press enters
+                                  // selection; tap toggles.
+                                ],
+                              ),
+                            );
+                          },
+                        ),
                 ),
+              ],
+            ),
     );
   }
 }
@@ -1312,9 +1580,7 @@ class _PhotoThumbnailState extends State<_PhotoThumbnail> {
       );
     }
     if (_bytes == null) {
-      return Container(
-        color: Colors.grey[200],
-      );
+      return Container(color: Colors.grey[200]);
     }
     return Image.memory(
       _bytes!,

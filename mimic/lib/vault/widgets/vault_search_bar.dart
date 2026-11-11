@@ -1,4 +1,5 @@
 // lib/vault/widgets/vault_search_bar.dart
+import '../services/pro_offer_policy.dart';
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../models/vault_tag.dart';
@@ -80,9 +81,14 @@ class VaultSearchBar extends StatelessWidget {
                       suffixIcon: AnimatedBuilder(
                         animation: controller,
                         builder: (context, _) {
-                          if (controller.text.isEmpty) return const SizedBox.shrink();
+                          if (controller.text.isEmpty)
+                            return const SizedBox.shrink();
                           return IconButton(
-                            icon: const Icon(Icons.clear, size: 18, color: VaultColors.textTertiary),
+                            icon: const Icon(
+                              Icons.clear,
+                              size: 18,
+                              color: VaultColors.textTertiary,
+                            ),
                             onPressed: onClear,
                           );
                         },
@@ -93,75 +99,88 @@ class VaultSearchBar extends StatelessWidget {
                   ),
                 ),
               ),
-              if (trailing != null) ...[
-                const SizedBox(width: 8),
-                trailing!,
-              ],
+              if (trailing != null) ...[const SizedBox(width: 8), trailing!],
             ],
           ),
         ),
 
         // 2. Horizontal Tag Filter Chips
-        SizedBox(
-          height: 38,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            children: [
-              // 'All' filter chip
-              ChoiceChip(
-                label: const Text(
-                  'All',
-                  style: TextStyle(fontFamily: 'Inter', fontSize: 12),
-                ),
-                selected: selectedTag == null,
-                onSelected: (_) => onTagSelected(null),
-                selectedColor: VaultColors.accent,
-                backgroundColor: VaultColors.surface,
-                labelStyle: TextStyle(
-                  color: selectedTag == null ? Colors.white : VaultColors.textSecondary,
-                  fontWeight: selectedTag == null ? FontWeight.w600 : FontWeight.normal,
-                ),
-                showCheckmark: false,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-              const SizedBox(width: 8),
-
-              // Tag chips
-              ...tagsToShow.map((tag) {
-                final isSelected = selectedTag == tag;
-                return Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: ChoiceChip(
-                    avatar: !isPro
-                        ? const Icon(Icons.lock_outline, size: 12, color: VaultColors.accent)
-                        : null,
-                    label: Text(
-                      tag,
-                      style: const TextStyle(fontFamily: 'Inter', fontSize: 12),
-                    ),
-                    selected: isSelected,
-                    onSelected: (_) {
-                      if (!isPro) {
-                        onProRequired();
-                      } else {
-                        onTagSelected(isSelected ? null : tag);
-                      }
-                    },
-                    selectedColor: VaultColors.accent,
-                    backgroundColor: VaultColors.surface,
-                    labelStyle: TextStyle(
-                      color: isSelected ? Colors.white : VaultColors.textSecondary,
-                      fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
-                    ),
-                    showCheckmark: false,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
+        if (showProFeature(isPro))
+          SizedBox(
+            height: 38,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              children: [
+                // 'All' filter chip
+                ChoiceChip(
+                  label: const Text(
+                    'All',
+                    style: TextStyle(fontFamily: 'Inter', fontSize: 12),
                   ),
-                );
-              }),
-            ],
+                  selected: selectedTag == null,
+                  onSelected: (_) => onTagSelected(null),
+                  selectedColor: VaultColors.accent,
+                  backgroundColor: VaultColors.surface,
+                  labelStyle: TextStyle(
+                    color: selectedTag == null
+                        ? Colors.white
+                        : VaultColors.textSecondary,
+                    fontWeight: selectedTag == null
+                        ? FontWeight.w600
+                        : FontWeight.normal,
+                  ),
+                  showCheckmark: false,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                ),
+                const SizedBox(width: 8),
+
+                // Tag chips
+                ...tagsToShow.map((tag) {
+                  final isSelected = selectedTag == tag;
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      avatar: !isPro
+                          ? const Icon(
+                              Icons.lock_outline,
+                              size: 12,
+                              color: VaultColors.accent,
+                            )
+                          : null,
+                      label: Text(
+                        tag,
+                        style: const TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 12,
+                        ),
+                      ),
+                      selected: isSelected,
+                      onSelected: (_) {
+                        if (!isPro) {
+                          onProRequired();
+                        } else {
+                          onTagSelected(isSelected ? null : tag);
+                        }
+                      },
+                      selectedColor: VaultColors.accent,
+                      backgroundColor: VaultColors.surface,
+                      labelStyle: TextStyle(
+                        color: isSelected
+                            ? Colors.white
+                            : VaultColors.textSecondary,
+                        fontWeight: isSelected
+                            ? FontWeight.w600
+                            : FontWeight.normal,
+                      ),
+                      showCheckmark: false,
+                      padding: const EdgeInsets.symmetric(horizontal: 8),
+                    ),
+                  );
+                }),
+              ],
+            ),
           ),
-        ),
         const SizedBox(height: 6),
       ],
     );

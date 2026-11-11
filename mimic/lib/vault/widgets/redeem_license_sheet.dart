@@ -11,6 +11,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/theme/app_theme.dart';
 import '../services/license_service.dart';
 import '../services/pro_status_service.dart';
+import '../services/pro_offer_policy.dart';
 
 /// Configurable payment checkout URL (e.g., PayMongo link for GCash payments).
 /// Can be customized at build-time via `--dart-define=PAYMENT_CHECKOUT_URL=...`.
@@ -74,7 +75,9 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
   Future<void> _handleRedeem() async {
     var rawInput = _controller.text.trim();
     if (rawInput.isEmpty) {
-      setState(() => _errorMessage = 'Please enter your 16-character activation code.');
+      setState(
+        () => _errorMessage = 'Please enter your 16-character activation code.',
+      );
       return;
     }
 
@@ -107,7 +110,9 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
         }
       } else {
         setState(() {
-          _errorMessage = result.errorMessage ?? 'Invalid activation code. Please try again.';
+          _errorMessage =
+              result.errorMessage ??
+              'Invalid activation code. Please try again.';
           _isLoading = false;
         });
       }
@@ -122,6 +127,7 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
   }
 
   Future<void> _launchPaymentUrl() async {
+    if (!kProOffersVisible) return;
     final uri = Uri.tryParse(kPaymentCheckoutUrl);
     if (uri != null) {
       try {
@@ -129,7 +135,11 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
       } catch (_) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Could not open payment link. Please check your browser.')),
+            const SnackBar(
+              content: Text(
+                'Could not open payment link. Please check your browser.',
+              ),
+            ),
           );
         }
       }
@@ -215,7 +225,10 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
                     ],
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close, color: VaultColors.textSecondary),
+                    icon: const Icon(
+                      Icons.close,
+                      color: VaultColors.textSecondary,
+                    ),
                     onPressed: () => Navigator.of(context).pop(false),
                   ),
                 ],
@@ -225,15 +238,24 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
               if (_isSuccess) ...[
                 // Success celebration view
                 Container(
-                  padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                  padding: const EdgeInsets.symmetric(
+                    vertical: 24,
+                    horizontal: 16,
+                  ),
                   decoration: BoxDecoration(
                     color: VaultColors.success.withOpacity(0.08),
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: VaultColors.success.withOpacity(0.3)),
+                    border: Border.all(
+                      color: VaultColors.success.withOpacity(0.3),
+                    ),
                   ),
                   child: const Column(
                     children: [
-                      Icon(Icons.check_circle, color: VaultColors.success, size: 54),
+                      Icon(
+                        Icons.check_circle,
+                        color: VaultColors.success,
+                        size: 54,
+                      ),
                       SizedBox(height: 12),
                       Text(
                         'Mimic Pro Activated! ⭐',
@@ -270,8 +292,11 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
                   ),
                   child: const Row(
                     children: [
-                      Icon(Icons.mark_email_read_outlined,
-                          color: VaultColors.accent, size: 20),
+                      Icon(
+                        Icons.mark_email_read_outlined,
+                        color: VaultColors.accent,
+                        size: 20,
+                      ),
                       SizedBox(width: 10),
                       Expanded(
                         child: Text(
@@ -326,10 +351,16 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
                     ),
                     focusedBorder: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
-                      borderSide: const BorderSide(color: VaultColors.accent, width: 2),
+                      borderSide: const BorderSide(
+                        color: VaultColors.accent,
+                        width: 2,
+                      ),
                     ),
                     suffixIcon: IconButton(
-                      icon: const Icon(Icons.paste_rounded, color: VaultColors.accent),
+                      icon: const Icon(
+                        Icons.paste_rounded,
+                        color: VaultColors.accent,
+                      ),
                       tooltip: 'Paste from Clipboard',
                       onPressed: _pasteFromClipboard,
                     ),
@@ -350,7 +381,9 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
                     decoration: BoxDecoration(
                       color: VaultColors.error.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: VaultColors.error.withOpacity(0.3)),
+                      border: Border.all(
+                        color: VaultColors.error.withOpacity(0.3),
+                      ),
                     ),
                     child: Text(
                       _errorMessage!,
@@ -396,63 +429,70 @@ class _RedeemLicenseSheetState extends ConsumerState<RedeemLicenseSheet> {
                 const SizedBox(height: 14),
 
                 // Buy via GCash option
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFAF8F5),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFFE4E0D6)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.account_balance_wallet_outlined,
-                          color: Color(0xFF007DFE), size: 22),
-                      const SizedBox(width: 10),
-                      const Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Need an activation key?',
-                              style: TextStyle(
-                                fontFamily: 'Inter',
-                                fontSize: 13,
-                                fontWeight: FontWeight.bold,
-                                color: VaultColors.textPrimary,
-                              ),
-                            ),
-                            Text(
-                              'Pay ₱99 with GCash / Maya to receive a key instantly.',
-                              style: TextStyle(
-                                fontFamily: 'Inter',
-                                fontSize: 11,
-                                color: VaultColors.textSecondary,
-                              ),
-                            ),
-                          ],
+                if (kProOffersVisible)
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFAF8F5),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFE4E0D6)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(
+                          Icons.account_balance_wallet_outlined,
+                          color: Color(0xFF007DFE),
+                          size: 22,
                         ),
-                      ),
-                      OutlinedButton(
-                        onPressed: _launchPaymentUrl,
-                        style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFF007DFE),
-                          side: const BorderSide(color: Color(0xFF007DFE)),
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                          minimumSize: Size.zero,
-                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                        ),
-                        child: const Text(
-                          'Buy ₱99',
-                          style: TextStyle(
-                            fontFamily: 'Inter',
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
+                        const SizedBox(width: 10),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Need an activation key?',
+                                style: TextStyle(
+                                  fontFamily: 'Inter',
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.bold,
+                                  color: VaultColors.textPrimary,
+                                ),
+                              ),
+                              Text(
+                                'Pay ₱99 with GCash / Maya to receive a key instantly.',
+                                style: TextStyle(
+                                  fontFamily: 'Inter',
+                                  fontSize: 11,
+                                  color: VaultColors.textSecondary,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ),
-                    ],
+                        OutlinedButton(
+                          onPressed: _launchPaymentUrl,
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF007DFE),
+                            side: const BorderSide(color: Color(0xFF007DFE)),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: const Text(
+                            'Buy ₱99',
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
               ],
             ],
           ),

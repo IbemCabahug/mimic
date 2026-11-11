@@ -9,6 +9,7 @@
 // 5. Dismissal via close button.
 
 import 'dart:async';
+import 'package:mimic/vault/services/pro_offer_policy.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -40,75 +41,98 @@ class AsyncFakeBillingStore extends FakeBillingStore {
 Widget _wrap(Widget child, ProviderContainer container) {
   return UncontrolledProviderScope(
     container: container,
-    child: MaterialApp(
-      home: Scaffold(
-        body: child,
-      ),
-    ),
+    child: MaterialApp(home: Scaffold(body: child)),
   );
 }
 
 void main() {
-  testWidgets('renders Pro title, benefits, guarantee, gratitude pledge, and price',
-      (WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(800, 1600));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+  if (!kProOffersVisible) {
+    testWidgets('paused offers render no marketing or billing dependencies', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        const ProviderScope(
+          child: MaterialApp(home: Scaffold(body: PaywallSheet())),
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.text('This feature is currently unavailable.'),
+        findsOneWidget,
+      );
+      expect(find.text('MIMIC PRO'), findsNothing);
+      expect(find.textContaining('₱'), findsNothing);
+      expect(find.textContaining('Restore Purchases'), findsNothing);
+      expect(find.textContaining('Redeem'), findsNothing);
+      expect(tester.takeException(), isNull);
+    });
+    return;
+  }
+  testWidgets(
+    'renders Pro title, benefits, guarantee, gratitude pledge, and price',
+    (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    final fakePlatform = FakePlatformService();
-    final fakeStore = AsyncFakeBillingStore();
-    final proService = ProStatusService(
-      fakePlatform,
-      billingEnforced: true,
-      flavor: AppDistributionFlavor.playStore,
-    );
-    final billingService = BillingService(
-      proStatus: proService,
-      store: fakeStore,
-    );
-    await billingService.init();
+      final fakePlatform = FakePlatformService();
+      final fakeStore = AsyncFakeBillingStore();
+      final proService = ProStatusService(
+        fakePlatform,
+        billingEnforced: true,
+        flavor: AppDistributionFlavor.playStore,
+      );
+      final billingService = BillingService(
+        proStatus: proService,
+        store: fakeStore,
+      );
+      await billingService.init();
 
-    final container = ProviderContainer(
-      overrides: [
-        platformServiceProvider.overrideWithValue(fakePlatform),
-        proStatusServiceProvider.overrideWithValue(proService),
-        billingServiceProvider.overrideWithValue(billingService),
-      ],
-    );
+      final container = ProviderContainer(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          proStatusServiceProvider.overrideWithValue(proService),
+          billingServiceProvider.overrideWithValue(billingService),
+        ],
+      );
 
-    await tester.pumpWidget(_wrap(const PaywallSheet(), container));
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(_wrap(const PaywallSheet(), container));
+      await tester.pumpAndSettle();
 
-    // Title and subtitle
-    expect(find.text('MIMIC PRO'), findsOneWidget);
-    expect(find.text('Lifetime Upgrade'), findsOneWidget);
+      // Title and subtitle
+      expect(find.text('MIMIC PRO'), findsOneWidget);
+      expect(find.text('Lifetime Upgrade'), findsOneWidget);
 
-    // Feature benefits
-    expect(find.text('Quick-Entry Shortcut'), findsOneWidget);
-    expect(find.text('Extended Auto-Lock Timeouts'), findsOneWidget);
-    expect(find.text('100% Offline Independence'), findsOneWidget);
+      // Feature benefits
+      expect(find.text('Quick-Entry Shortcut'), findsOneWidget);
+      expect(find.text('Extended Auto-Lock Timeouts'), findsOneWidget);
+      expect(find.text('100% Offline Independence'), findsOneWidget);
 
-    // Golden Rule guarantee callout
-    expect(
-      find.textContaining('Core security, AES-256 encryption, decoy PINs'),
-      findsOneWidget,
-    );
+      // Golden Rule guarantee callout
+      expect(
+        find.textContaining('Core security, AES-256 encryption, decoy PINs'),
+        findsOneWidget,
+      );
 
-    // Heartfelt indie gratitude pledge
-    expect(find.text('Support Independent Development'), findsOneWidget);
-    expect(
-      find.textContaining('Mimic is built without investors, ads, or tracking.'),
-      findsOneWidget,
-    );
+      // Heartfelt indie gratitude pledge
+      expect(find.text('Support Independent Development'), findsOneWidget);
+      expect(
+        find.textContaining(
+          'Mimic is built without investors, ads, or tracking.',
+        ),
+        findsOneWidget,
+      );
 
-    // Primary button with localized price
-    expect(find.text('Unlock Lifetime Pro • ₱99.00'), findsOneWidget);
+      // Primary button with localized price
+      expect(find.text('Unlock Lifetime Pro • ₱99.00'), findsOneWidget);
 
-    // Restore button
-    expect(find.text('Already purchased? Restore Purchases'), findsOneWidget);
-  });
+      // Restore button
+      expect(find.text('Already purchased? Restore Purchases'), findsOneWidget);
+    },
+  );
 
-  testWidgets('tapping buy debounces and prevents duplicate calls',
-      (WidgetTester tester) async {
+  testWidgets('tapping buy debounces and prevents duplicate calls', (
+    WidgetTester tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -153,15 +177,20 @@ void main() {
     // Secondary rapid tap while loading must be ignored (debounce guard)
     await tester.tap(find.byType(ElevatedButton), warnIfMissed: false);
     await tester.pump();
-    expect(fakeStore.buyAttempts, 1, reason: 'Debounce guard prevented second buy call');
+    expect(
+      fakeStore.buyAttempts,
+      1,
+      reason: 'Debounce guard prevented second buy call',
+    );
 
     // Settle in-flight purchase
     completer.complete(true);
     await tester.pumpAndSettle();
   });
 
-  testWidgets('shows offline retry notice when product is unavailable',
-      (WidgetTester tester) async {
+  testWidgets('shows offline retry notice when product is unavailable', (
+    WidgetTester tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
@@ -201,99 +230,106 @@ void main() {
     expect(find.text('Retry'), findsOneWidget);
   });
 
-  testWidgets('renders celebration and heartfelt appreciation when user is already Pro',
-      (WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(800, 1600));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+  testWidgets(
+    'renders celebration and heartfelt appreciation when user is already Pro',
+    (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    final fakePlatform = FakePlatformService();
-    // Simulate user already having Pro in secure storage
-    fakePlatform.store[proEntitlementKey] = proEntitlementValue;
+      final fakePlatform = FakePlatformService();
+      // Simulate user already having Pro in secure storage
+      fakePlatform.store[proEntitlementKey] = proEntitlementValue;
 
-    final fakeStore = AsyncFakeBillingStore();
-    final proService = ProStatusService(
-      fakePlatform,
-      billingEnforced: true,
-      flavor: AppDistributionFlavor.playStore,
-    );
-    final billingService = BillingService(
-      proStatus: proService,
-      store: fakeStore,
-    );
-    await billingService.init();
+      final fakeStore = AsyncFakeBillingStore();
+      final proService = ProStatusService(
+        fakePlatform,
+        billingEnforced: true,
+        flavor: AppDistributionFlavor.playStore,
+      );
+      final billingService = BillingService(
+        proStatus: proService,
+        store: fakeStore,
+      );
+      await billingService.init();
 
-    final container = ProviderContainer(
-      overrides: [
-        platformServiceProvider.overrideWithValue(fakePlatform),
-        proStatusServiceProvider.overrideWithValue(proService),
-        billingServiceProvider.overrideWithValue(billingService),
-      ],
-    );
+      final container = ProviderContainer(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          proStatusServiceProvider.overrideWithValue(proService),
+          billingServiceProvider.overrideWithValue(billingService),
+        ],
+      );
 
-    await tester.pumpWidget(_wrap(const PaywallSheet(), container));
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(_wrap(const PaywallSheet(), container));
+      await tester.pumpAndSettle();
 
-    expect(find.text('Supporter Active'), findsOneWidget);
-    expect(find.text('Thank You For Your Support! 🎉'), findsOneWidget);
-    expect(
-      find.textContaining('You are an official Mimic Pro backer.'),
-      findsOneWidget,
-    );
-    expect(find.text('Enjoy Mimic Pro'), findsOneWidget);
+      expect(find.text('Supporter Active'), findsOneWidget);
+      expect(find.text('Thank You For Your Support! 🎉'), findsOneWidget);
+      expect(
+        find.textContaining('You are an official Mimic Pro backer.'),
+        findsOneWidget,
+      );
+      expect(find.text('Enjoy Mimic Pro'), findsOneWidget);
 
-    // Purchase button should NOT be present when already Pro
-    expect(find.textContaining('Unlock Lifetime Pro'), findsNothing);
-  });
+      // Purchase button should NOT be present when already Pro
+      expect(find.textContaining('Unlock Lifetime Pro'), findsNothing);
+    },
+  );
 
-  testWidgets('restore purchases triggers billing restore and gives user feedback',
-      (WidgetTester tester) async {
-    await tester.binding.setSurfaceSize(const Size(800, 1600));
-    addTearDown(() => tester.binding.setSurfaceSize(null));
+  testWidgets(
+    'restore purchases triggers billing restore and gives user feedback',
+    (WidgetTester tester) async {
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    final fakePlatform = FakePlatformService();
-    final fakeStore = AsyncFakeBillingStore();
-    final proService = ProStatusService(
-      fakePlatform,
-      billingEnforced: true,
-      flavor: AppDistributionFlavor.playStore,
-    );
-    final billingService = BillingService(
-      proStatus: proService,
-      store: fakeStore,
-    );
-    await billingService.init();
+      final fakePlatform = FakePlatformService();
+      final fakeStore = AsyncFakeBillingStore();
+      final proService = ProStatusService(
+        fakePlatform,
+        billingEnforced: true,
+        flavor: AppDistributionFlavor.playStore,
+      );
+      final billingService = BillingService(
+        proStatus: proService,
+        store: fakeStore,
+      );
+      await billingService.init();
 
-    final container = ProviderContainer(
-      overrides: [
-        platformServiceProvider.overrideWithValue(fakePlatform),
-        proStatusServiceProvider.overrideWithValue(proService),
-        billingServiceProvider.overrideWithValue(billingService),
-      ],
-    );
+      final container = ProviderContainer(
+        overrides: [
+          platformServiceProvider.overrideWithValue(fakePlatform),
+          proStatusServiceProvider.overrideWithValue(proService),
+          billingServiceProvider.overrideWithValue(billingService),
+        ],
+      );
 
-    await tester.pumpWidget(_wrap(const PaywallSheet(), container));
-    await tester.pumpAndSettle();
+      await tester.pumpWidget(_wrap(const PaywallSheet(), container));
+      await tester.pumpAndSettle();
 
-    final restoreBtn = find.text('Already purchased? Restore Purchases');
-    expect(restoreBtn, findsOneWidget);
+      final restoreBtn = find.text('Already purchased? Restore Purchases');
+      expect(restoreBtn, findsOneWidget);
 
-    await tester.ensureVisible(restoreBtn);
-    await tester.tap(restoreBtn);
-    await tester.pump();
+      await tester.ensureVisible(restoreBtn);
+      await tester.tap(restoreBtn);
+      await tester.pump();
 
-    // Pump past the debounce and settling delay
-    await tester.pump(const Duration(milliseconds: 700));
-    await tester.pumpAndSettle();
+      // Pump past the debounce and settling delay
+      await tester.pump(const Duration(milliseconds: 700));
+      await tester.pumpAndSettle();
 
-    expect(fakeStore.restoreCalled, isTrue);
-    expect(
-      find.textContaining('No active Pro purchase found on this Google account.'),
-      findsOneWidget,
-    );
-  });
+      expect(fakeStore.restoreCalled, isTrue);
+      expect(
+        find.textContaining(
+          'No active Pro purchase found on this Google account.',
+        ),
+        findsOneWidget,
+      );
+    },
+  );
 
-  testWidgets('close button pops the bottom sheet',
-      (WidgetTester tester) async {
+  testWidgets('close button pops the bottom sheet', (
+    WidgetTester tester,
+  ) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 

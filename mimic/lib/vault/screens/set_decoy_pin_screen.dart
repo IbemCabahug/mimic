@@ -1,5 +1,6 @@
 // mimic/lib/vault/screens/set_decoy_pin_screen.dart
 import 'package:flutter/material.dart';
+import '../services/pro_offer_policy.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
 import '../crypto/vault_crypto.dart';
@@ -35,11 +36,14 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
   Future<void> _checkProAndExistingPin() async {
     final isPro = await ref.read(proStatusServiceProvider).isPro();
     if (!isPro) {
+      if (!kProOffersVisible) return;
       if (mounted) {
         showPaywallSheet(context);
       }
     }
-    final enabled = await ref.read(decoyVaultServiceProvider).isDecoyPinEnabled();
+    final enabled = await ref
+        .read(decoyVaultServiceProvider)
+        .isDecoyPinEnabled();
     if (mounted) {
       setState(() => _hasExistingPin = enabled);
     }
@@ -79,7 +83,9 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
 
       setState(() => _isLoading = true);
       try {
-        final isCurrentValid = await ref.read(decoyVaultServiceProvider).isDecoyPin(currentPin);
+        final isCurrentValid = await ref
+            .read(decoyVaultServiceProvider)
+            .isDecoyPin(currentPin);
         if (!isCurrentValid) {
           if (mounted) {
             setState(() {
@@ -91,22 +97,28 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
         }
 
         // AUDIT-05: Prevent Decoy PIN from colliding with Vault Master PIN or Duress PIN
-        final isMasterPin = await ref.read(vaultCryptoProvider).verifyPin(newPin);
+        final isMasterPin = await ref
+            .read(vaultCryptoProvider)
+            .verifyPin(newPin);
         if (isMasterPin) {
           if (mounted) {
             setState(() {
-              _error = 'This PIN is unavailable. Please choose a different PIN.';
+              _error =
+                  'This PIN is unavailable. Please choose a different PIN.';
               _isLoading = false;
             });
           }
           return;
         }
 
-        final isDuressPin = await ref.read(duressServiceProvider).isFakePin(newPin);
+        final isDuressPin = await ref
+            .read(duressServiceProvider)
+            .isFakePin(newPin);
         if (isDuressPin) {
           if (mounted) {
             setState(() {
-              _error = 'This PIN is unavailable. Please choose a different PIN.';
+              _error =
+                  'This PIN is unavailable. Please choose a different PIN.';
               _isLoading = false;
             });
           }
@@ -144,22 +156,28 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
         setState(() => _isLoading = true);
         try {
           // AUDIT-05: Prevent Decoy PIN from colliding with Vault Master PIN or Duress PIN
-          final isMasterPin = await ref.read(vaultCryptoProvider).verifyPin(pin);
+          final isMasterPin = await ref
+              .read(vaultCryptoProvider)
+              .verifyPin(pin);
           if (isMasterPin) {
             if (mounted) {
               setState(() {
-                _error = 'This PIN is unavailable. Please choose a different PIN.';
+                _error =
+                    'This PIN is unavailable. Please choose a different PIN.';
                 _isLoading = false;
               });
             }
             return;
           }
 
-          final isDuressPin = await ref.read(duressServiceProvider).isFakePin(pin);
+          final isDuressPin = await ref
+              .read(duressServiceProvider)
+              .isFakePin(pin);
           if (isDuressPin) {
             if (mounted) {
               setState(() {
-                _error = 'This PIN is unavailable. Please choose a different PIN.';
+                _error =
+                    'This PIN is unavailable. Please choose a different PIN.';
                 _isLoading = false;
               });
             }
@@ -231,16 +249,28 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
         ),
         content: const Text(
           'This will disable the Decoy Vault. Entering this PIN will no longer open the ghost album.',
-          style: TextStyle(fontFamily: 'Inter', color: VaultColors.textSecondary),
+          style: TextStyle(
+            fontFamily: 'Inter',
+            color: VaultColors.textSecondary,
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter')),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(
+                color: VaultColors.textTertiary,
+                fontFamily: 'Inter',
+              ),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Remove', style: TextStyle(color: VaultColors.error, fontFamily: 'Inter')),
+            child: const Text(
+              'Remove',
+              style: TextStyle(color: VaultColors.error, fontFamily: 'Inter'),
+            ),
           ),
         ],
       ),
@@ -263,7 +293,10 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
   InputDecoration _inputDecoration(String label) {
     return InputDecoration(
       labelText: label,
-      labelStyle: const TextStyle(color: VaultColors.textTertiary, fontFamily: 'Inter'),
+      labelStyle: const TextStyle(
+        color: VaultColors.textTertiary,
+        fontFamily: 'Inter',
+      ),
       counterText: '',
       filled: true,
       fillColor: VaultColors.surface,
@@ -284,6 +317,14 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!showProFeature(ref.watch(isProProvider).valueOrNull ?? false)) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Settings')),
+        body: const Center(
+          child: Text('This feature is currently unavailable.'),
+        ),
+      );
+    }
     return Scaffold(
       backgroundColor: VaultColors.background,
       appBar: AppBar(
@@ -313,19 +354,27 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
               decoration: BoxDecoration(
                 color: VaultColors.surface,
                 borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: VaultColors.accent.withValues(alpha: 0.15)),
+                border: Border.all(
+                  color: VaultColors.accent.withValues(alpha: 0.15),
+                ),
               ),
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Icon(Icons.shield_outlined, color: VaultColors.accent, size: 28),
+                  const Icon(
+                    Icons.shield_outlined,
+                    color: VaultColors.accent,
+                    size: 28,
+                  ),
                   const SizedBox(width: 14),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _hasExistingPin ? 'Modify Decoy PIN' : 'Plausible Deniability',
+                          _hasExistingPin
+                              ? 'Modify Decoy PIN'
+                              : 'Plausible Deniability',
                           style: const TextStyle(
                             fontFamily: 'Inter',
                             fontWeight: FontWeight.bold,
@@ -459,10 +508,7 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
                 ),
               ),
               if (!_showConfirm) ...[
-                _DecoyPinDots(
-                  pin: _pinController.text,
-                  maxLength: 8,
-                ),
+                _DecoyPinDots(pin: _pinController.text, maxLength: 8),
                 const SizedBox(height: 24),
                 TextField(
                   controller: _pinController,
@@ -488,10 +534,7 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
                   },
                 ),
               ] else ...[
-                _DecoyPinDots(
-                  pin: _confirmController.text,
-                  maxLength: 8,
-                ),
+                _DecoyPinDots(pin: _confirmController.text, maxLength: 8),
                 const SizedBox(height: 24),
                 TextField(
                   controller: _confirmController,
@@ -520,7 +563,10 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
                     },
                     child: const Text(
                       'Back to change PIN',
-                      style: TextStyle(color: VaultColors.textSecondary, fontFamily: 'Inter'),
+                      style: TextStyle(
+                        color: VaultColors.textSecondary,
+                        fontFamily: 'Inter',
+                      ),
                     ),
                   ),
                 ),
@@ -536,7 +582,11 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.error_outline, color: VaultColors.error, size: 20),
+                    const Icon(
+                      Icons.error_outline,
+                      color: VaultColors.error,
+                      size: 20,
+                    ),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -560,13 +610,18 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
                 foregroundColor: Colors.white,
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 minimumSize: const Size(double.infinity, 50),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
               ),
               child: _isLoading
                   ? const SizedBox(
                       height: 20,
                       width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
                     )
                   : Text(
                       _hasExistingPin
@@ -585,15 +640,23 @@ class _SetDecoyPinScreenState extends ConsumerState<SetDecoyPinScreen> {
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 onPressed: _isLoading ? null : _removePin,
-                icon: const Icon(Icons.delete_outline, color: VaultColors.error),
+                icon: const Icon(
+                  Icons.delete_outline,
+                  color: VaultColors.error,
+                ),
                 label: const Text(
                   'Remove Decoy PIN',
-                  style: TextStyle(color: VaultColors.error, fontFamily: 'Inter'),
+                  style: TextStyle(
+                    color: VaultColors.error,
+                    fontFamily: 'Inter',
+                  ),
                 ),
                 style: OutlinedButton.styleFrom(
                   side: const BorderSide(color: VaultColors.error),
                   padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
                 ),
               ),
             ],
@@ -623,7 +686,9 @@ class _DecoyPinDots extends StatelessWidget {
           decoration: BoxDecoration(
             shape: BoxShape.circle,
             color: filled ? VaultColors.accent : VaultColors.surface,
-            border: Border.all(color: VaultColors.accent.withValues(alpha: 0.3)),
+            border: Border.all(
+              color: VaultColors.accent.withValues(alpha: 0.3),
+            ),
           ),
         );
       }),

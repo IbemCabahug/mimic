@@ -10,6 +10,7 @@ import 'package:mimic/core/services/platform_service.dart';
 import 'package:mimic/vault/services/license_service.dart';
 import 'package:mimic/vault/services/pro_status_service.dart';
 import 'package:mimic/vault/widgets/redeem_license_sheet.dart';
+import 'package:mimic/vault/services/pro_offer_policy.dart';
 
 class FakePlatformService implements PlatformService {
   final Map<String, String> _storage = {};
@@ -18,7 +19,8 @@ class FakePlatformService implements PlatformService {
   Future<String?> secureRead(String key) async => _storage[key];
 
   @override
-  Future<Map<String, String>> secureReadAll() async => Map.unmodifiable(_storage);
+  Future<Map<String, String>> secureReadAll() async =>
+      Map.unmodifiable(_storage);
 
   @override
   Future<void> secureWrite(String key, String value) async {
@@ -49,9 +51,7 @@ class FakePlatformService implements PlatformService {
 Widget _wrapWithContainer(Widget child, ProviderContainer container) {
   return UncontrolledProviderScope(
     container: container,
-    child: MaterialApp(
-      home: Scaffold(body: child),
-    ),
+    child: MaterialApp(home: Scaffold(body: child)),
   );
 }
 
@@ -83,29 +83,45 @@ void main() {
     container.dispose();
   });
 
-  testWidgets('renders Redeem Activation Code UI elements correctly', (tester) async {
-    await tester.pumpWidget(_wrapWithContainer(const RedeemLicenseSheet(), container));
+  testWidgets('renders Redeem Activation Code UI elements correctly', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _wrapWithContainer(const RedeemLicenseSheet(), container),
+    );
     await tester.pumpAndSettle();
 
     expect(find.text('Redeem Activation Code'), findsOneWidget);
     expect(find.text('Offline Pro Lifetime License'), findsOneWidget);
     expect(find.byType(TextField), findsOneWidget);
     expect(find.text('Activate Pro'), findsOneWidget);
-    expect(find.textContaining('Pay ₱99 with GCash'), findsOneWidget);
+    expect(
+      find.textContaining('Pay ₱99 with GCash'),
+      kProOffersVisible ? findsOneWidget : findsNothing,
+    );
   });
 
   testWidgets('submitting empty input shows error message', (tester) async {
-    await tester.pumpWidget(_wrapWithContainer(const RedeemLicenseSheet(), container));
+    await tester.pumpWidget(
+      _wrapWithContainer(const RedeemLicenseSheet(), container),
+    );
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Activate Pro'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Please enter your 16-character activation code.'), findsOneWidget);
+    expect(
+      find.text('Please enter your 16-character activation code.'),
+      findsOneWidget,
+    );
   });
 
-  testWidgets('submitting invalid or tampered key shows error message', (tester) async {
-    await tester.pumpWidget(_wrapWithContainer(const RedeemLicenseSheet(), container));
+  testWidgets('submitting invalid or tampered key shows error message', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _wrapWithContainer(const RedeemLicenseSheet(), container),
+    );
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField), 'MIMIC-0000-0000-0000-0000');
@@ -118,10 +134,14 @@ void main() {
     expect(await proStatus.isPro(), isFalse);
   });
 
-  testWidgets('submitting valid key activates Pro and displays celebration', (tester) async {
+  testWidgets('submitting valid key activates Pro and displays celebration', (
+    tester,
+  ) async {
     final validKey = licenseService.generateKey();
 
-    await tester.pumpWidget(_wrapWithContainer(const RedeemLicenseSheet(), container));
+    await tester.pumpWidget(
+      _wrapWithContainer(const RedeemLicenseSheet(), container),
+    );
     await tester.pumpAndSettle();
 
     await tester.enterText(find.byType(TextField), validKey);

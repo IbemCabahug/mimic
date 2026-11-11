@@ -1,4 +1,5 @@
 // lib/vault/screens/photo_viewer_screen.dart
+import '../services/pro_offer_policy.dart';
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -80,12 +81,14 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
     return _bytesFutures.putIfAbsent(photo.id, () {
       final future = widget.loadBytes(photo.id);
       unawaited(
-        future.then((bytes) {
-          if (bytes == null) _bytesFutures.remove(photo.id);
-        }).catchError((Object _) {
-          _bytesFutures.remove(photo.id);
-          return null;
-        }),
+        future
+            .then((bytes) {
+              if (bytes == null) _bytesFutures.remove(photo.id);
+            })
+            .catchError((Object _) {
+              _bytesFutures.remove(photo.id);
+              return null;
+            }),
       );
       return future;
     });
@@ -111,7 +114,11 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text(
           'Restore to Gallery',
-          style: TextStyle(color: Color(0xFF1A1A1A), fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: Color(0xFF1A1A1A),
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
         ),
         content: const Text(
           'This decrypts the photo and writes it back into the device gallery, where other apps with media access can see it. After the gallery confirms the save, the encrypted vault copy is removed.',
@@ -120,11 +127,21 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: Color(0xFF8E8E8E), fontFamily: 'Inter')),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: Color(0xFF8E8E8E), fontFamily: 'Inter'),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Restore', style: TextStyle(color: Color(0xFF1A1A1A), fontWeight: FontWeight.w600, fontFamily: 'Inter')),
+            child: const Text(
+              'Restore',
+              style: TextStyle(
+                color: Color(0xFF1A1A1A),
+                fontWeight: FontWeight.w600,
+                fontFamily: 'Inter',
+              ),
+            ),
           ),
         ],
       ),
@@ -148,7 +165,11 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text(
           'Delete Photo',
-          style: TextStyle(color: Color(0xFF1A1A1A), fontWeight: FontWeight.w600, fontFamily: 'Inter'),
+          style: TextStyle(
+            color: Color(0xFF1A1A1A),
+            fontWeight: FontWeight.w600,
+            fontFamily: 'Inter',
+          ),
         ),
         content: const Text(
           'Delete this photo permanently?',
@@ -157,11 +178,17 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Cancel', style: TextStyle(color: Color(0xFF8E8E8E), fontFamily: 'Inter')),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: Color(0xFF8E8E8E), fontFamily: 'Inter'),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Delete', style: TextStyle(color: Colors.redAccent, fontFamily: 'Inter')),
+            child: const Text(
+              'Delete',
+              style: TextStyle(color: Colors.redAccent, fontFamily: 'Inter'),
+            ),
           ),
         ],
       ),
@@ -190,11 +217,9 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
       initialTags: photo.tags,
       initialCaption: photo.caption,
       onSave: (tags, caption) async {
-        await ref.read(fileVaultServiceProvider).updatePhotoDetails(
-              photo.id,
-              tags: tags,
-              caption: caption,
-            );
+        await ref
+            .read(fileVaultServiceProvider)
+            .updatePhotoDetails(photo.id, tags: tags, caption: caption);
         final updated = photo.copyWith(tags: tags, caption: caption);
         if (mounted) {
           setState(() {
@@ -218,11 +243,12 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
           onPressed: () => Navigator.of(context).pop(),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.label_outline, color: Colors.white),
-            tooltip: 'Tags & Caption',
-            onPressed: _editCurrentTagsAndCaption,
-          ),
+          if (showProFeature(ref.watch(isProProvider).valueOrNull ?? false))
+            IconButton(
+              icon: const Icon(Icons.label_outline, color: Colors.white),
+              tooltip: 'Tags & Caption',
+              onPressed: _editCurrentTagsAndCaption,
+            ),
           IconButton(
             icon: const Icon(Icons.unarchive, color: Colors.white),
             tooltip: 'Restore to gallery',
@@ -240,7 +266,9 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
               children: [
                 PageView.builder(
                   controller: _pageController,
-                  physics: _isZoomed ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
+                  physics: _isZoomed
+                      ? const NeverScrollableScrollPhysics()
+                      : const PageScrollPhysics(),
                   onPageChanged: (index) {
                     setState(() {
                       _currentIndex = index;
@@ -253,12 +281,22 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
                     return FutureBuilder<Uint8List?>(
                       future: _bytesFor(photo),
                       builder: (context, snapshot) {
-                        if (snapshot.connectionState == ConnectionState.waiting) {
-                          return const Center(child: CircularProgressIndicator(color: Colors.white));
+                        if (snapshot.connectionState ==
+                            ConnectionState.waiting) {
+                          return const Center(
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                            ),
+                          );
                         }
                         final bytes = snapshot.data;
                         if (bytes == null) {
-                          return const Center(child: Icon(Icons.broken_image, color: Colors.white));
+                          return const Center(
+                            child: Icon(
+                              Icons.broken_image,
+                              color: Colors.white,
+                            ),
+                          );
                         }
                         return _ZoomablePhoto(
                           key: ValueKey(photo.id),
@@ -280,9 +318,17 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
                     right: 16,
                     bottom: 24,
                     child: GestureDetector(
-                      onTap: _editCurrentTagsAndCaption,
+                      onTap:
+                          showProFeature(
+                            ref.watch(isProProvider).valueOrNull ?? false,
+                          )
+                          ? _editCurrentTagsAndCaption
+                          : null,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 10,
+                        ),
                         decoration: BoxDecoration(
                           color: Colors.black.withValues(alpha: 0.65),
                           borderRadius: BorderRadius.circular(12),
@@ -292,7 +338,9 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
                           mainAxisSize: MainAxisSize.min,
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            if (_currentPhotos[_currentIndex].caption.trim().isNotEmpty)
+                            if (_currentPhotos[_currentIndex].caption
+                                .trim()
+                                .isNotEmpty)
                               Text(
                                 _currentPhotos[_currentIndex].caption,
                                 style: const TextStyle(
@@ -301,29 +349,42 @@ class _PhotoViewerScreenState extends ConsumerState<PhotoViewerScreen> {
                                   fontSize: 14,
                                 ),
                               ),
-                            if (_currentPhotos[_currentIndex].caption.trim().isNotEmpty &&
+                            if (_currentPhotos[_currentIndex].caption
+                                    .trim()
+                                    .isNotEmpty &&
                                 _currentPhotos[_currentIndex].tags.isNotEmpty)
                               const SizedBox(height: 6),
                             if (_currentPhotos[_currentIndex].tags.isNotEmpty)
                               Wrap(
                                 spacing: 6,
                                 runSpacing: 4,
-                                children: _currentPhotos[_currentIndex].tags.map((tag) => Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white.withValues(alpha: 0.2),
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: Text(
-                                    tag,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontFamily: 'Inter',
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                )).toList(),
+                                children: _currentPhotos[_currentIndex].tags
+                                    .map(
+                                      (tag) => Container(
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 2,
+                                        ),
+                                        decoration: BoxDecoration(
+                                          color: Colors.white.withValues(
+                                            alpha: 0.2,
+                                          ),
+                                          borderRadius: BorderRadius.circular(
+                                            6,
+                                          ),
+                                        ),
+                                        child: Text(
+                                          tag,
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontFamily: 'Inter',
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ),
+                                    )
+                                    .toList(),
                               ),
                           ],
                         ),
@@ -350,7 +411,8 @@ class _ZoomablePhoto extends StatefulWidget {
   State<_ZoomablePhoto> createState() => _ZoomablePhotoState();
 }
 
-class _ZoomablePhotoState extends State<_ZoomablePhoto> with SingleTickerProviderStateMixin {
+class _ZoomablePhotoState extends State<_ZoomablePhoto>
+    with SingleTickerProviderStateMixin {
   late final TransformationController _controller;
   late final AnimationController _animController;
   Animation<Matrix4>? _animation;
@@ -360,7 +422,10 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> with SingleTickerProvide
   void initState() {
     super.initState();
     _controller = TransformationController();
-    _animController = AnimationController(vsync: this, duration: const Duration(milliseconds: 200));
+    _animController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 200),
+    );
     _controller.addListener(_onControllerChanged);
   }
 
@@ -387,8 +452,10 @@ class _ZoomablePhotoState extends State<_ZoomablePhoto> with SingleTickerProvide
 
   void _animateTo(Matrix4 target) {
     _animation?.removeListener(_onAnimate);
-    _animation = Matrix4Tween(begin: _controller.value, end: target)
-        .animate(CurvedAnimation(parent: _animController, curve: Curves.easeOut));
+    _animation = Matrix4Tween(
+      begin: _controller.value,
+      end: target,
+    ).animate(CurvedAnimation(parent: _animController, curve: Curves.easeOut));
     _animation!.addListener(_onAnimate);
     _animController.forward(from: 0);
   }

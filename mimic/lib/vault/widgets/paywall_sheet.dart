@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
 import '../services/billing_service.dart';
 import '../services/pro_status_service.dart';
+import '../services/pro_offer_policy.dart';
 import 'redeem_license_sheet.dart';
 
 /// Opens the Mimic Pro paywall bottom sheet.
@@ -48,6 +49,7 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
   @override
   void initState() {
     super.initState();
+    if (!kProOffersVisible) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initBilling();
     });
@@ -87,9 +89,11 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
         setState(() {
           final err = billing.lastError;
           if (err != null && err.contains('unavailable')) {
-            _errorMessage = 'Google Play is currently unavailable. Check your connection.';
+            _errorMessage =
+                'Google Play is currently unavailable. Check your connection.';
           } else if (err != null && err.contains('before a known product')) {
-            _errorMessage = 'Could not load product. Connect to internet and try again.';
+            _errorMessage =
+                'Could not load product. Connect to internet and try again.';
           } else {
             _errorMessage = 'Purchase could not be started. Please try again.';
           }
@@ -150,6 +154,23 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
 
   @override
   Widget build(BuildContext context) {
+    if (!kProOffersVisible) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('This feature is currently unavailable.'),
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Close'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     final isProAsync = ref.watch(isProProvider);
     final isPro = isProAsync.valueOrNull ?? false;
     final billing = ref.watch(billingServiceProvider);
@@ -231,7 +252,10 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
                     ],
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close, color: VaultColors.textSecondary),
+                    icon: const Icon(
+                      Icons.close,
+                      color: VaultColors.textSecondary,
+                    ),
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                 ],
@@ -282,8 +306,11 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
                   ),
                   child: Row(
                     children: [
-                      const Icon(Icons.shield_outlined,
-                          color: VaultColors.accent, size: 20),
+                      const Icon(
+                        Icons.shield_outlined,
+                        color: VaultColors.accent,
+                        size: 20,
+                      ),
                       const SizedBox(width: 10),
                       const Expanded(
                         child: Text(
@@ -317,8 +344,11 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
                     children: [
                       Row(
                         children: [
-                          const Icon(Icons.favorite,
-                              color: Color(0xFFE05353), size: 16),
+                          const Icon(
+                            Icons.favorite,
+                            color: Color(0xFFE05353),
+                            size: 16,
+                          ),
                           const SizedBox(width: 8),
                           const Text(
                             'Support Independent Development',
@@ -354,7 +384,9 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
                     decoration: BoxDecoration(
                       color: VaultColors.error.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: VaultColors.error.withOpacity(0.3)),
+                      border: Border.all(
+                        color: VaultColors.error.withOpacity(0.3),
+                      ),
                     ),
                     child: Text(
                       _errorMessage!,
@@ -373,7 +405,9 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
                     decoration: BoxDecoration(
                       color: VaultColors.success.withOpacity(0.1),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: VaultColors.success.withOpacity(0.3)),
+                      border: Border.all(
+                        color: VaultColors.success.withOpacity(0.3),
+                      ),
                     ),
                     child: Text(
                       _infoMessage!,
@@ -398,8 +432,11 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
                     ),
                     child: Row(
                       children: [
-                        const Icon(Icons.cloud_off,
-                            color: Color(0xFFEA580C), size: 18),
+                        const Icon(
+                          Icons.cloud_off,
+                          color: Color(0xFFEA580C),
+                          size: 18,
+                        ),
                         const SizedBox(width: 8),
                         const Expanded(
                           child: Text(
@@ -418,13 +455,15 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
                             minimumSize: Size.zero,
                             tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           ),
-                          child: const Text('Retry',
-                              style: TextStyle(
-                                fontFamily: 'Inter',
-                                fontSize: 12,
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFFEA580C),
-                              )),
+                          child: const Text(
+                            'Retry',
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                              color: Color(0xFFEA580C),
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -433,7 +472,9 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
 
                 // Primary Purchase Button
                 ElevatedButton(
-                  onPressed: (_isPurchasing || _isRestoring) ? null : _handleBuy,
+                  onPressed: (_isPurchasing || _isRestoring)
+                      ? null
+                      : _handleBuy,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: VaultColors.accent,
                     foregroundColor: Colors.white,
@@ -499,7 +540,9 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
                     onPressed: (_isPurchasing || _isRestoring)
                         ? null
                         : () async {
-                            final redeemed = await showRedeemLicenseSheet(context);
+                            final redeemed = await showRedeemLicenseSheet(
+                              context,
+                            );
                             if (redeemed == true && mounted) {
                               ref.invalidate(isProProvider);
                               setState(() {});
@@ -593,8 +636,11 @@ class _PaywallSheetState extends ConsumerState<PaywallSheet> {
               color: VaultColors.success.withOpacity(0.12),
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.check_circle_outline,
-                color: VaultColors.success, size: 36),
+            child: const Icon(
+              Icons.check_circle_outline,
+              color: VaultColors.success,
+              size: 36,
+            ),
           ),
           const SizedBox(height: 12),
           const Text(

@@ -1,4 +1,5 @@
 // lib/vault/screens/note_editor_screen.dart
+import '../services/pro_offer_policy.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
@@ -22,7 +23,8 @@ class NoteEditorScreen extends ConsumerStatefulWidget {
   ConsumerState<NoteEditorScreen> createState() => _NoteEditorScreenState();
 }
 
-class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with WidgetsBindingObserver {
+class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen>
+    with WidgetsBindingObserver {
   late TextEditingController _titleController;
   late TextEditingController _bodyController;
   late List<String> _tags;
@@ -72,7 +74,9 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
     }
     await showTagCaptionEditorSheet(
       context: context,
-      title: _titleController.text.trim().isEmpty ? 'Note tags' : _titleController.text.trim(),
+      title: _titleController.text.trim().isEmpty
+          ? 'Note tags'
+          : _titleController.text.trim(),
       initialTags: _tags,
       showCaptionField: false,
       onSave: (tags, _) async {
@@ -89,7 +93,9 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
     if (!_hasChanges) return;
     final updatedNote = Note(
       id: widget.note.id,
-      title: _titleController.text.trim().isEmpty ? 'Untitled Note' : _titleController.text.trim(),
+      title: _titleController.text.trim().isEmpty
+          ? 'Untitled Note'
+          : _titleController.text.trim(),
       encryptedBody: _bodyController.text,
       createdAt: widget.note.createdAt,
       updatedAt: DateTime.now(),
@@ -98,7 +104,11 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
     if (mounted) setState(() => _isSaving = true);
     try {
       await ref.read(notesServiceProvider).updateNote(updatedNote);
-      if (mounted) setState(() { _hasChanges = false; _isSaving = false; });
+      if (mounted)
+        setState(() {
+          _hasChanges = false;
+          _isSaving = false;
+        });
     } catch (e) {
       if (mounted) setState(() => _isSaving = false);
     }
@@ -135,7 +145,8 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
     _bodyController.value = TextEditingValue(
       text: newText,
       selection: TextSelection.collapsed(
-          offset: start + left.length + selected.length + right.length),
+        offset: start + left.length + selected.length + right.length,
+      ),
     );
   }
 
@@ -160,12 +171,36 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
         scrollDirection: Axis.horizontal,
         child: Row(
           children: [
-            IconButton(icon: const Icon(Icons.format_bold), color: const Color(0xFF3A2DB0), onPressed: () => _wrapSelection('**', '**')),
-            IconButton(icon: const Icon(Icons.format_italic), color: const Color(0xFF3A2DB0), onPressed: () => _wrapSelection('*', '*')),
-            IconButton(icon: const Icon(Icons.title), color: const Color(0xFF3A2DB0), onPressed: () => _insertLinePrefix('# ')),
-            IconButton(icon: const Icon(Icons.format_list_bulleted), color: const Color(0xFF3A2DB0), onPressed: () => _insertLinePrefix('- ')),
-            IconButton(icon: const Icon(Icons.check_box_outlined), color: const Color(0xFF3A2DB0), onPressed: () => _insertLinePrefix('- [ ] ')),
-            IconButton(icon: const Icon(Icons.code), color: const Color(0xFF3A2DB0), onPressed: () => _wrapSelection('`', '`')),
+            IconButton(
+              icon: const Icon(Icons.format_bold),
+              color: const Color(0xFF3A2DB0),
+              onPressed: () => _wrapSelection('**', '**'),
+            ),
+            IconButton(
+              icon: const Icon(Icons.format_italic),
+              color: const Color(0xFF3A2DB0),
+              onPressed: () => _wrapSelection('*', '*'),
+            ),
+            IconButton(
+              icon: const Icon(Icons.title),
+              color: const Color(0xFF3A2DB0),
+              onPressed: () => _insertLinePrefix('# '),
+            ),
+            IconButton(
+              icon: const Icon(Icons.format_list_bulleted),
+              color: const Color(0xFF3A2DB0),
+              onPressed: () => _insertLinePrefix('- '),
+            ),
+            IconButton(
+              icon: const Icon(Icons.check_box_outlined),
+              color: const Color(0xFF3A2DB0),
+              onPressed: () => _insertLinePrefix('- [ ] '),
+            ),
+            IconButton(
+              icon: const Icon(Icons.code),
+              color: const Color(0xFF3A2DB0),
+              onPressed: () => _wrapSelection('`', '`'),
+            ),
           ],
         ),
       ),
@@ -190,7 +225,11 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
           backgroundColor: Colors.transparent,
           elevation: 0,
           leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new, color: Color(0xFF3A2DB0), size: 20),
+            icon: const Icon(
+              Icons.arrow_back_ios_new,
+              color: Color(0xFF3A2DB0),
+              size: 20,
+            ),
             onPressed: () async {
               final navigator = Navigator.of(context);
               final shouldPop = await _onWillPop();
@@ -209,7 +248,10 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
             ),
             decoration: const InputDecoration(
               hintText: 'Note title',
-              hintStyle: TextStyle(color: Color(0xFF5C5C5C), fontFamily: 'Inter'),
+              hintStyle: TextStyle(
+                color: Color(0xFF5C5C5C),
+                fontFamily: 'Inter',
+              ),
               border: InputBorder.none,
               filled: false,
               contentPadding: EdgeInsets.zero,
@@ -222,18 +264,25 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
               child: Center(
                 child: Text(
                   _statusText(),
-                  style: const TextStyle(fontSize: 12, color: Color(0xFF5C5C5C), fontFamily: 'Inter'),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF5C5C5C),
+                    fontFamily: 'Inter',
+                  ),
                 ),
               ),
             ),
+            if (showProFeature(ref.watch(isProProvider).valueOrNull ?? false))
+              IconButton(
+                icon: const Icon(Icons.label_outline, color: Color(0xFF3A2DB0)),
+                tooltip: 'Tags',
+                onPressed: _editTags,
+              ),
             IconButton(
-              icon: const Icon(Icons.label_outline, color: Color(0xFF3A2DB0)),
-              tooltip: 'Tags',
-              onPressed: _editTags,
-            ),
-            IconButton(
-              icon: Icon(_previewMode ? Icons.edit_outlined : Icons.visibility_outlined,
-                  color: const Color(0xFF3A2DB0)),
+              icon: Icon(
+                _previewMode ? Icons.edit_outlined : Icons.visibility_outlined,
+                color: const Color(0xFF3A2DB0),
+              ),
               onPressed: () => setState(() => _previewMode = !_previewMode),
             ),
           ],
@@ -243,30 +292,47 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
             if (_tags.isNotEmpty)
               Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20,
+                  vertical: 4,
+                ),
                 child: Wrap(
                   spacing: 6,
                   runSpacing: 4,
-                  children: _tags.map((tag) => InkWell(
-                    onTap: _editTags,
-                    borderRadius: BorderRadius.circular(6),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF3A2DB0).withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        tag,
-                        style: const TextStyle(
-                          color: const Color(0xFF3A2DB0),
-                          fontFamily: 'Inter',
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
+                  children: _tags
+                      .map(
+                        (tag) => InkWell(
+                          onTap:
+                              showProFeature(
+                                ref.watch(isProProvider).valueOrNull ?? false,
+                              )
+                              ? _editTags
+                              : null,
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(
+                                0xFF3A2DB0,
+                              ).withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              tag,
+                              style: const TextStyle(
+                                color: const Color(0xFF3A2DB0),
+                                fontFamily: 'Inter',
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
                         ),
-                      ),
-                    ),
-                  )).toList(),
+                      )
+                      .toList(),
                 ),
               ),
             Expanded(
@@ -275,14 +341,26 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
                       data: _bodyController.text.trim().isEmpty
                           ? '*Nothing to preview*'
                           : _bodyController.text,
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 8,
+                      ),
                     )
                   : Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 20,
+                        vertical: 8,
+                      ),
                       child: TextField(
                         controller: _bodyController,
                         cursorColor: const Color(0xFF3A2DB0),
-                        style: const TextStyle(fontSize: 17, color: Color(0xFF111111), fontFamily: 'Inter', height: 1.6, fontWeight: FontWeight.w600),
+                        style: const TextStyle(
+                          fontSize: 17,
+                          color: Color(0xFF111111),
+                          fontFamily: 'Inter',
+                          height: 1.6,
+                          fontWeight: FontWeight.w600,
+                        ),
                         maxLines: null,
                         expands: true,
                         // Measured 2026-09-18 on this exact screen (widget probe,
@@ -300,7 +378,10 @@ class _NoteEditorScreenState extends ConsumerState<NoteEditorScreen> with Widget
                         textCapitalization: TextCapitalization.sentences,
                         decoration: const InputDecoration(
                           hintText: 'Start typing… (Markdown supported)',
-                          hintStyle: TextStyle(color: Color(0xFF5C5C5C), fontFamily: 'Inter'),
+                          hintStyle: TextStyle(
+                            color: Color(0xFF5C5C5C),
+                            fontFamily: 'Inter',
+                          ),
                           border: InputBorder.none,
                           filled: false,
                           contentPadding: EdgeInsets.symmetric(vertical: 12),

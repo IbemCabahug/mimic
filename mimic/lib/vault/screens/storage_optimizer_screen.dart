@@ -1,4 +1,5 @@
 // mimic/lib/vault/screens/storage_optimizer_screen.dart
+import '../services/pro_offer_policy.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/theme/app_theme.dart';
@@ -10,7 +11,8 @@ class StorageOptimizerScreen extends ConsumerStatefulWidget {
   const StorageOptimizerScreen({super.key});
 
   @override
-  ConsumerState<StorageOptimizerScreen> createState() => _StorageOptimizerScreenState();
+  ConsumerState<StorageOptimizerScreen> createState() =>
+      _StorageOptimizerScreenState();
 }
 
 class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
@@ -30,6 +32,8 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
   }
 
   Future<void> _loadAnalysis() async {
+    final isPro = await ref.read(isProProvider.future);
+    if (!mounted || !showProFeature(isPro)) return;
     setState(() => _isLoading = true);
     try {
       final service = ref.read(storageOptimizerServiceProvider);
@@ -55,8 +59,9 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
   }
 
   int _getSelectedBytes(StorageOptimizationReport report) {
-    return _getSelectedFiles(report)
-        .fold<int>(0, (sum, f) => sum + f.sizeBytes);
+    return _getSelectedFiles(
+      report,
+    ).fold<int>(0, (sum, f) => sum + f.sizeBytes);
   }
 
   void _selectAllDuplicates(StorageOptimizationReport report) {
@@ -101,7 +106,9 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Text('Delete File?'),
-        content: Text('Are you sure you want to permanently delete "${file.name}" (${file.formattedSize})?'),
+        content: Text(
+          'Are you sure you want to permanently delete "${file.name}" (${file.formattedSize})?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(false),
@@ -117,7 +124,9 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
     );
 
     if (confirmed == true) {
-      await ref.read(storageOptimizerServiceProvider).deleteOptimizableFile(file);
+      await ref
+          .read(storageOptimizerServiceProvider)
+          .deleteOptimizableFile(file);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -144,7 +153,8 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
     if (files.isEmpty) return;
 
     final totalBytes = files.fold<int>(0, (sum, f) => sum + f.sizeBytes);
-    final formattedSize = _report?.formatBytes(totalBytes) ?? '${files.length} files';
+    final formattedSize =
+        _report?.formatBytes(totalBytes) ?? '${files.length} files';
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -158,7 +168,10 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
             Expanded(
               child: Text(
                 title,
-                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ],
@@ -174,11 +187,17 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
               decoration: BoxDecoration(
                 color: VaultColors.success.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: VaultColors.success.withValues(alpha: 0.3)),
+                border: Border.all(
+                  color: VaultColors.success.withValues(alpha: 0.3),
+                ),
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.security, color: VaultColors.success, size: 20),
+                  const Icon(
+                    Icons.security,
+                    color: VaultColors.success,
+                    size: 20,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -205,7 +224,9 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
             style: ElevatedButton.styleFrom(
               backgroundColor: VaultColors.error,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             child: Text('Delete ${files.length} Copies'),
           ),
@@ -224,7 +245,9 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
         });
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Deleted $count duplicate copies ($formattedSize freed)'),
+            content: Text(
+              'Deleted $count duplicate copies ($formattedSize freed)',
+            ),
             backgroundColor: VaultColors.success,
           ),
         );
@@ -233,7 +256,9 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
     }
   }
 
-  Future<void> _confirmCleanAllDuplicates(StorageOptimizationReport report) async {
+  Future<void> _confirmCleanAllDuplicates(
+    StorageOptimizationReport report,
+  ) async {
     final allCopies = report.allDuplicateCopies;
     await _confirmDeleteBatch(
       allCopies,
@@ -263,6 +288,14 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
   Widget build(BuildContext context) {
     final isPro = ref.watch(isProProvider).valueOrNull ?? false;
 
+    if (!showProFeature(isPro)) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('Storage')),
+        body: const Center(
+          child: Text('This feature is currently unavailable.'),
+        ),
+      );
+    }
     return Scaffold(
       backgroundColor: VaultColors.background,
       appBar: AppBar(
@@ -289,40 +322,42 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
         backgroundColor: Colors.transparent,
       ),
       body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: VaultColors.accent))
+          ? const Center(
+              child: CircularProgressIndicator(color: VaultColors.accent),
+            )
           : _report == null
-              ? const Center(child: Text('Unable to analyze storage'))
-              : Column(
-                  children: [
-                    if (!isPro) _buildProBanner(),
-                    _buildStorageHeader(_report!),
-                    TabBar(
-                      controller: _tabController,
-                      indicatorColor: VaultColors.accent,
-                      labelColor: VaultColors.accent,
-                      unselectedLabelColor: VaultColors.textSecondary,
-                      tabs: [
-                        Tab(
-                          text: 'Duplicates (${_report!.duplicateGroups.length})',
-                          icon: const Icon(Icons.copy_outlined, size: 20),
-                        ),
-                        Tab(
-                          text: 'Large Files (${_report!.largeFiles.length})',
-                          icon: const Icon(Icons.video_library_outlined, size: 20),
-                        ),
-                      ],
+          ? const Center(child: Text('Unable to analyze storage'))
+          : Column(
+              children: [
+                if (!isPro) _buildProBanner(),
+                _buildStorageHeader(_report!),
+                TabBar(
+                  controller: _tabController,
+                  indicatorColor: VaultColors.accent,
+                  labelColor: VaultColors.accent,
+                  unselectedLabelColor: VaultColors.textSecondary,
+                  tabs: [
+                    Tab(
+                      text: 'Duplicates (${_report!.duplicateGroups.length})',
+                      icon: const Icon(Icons.copy_outlined, size: 20),
                     ),
-                    Expanded(
-                      child: TabBarView(
-                        controller: _tabController,
-                        children: [
-                          _buildDuplicatesTab(_report!),
-                          _buildLargeFilesTab(_report!),
-                        ],
-                      ),
+                    Tab(
+                      text: 'Large Files (${_report!.largeFiles.length})',
+                      icon: const Icon(Icons.video_library_outlined, size: 20),
                     ),
                   ],
                 ),
+                Expanded(
+                  child: TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildDuplicatesTab(_report!),
+                      _buildLargeFilesTab(_report!),
+                    ],
+                  ),
+                ),
+              ],
+            ),
     );
   }
 
@@ -354,14 +389,21 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
                 ),
                 Text(
                   '1-tap removal of duplicates and large file management requires Pro.',
-                  style: TextStyle(fontFamily: 'Inter', fontSize: 11, color: Color(0xFF7A6200)),
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 11,
+                    color: Color(0xFF7A6200),
+                  ),
                 ),
               ],
             ),
           ),
           TextButton(
             onPressed: () => showPaywallSheet(context),
-            child: const Text('Upgrade', style: TextStyle(fontWeight: FontWeight.bold)),
+            child: const Text(
+              'Upgrade',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
           ),
         ],
       ),
@@ -431,9 +473,7 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
                       child: Container(color: const Color(0xFF006874)),
                     ),
                   if (report.totalBytes == 0)
-                    Expanded(
-                      child: Container(color: Colors.grey.shade300),
-                    ),
+                    Expanded(child: Container(color: Colors.grey.shade300)),
                 ],
               ),
             ),
@@ -469,7 +509,11 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
               ),
               child: Row(
                 children: [
-                  const Icon(Icons.cleaning_services_outlined, color: VaultColors.success, size: 20),
+                  const Icon(
+                    Icons.cleaning_services_outlined,
+                    color: VaultColors.success,
+                    size: 20,
+                  ),
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
@@ -491,7 +535,11 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
     );
   }
 
-  Widget _buildLegend({required Color color, required String label, required String size}) {
+  Widget _buildLegend({
+    required Color color,
+    required String label,
+    required String size,
+  }) {
     return Row(
       children: [
         Container(
@@ -503,8 +551,21 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
         Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: const TextStyle(fontSize: 11, color: VaultColors.textSecondary)),
-            Text(size, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: VaultColors.textPrimary)),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 11,
+                color: VaultColors.textSecondary,
+              ),
+            ),
+            Text(
+              size,
+              style: const TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: VaultColors.textPrimary,
+              ),
+            ),
           ],
         ),
       ],
@@ -519,16 +580,27 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.check_circle_outline, color: VaultColors.success, size: 48),
+              Icon(
+                Icons.check_circle_outline,
+                color: VaultColors.success,
+                size: 48,
+              ),
               SizedBox(height: 12),
               Text(
                 'No Duplicate Files Found',
-                style: TextStyle(fontFamily: 'Inter', fontSize: 16, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               SizedBox(height: 4),
               Text(
                 'All media items in your vault are unique.',
-                style: TextStyle(color: VaultColors.textSecondary, fontSize: 13),
+                style: TextStyle(
+                  color: VaultColors.textSecondary,
+                  fontSize: 13,
+                ),
               ),
             ],
           ),
@@ -537,7 +609,8 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
     }
 
     final totalDuplicates = report.allDuplicateCopies.length;
-    final allSelected = totalDuplicates > 0 && _selectedFileIds.length >= totalDuplicates;
+    final allSelected =
+        totalDuplicates > 0 && _selectedFileIds.length >= totalDuplicates;
     final someSelected = _selectedFileIds.isNotEmpty;
 
     return Stack(
@@ -554,7 +627,9 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
             const SizedBox(height: 12),
 
             // 3. Duplicate Groups Cards
-            ...report.duplicateGroups.map((group) => _buildDuplicateGroupCard(report, group)),
+            ...report.duplicateGroups.map(
+              (group) => _buildDuplicateGroupCard(report, group),
+            ),
           ],
         ),
 
@@ -593,7 +668,11 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
               color: VaultColors.accent.withValues(alpha: 0.15),
               shape: BoxShape.circle,
             ),
-            child: const Icon(Icons.auto_delete_outlined, color: VaultColors.accent, size: 24),
+            child: const Icon(
+              Icons.auto_delete_outlined,
+              color: VaultColors.accent,
+              size: 24,
+            ),
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -625,12 +704,17 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
           ElevatedButton.icon(
             onPressed: () => _confirmCleanAllDuplicates(report),
             icon: const Icon(Icons.cleaning_services_rounded, size: 16),
-            label: const Text('Clean All', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+            label: const Text(
+              'Clean All',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+            ),
             style: ElevatedButton.styleFrom(
               backgroundColor: VaultColors.accent,
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
               elevation: 0,
             ),
           ),
@@ -677,7 +761,9 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
                     },
                   ),
                   Text(
-                    allSelected ? 'Deselect All' : 'Select All ($totalDuplicates)',
+                    allSelected
+                        ? 'Deselect All'
+                        : 'Select All ($totalDuplicates)',
                     style: const TextStyle(
                       fontFamily: 'Inter',
                       fontSize: 13,
@@ -703,7 +789,13 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
             const SizedBox(width: 4),
             TextButton(
               onPressed: _deselectAll,
-              child: const Text('Clear', style: TextStyle(fontSize: 12, color: VaultColors.textSecondary)),
+              child: const Text(
+                'Clear',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: VaultColors.textSecondary,
+                ),
+              ),
             ),
           ],
         ],
@@ -711,7 +803,10 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
     );
   }
 
-  Widget _buildDuplicateGroupCard(StorageOptimizationReport report, DuplicateGroup group) {
+  Widget _buildDuplicateGroupCard(
+    StorageOptimizationReport report,
+    DuplicateGroup group,
+  ) {
     final isGroupSelected = _isGroupFullySelected(group);
 
     return Card(
@@ -756,17 +851,26 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
                 TextButton.icon(
                   onPressed: () => _toggleGroupSelection(group),
                   icon: Icon(
-                    isGroupSelected ? Icons.check_box : Icons.check_box_outline_blank,
+                    isGroupSelected
+                        ? Icons.check_box
+                        : Icons.check_box_outline_blank,
                     size: 16,
                     color: VaultColors.accent,
                   ),
                   label: Text(
                     isGroupSelected ? 'Deselect Group' : 'Select Group',
-                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: VaultColors.accent),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      color: VaultColors.accent,
+                    ),
                   ),
                   style: TextButton.styleFrom(
                     visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                   ),
                 ),
               ],
@@ -780,7 +884,10 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
 
               return Container(
                 margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(12),
@@ -788,8 +895,8 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
                     color: isOriginal
                         ? VaultColors.success.withValues(alpha: 0.6)
                         : isSelected
-                            ? VaultColors.accent.withValues(alpha: 0.6)
-                            : Colors.grey.shade300,
+                        ? VaultColors.accent.withValues(alpha: 0.6)
+                        : Colors.grey.shade300,
                     width: (isOriginal || isSelected) ? 1.5 : 1,
                   ),
                 ),
@@ -802,7 +909,11 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
                           color: VaultColors.success.withValues(alpha: 0.12),
                           shape: BoxShape.circle,
                         ),
-                        child: const Icon(Icons.verified, color: VaultColors.success, size: 18),
+                        child: const Icon(
+                          Icons.verified,
+                          color: VaultColors.success,
+                          size: 18,
+                        ),
                       )
                     else
                       Checkbox(
@@ -826,26 +937,41 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
                           Row(
                             children: [
                               Text(
-                                isOriginal ? 'Original Copy' : 'Duplicate #$fileIdx',
+                                isOriginal
+                                    ? 'Original Copy'
+                                    : 'Duplicate #$fileIdx',
                                 style: TextStyle(
                                   fontFamily: 'Inter',
                                   fontSize: 13,
-                                  fontWeight: isOriginal ? FontWeight.bold : FontWeight.w600,
-                                  color: isOriginal ? VaultColors.success : VaultColors.textPrimary,
+                                  fontWeight: isOriginal
+                                      ? FontWeight.bold
+                                      : FontWeight.w600,
+                                  color: isOriginal
+                                      ? VaultColors.success
+                                      : VaultColors.textPrimary,
                                 ),
                               ),
                               if (isOriginal) ...[
                                 const SizedBox(width: 6),
                                 Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 6,
+                                    vertical: 2,
+                                  ),
                                   decoration: BoxDecoration(
-                                    color: VaultColors.success.withValues(alpha: 0.12),
+                                    color: VaultColors.success.withValues(
+                                      alpha: 0.12,
+                                    ),
                                     borderRadius: BorderRadius.circular(6),
                                   ),
                                   child: const Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Icon(Icons.lock_outline, size: 10, color: VaultColors.success),
+                                      Icon(
+                                        Icons.lock_outline,
+                                        size: 10,
+                                        color: VaultColors.success,
+                                      ),
                                       SizedBox(width: 3),
                                       Text(
                                         'PROTECTED',
@@ -864,14 +990,21 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
                           const SizedBox(height: 2),
                           Text(
                             file.formattedSize,
-                            style: const TextStyle(fontSize: 11, color: VaultColors.textSecondary),
+                            style: const TextStyle(
+                              fontSize: 11,
+                              color: VaultColors.textSecondary,
+                            ),
                           ),
                         ],
                       ),
                     ),
                     if (!isOriginal)
                       IconButton(
-                        icon: const Icon(Icons.delete_outline, color: VaultColors.error, size: 20),
+                        icon: const Icon(
+                          Icons.delete_outline,
+                          color: VaultColors.error,
+                          size: 20,
+                        ),
                         tooltip: 'Delete Duplicate',
                         onPressed: () => _confirmDelete(file),
                       ),
@@ -934,12 +1067,17 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
           ElevatedButton.icon(
             onPressed: () => _confirmDeleteSelected(report),
             icon: const Icon(Icons.delete_sweep_outlined, size: 18),
-            label: const Text('Delete Selected', style: TextStyle(fontWeight: FontWeight.bold)),
+            label: const Text(
+              'Delete Selected',
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
             style: ElevatedButton.styleFrom(
               backgroundColor: VaultColors.error,
               foregroundColor: Colors.white,
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
               elevation: 0,
             ),
           ),
@@ -956,16 +1094,27 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(Icons.check_circle_outline, color: VaultColors.success, size: 48),
+              Icon(
+                Icons.check_circle_outline,
+                color: VaultColors.success,
+                size: 48,
+              ),
               SizedBox(height: 12),
               Text(
                 'No Large Files Found',
-                style: TextStyle(fontFamily: 'Inter', fontSize: 16, fontWeight: FontWeight.bold),
+                style: TextStyle(
+                  fontFamily: 'Inter',
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               SizedBox(height: 4),
               Text(
                 'No single media item exceeds 20 MB.',
-                style: TextStyle(color: VaultColors.textSecondary, fontSize: 13),
+                style: TextStyle(
+                  color: VaultColors.textSecondary,
+                  fontSize: 13,
+                ),
               ),
             ],
           ),
@@ -1036,14 +1185,19 @@ class _StorageOptimizerScreenState extends ConsumerState<StorageOptimizerScreen>
                         fontFamily: 'Inter',
                         fontSize: 12,
                         fontWeight: FontWeight.bold,
-                        color: file.sizeBytes > 50 * 1024 * 1024 ? VaultColors.error : VaultColors.accent,
+                        color: file.sizeBytes > 50 * 1024 * 1024
+                            ? VaultColors.error
+                            : VaultColors.accent,
                       ),
                     ),
                   ],
                 ),
               ),
               IconButton(
-                icon: const Icon(Icons.delete_outline, color: VaultColors.error),
+                icon: const Icon(
+                  Icons.delete_outline,
+                  color: VaultColors.error,
+                ),
                 tooltip: 'Delete File',
                 onPressed: () => _confirmDelete(file),
               ),

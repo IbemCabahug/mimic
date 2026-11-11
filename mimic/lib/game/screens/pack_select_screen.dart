@@ -1,4 +1,5 @@
 // lib/game/screens/pack_select_screen.dart
+import '../../vault/services/pro_offer_policy.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -81,6 +82,9 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
   @override
   Widget build(BuildContext context) {
     final isPro = ref.watch(isProProvider).value ?? false;
+    final visiblePacks = WordPackData.packs
+        .where((pack) => !pack.isProOnly || showProFeature(isPro))
+        .toList();
     return Scaffold(
       backgroundColor: HorrorColors.voidBlack,
       appBar: AppBar(
@@ -101,7 +105,10 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
           children: [
             // Instructions
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 12.0),
+              padding: const EdgeInsets.symmetric(
+                horizontal: 20.0,
+                vertical: 12.0,
+              ),
               child: Text(
                 'MIX 1 TO 3 THEME PACKS FOR THIS ROUND',
                 textAlign: TextAlign.center,
@@ -115,10 +122,13 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
 
             Expanded(
               child: ListView.builder(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0, vertical: 10.0),
-                itemCount: WordPackData.packs.length,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 20.0,
+                  vertical: 10.0,
+                ),
+                itemCount: visiblePacks.length,
                 itemBuilder: (context, index) {
-                  final pack = WordPackData.packs[index];
+                  final pack = visiblePacks[index];
                   final isSelected = _selectedPackIds.contains(pack.id);
 
                   return Padding(
@@ -132,16 +142,20 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
                           color: HorrorColors.cardSurface,
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(
-                            color: isSelected ? HorrorColors.crimson : HorrorColors.darkRedTint,
+                            color: isSelected
+                                ? HorrorColors.crimson
+                                : HorrorColors.darkRedTint,
                             width: isSelected ? 2.0 : 1.0,
                           ),
                           boxShadow: isSelected
                               ? [
                                   BoxShadow(
-                                    color: HorrorColors.crimson.withValues(alpha: 0.15),
+                                    color: HorrorColors.crimson.withValues(
+                                      alpha: 0.15,
+                                    ),
                                     blurRadius: 8,
                                     spreadRadius: 1,
-                                  )
+                                  ),
                                 ]
                               : null,
                         ),
@@ -156,13 +170,17 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
                                   padding: const EdgeInsets.all(10),
                                   decoration: BoxDecoration(
                                     color: isSelected
-                                        ? HorrorColors.crimson.withValues(alpha: 0.1)
+                                        ? HorrorColors.crimson.withValues(
+                                            alpha: 0.1,
+                                          )
                                         : HorrorColors.deepSurface,
                                     shape: BoxShape.circle,
                                   ),
                                   child: Icon(
                                     pack.icon,
-                                    color: isSelected ? HorrorColors.crimson : HorrorColors.ashGray,
+                                    color: isSelected
+                                        ? HorrorColors.crimson
+                                        : HorrorColors.ashGray,
                                     size: 28,
                                   ),
                                 ),
@@ -192,7 +210,8 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
                                     children: [
                                       Row(
                                         children: [
@@ -200,32 +219,54 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
                                             pack.name.toUpperCase(),
                                             style: GoogleFonts.creepster(
                                               fontSize: 20,
-                                              color: isSelected ? HorrorColors.crimson : HorrorColors.fogWhite,
+                                              color: isSelected
+                                                  ? HorrorColors.crimson
+                                                  : HorrorColors.fogWhite,
                                               letterSpacing: 1.0,
                                             ),
                                           ),
-                                          if (pack.isProOnly) ...[
+                                          if (pack.isProOnly &&
+                                              kProOffersVisible) ...[
                                             const SizedBox(width: 8),
                                             Container(
-                                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                              padding:
+                                                  const EdgeInsets.symmetric(
+                                                    horizontal: 6,
+                                                    vertical: 2,
+                                                  ),
                                               decoration: BoxDecoration(
-                                                color: const Color(0xFFD97706).withValues(alpha: 0.2),
-                                                borderRadius: BorderRadius.circular(4),
-                                                border: Border.all(color: const Color(0xFFF59E0B), width: 1),
+                                                color: const Color(
+                                                  0xFFD97706,
+                                                ).withValues(alpha: 0.2),
+                                                borderRadius:
+                                                    BorderRadius.circular(4),
+                                                border: Border.all(
+                                                  color: const Color(
+                                                    0xFFF59E0B,
+                                                  ),
+                                                  width: 1,
+                                                ),
                                               ),
                                               child: Row(
                                                 mainAxisSize: MainAxisSize.min,
                                                 children: [
                                                   if (!isPro) ...[
-                                                    const Icon(Icons.lock_outline, size: 10, color: Color(0xFFFBBF24)),
+                                                    const Icon(
+                                                      Icons.lock_outline,
+                                                      size: 10,
+                                                      color: Color(0xFFFBBF24),
+                                                    ),
                                                     const SizedBox(width: 3),
                                                   ],
                                                   Text(
                                                     'PRO',
                                                     style: GoogleFonts.inter(
-                                                      color: const Color(0xFFFBBF24),
+                                                      color: const Color(
+                                                        0xFFFBBF24,
+                                                      ),
                                                       fontSize: 10,
-                                                      fontWeight: FontWeight.w800,
+                                                      fontWeight:
+                                                          FontWeight.w800,
                                                       letterSpacing: 0.8,
                                                     ),
                                                   ),
@@ -237,11 +278,20 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
                                       ),
                                       // Word count badge
                                       Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
                                         decoration: BoxDecoration(
-                                          color: HorrorColors.crimson.withValues(alpha: 0.15),
-                                          borderRadius: BorderRadius.circular(10),
-                                          border: Border.all(color: HorrorColors.crimson, width: 0.8),
+                                          color: HorrorColors.crimson
+                                              .withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(
+                                            10,
+                                          ),
+                                          border: Border.all(
+                                            color: HorrorColors.crimson,
+                                            width: 0.8,
+                                          ),
                                         ),
                                         child: Text(
                                           '${pack.pairs.length} PAIRS',
@@ -284,13 +334,18 @@ class _PackSelectScreenState extends ConsumerState<PackSelectScreen> {
                   width: double.infinity,
                   height: 52,
                   child: ElevatedButton(
-                    onPressed: _selectedPackIds.isNotEmpty ? _confirmSelection : null,
+                    onPressed: _selectedPackIds.isNotEmpty
+                        ? _confirmSelection
+                        : null,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: HorrorColors.crimson,
                       foregroundColor: HorrorColors.fogWhite,
                       disabledBackgroundColor: HorrorColors.cardSurface,
                       disabledForegroundColor: HorrorColors.ashGray,
-                      side: const BorderSide(color: HorrorColors.bloodRed, width: 1.5),
+                      side: const BorderSide(
+                        color: HorrorColors.bloodRed,
+                        width: 1.5,
+                      ),
                       elevation: 4,
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(8),
