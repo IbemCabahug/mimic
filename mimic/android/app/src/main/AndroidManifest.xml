@@ -17,7 +17,7 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
 
     <application
-        android:label="mimic"
+        android:label="${mimicAppLabel}"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:largeHeap="true"
@@ -27,7 +27,7 @@
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules">
         <activity
-            android:name=".MainActivity"
+            android:name="com.ibem.mimic.MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:taskAffinity=""
@@ -50,12 +50,12 @@
             </intent-filter>
         </activity>
         <activity-alias
-            android:name=".LauncherAlias"
-            android:targetActivity=".MainActivity"
+            android:name="${applicationId}.LauncherAlias"
+            android:targetActivity="com.ibem.mimic.MainActivity"
             android:enabled="true"
             android:exported="true"
             android:icon="@mipmap/ic_launcher"
-            android:label="mimic">
+            android:label="${mimicAppLabel}">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

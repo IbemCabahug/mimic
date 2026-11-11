@@ -30,6 +30,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../core/services/platform_service.dart';
+import 'activation_receipt_verifier.dart';
+import 'activation_receipt_configuration.dart';
 import 'pro_status_service.dart';
 
 /// Supported offline license types.
@@ -68,27 +70,35 @@ class LicenseValidationResult {
 
   static const LicenseValidationResult invalidFormat = LicenseValidationResult(
     isValid: false,
-    errorMessage: 'Invalid license key format. Please enter a valid 16-character code.',
+    errorMessage:
+        'Invalid license key format. Please enter a valid 16-character code.',
   );
 
-  static const LicenseValidationResult signatureMismatch = LicenseValidationResult(
+  static const LicenseValidationResult
+  signatureMismatch = LicenseValidationResult(
     isValid: false,
-    errorMessage: 'Invalid or unrecognized activation code. Please double-check and try again.',
+    errorMessage:
+        'Invalid or unrecognized activation code. Please double-check and try again.',
   );
 
-  static const LicenseValidationResult unsupportedType = LicenseValidationResult(
+  static const LicenseValidationResult unsupportedType =
+      LicenseValidationResult(
+        isValid: false,
+        errorMessage: 'Unsupported license type.',
+      );
+
+  static const LicenseValidationResult
+  deviceLimitReached = LicenseValidationResult(
     isValid: false,
-    errorMessage: 'Unsupported license type.',
+    errorMessage:
+        'This activation code has already reached its maximum device limit (2 devices).',
   );
 
-  static const LicenseValidationResult deviceLimitReached = LicenseValidationResult(
+  static const LicenseValidationResult
+  networkRequired = LicenseValidationResult(
     isValid: false,
-    errorMessage: 'This activation code has already reached its maximum device limit (2 devices).',
-  );
-
-  static const LicenseValidationResult networkRequired = LicenseValidationResult(
-    isValid: false,
-    errorMessage: 'Internet connection is required once to activate this device. Please connect to Wi-Fi or mobile data.',
+    errorMessage:
+        'Internet connection is required once to activate this device. Please connect to Wi-Fi or mobile data.',
   );
 }
 
@@ -135,6 +145,7 @@ const String kStoredLicenseKey = 'pro_offline_license_key';
 const String kStoredLicenseRedeemedAt = 'pro_offline_license_redeemed_at';
 const String kStoredLicenseTypeCode = 'pro_offline_license_type_code';
 const String kStoredLicenseDeviceId = 'pro_offline_device_id';
+const String kStoredActivationReceipt = 'pro_activation_receipt_v1';
 
 class LicenseService {
   LicenseService({
@@ -142,18 +153,37 @@ class LicenseService {
     required ProStatusService proStatus,
     String? secretKey,
     String? activationUrl,
-    Future<Map<String, dynamic>> Function(String url, Map<String, dynamic> body)? httpPoster,
-  })  : _platform = platform,
-        _proStatus = proStatus,
-        _secretKey = (secretKey ?? kCompileTimeLicenseSecret).trim(),
-        _activationUrl = (activationUrl ?? kCompileTimeActivationUrl).trim(),
-        _httpPoster = httpPoster;
+    this.requireSignedReceipt = false,
+    ActivationReceiptVerifier? receiptVerifier,
+    @visibleForTesting String Function()? nonceGenerator,
+    Future<Map<String, dynamic>> Function(
+      String url,
+      Map<String, dynamic> body,
+    )?
+    httpPoster,
+  }) : _platform = platform,
+       _proStatus = proStatus,
+       _secretKey = (secretKey ?? kCompileTimeLicenseSecret).trim(),
+       _activationUrl = (activationUrl ?? kCompileTimeActivationUrl).trim(),
+       _httpPoster = httpPoster,
+       _receiptVerifier = receiptVerifier,
+       _nonceGenerator = nonceGenerator ?? _newReceiptNonce;
 
   final PlatformService _platform;
   final ProStatusService _proStatus;
   final String _secretKey;
   final String _activationUrl;
-  final Future<Map<String, dynamic>> Function(String url, Map<String, dynamic> body)? _httpPoster;
+
+  /// Explicit migration opt-in. Missing verifier never falls back to HMAC.
+  /// The provider enables this only via explicit staging build configuration.
+  final bool requireSignedReceipt;
+  final ActivationReceiptVerifier? _receiptVerifier;
+  final String Function() _nonceGenerator;
+  final Future<Map<String, dynamic>> Function(
+    String url,
+    Map<String, dynamic> body,
+  )?
+  _httpPoster;
 
   /// Retrieves or generates a persistent Device ID for this install.
   /// On Android, utilizes Settings.Secure.ANDROID_ID which survives app
@@ -232,7 +262,10 @@ class LicenseService {
     final tagBytes = _computeTag(payloadBytes);
 
     final allBytes = [...payloadBytes, ...tagBytes];
-    final hexString = allBytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join().toUpperCase();
+    final hexString = allBytes
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join()
+        .toUpperCase();
 
     return 'MIMIC-${hexString.substring(0, 4)}-${hexString.substring(4, 8)}-${hexString.substring(8, 12)}-${hexString.substring(12, 16)}';
   }
@@ -279,7 +312,8 @@ class LicenseService {
       return LicenseValidationResult.unsupportedType;
     }
 
-    final formatted = 'MIMIC-${hex16.substring(0, 4)}-${hex16.substring(4, 8)}-${hex16.substring(8, 12)}-${hex16.substring(12, 16)}';
+    final formatted =
+        'MIMIC-${hex16.substring(0, 4)}-${hex16.substring(4, 8)}-${hex16.substring(8, 12)}-${hex16.substring(12, 16)}';
 
     return LicenseValidationResult(
       isValid: true,
@@ -293,6 +327,7 @@ class LicenseService {
   /// If an activation server is configured, performs a 1-time device registration
   /// check to enforce the 2-device limit. Once redeemed, Pro is unlocked permanently offline.
   Future<LicenseValidationResult> redeemKey(String rawInput) async {
+    if (requireSignedReceipt) return _redeemSignedReceipt(rawInput);
     // 1. First verify cryptographic validity locally
     final validation = validateKey(rawInput);
     if (!validation.isSuccess) {
@@ -328,7 +363,8 @@ class LicenseService {
           if (error == 'DEVICE_LIMIT_REACHED') {
             return LicenseValidationResult.deviceLimitReached;
           }
-          final msg = responseData['message']?.toString() ??
+          final msg =
+              responseData['message']?.toString() ??
               'Activation was not authorized. Please check your key.';
           return LicenseValidationResult(isValid: false, errorMessage: msg);
         }
@@ -381,13 +417,128 @@ class LicenseService {
     }
   }
 
+  static String _newReceiptNonce() {
+    final random = Random.secure();
+    return base64Url
+        .encode(List.generate(32, (_) => random.nextInt(256)))
+        .replaceAll('=', '');
+  }
+
+  /// New activation path: syntax is not authorization. Only a verified, bound
+  /// server receipt permits writes, and the entitlement is always written last.
+  Future<LicenseValidationResult> _redeemSignedReceipt(String rawInput) async {
+    const unavailable = LicenseValidationResult(
+      isValid: false,
+      errorMessage:
+          'Secure activation is not configured in this build. Please contact support.',
+    );
+    const rejected = LicenseValidationResult(
+      isValid: false,
+      errorMessage:
+          'Activation could not be verified. Please try again or contact support.',
+    );
+    final endpoint = Uri.tryParse(_activationUrl);
+    if (_receiptVerifier == null ||
+        endpoint == null ||
+        endpoint.scheme != 'https' ||
+        endpoint.host.isEmpty ||
+        endpoint.userInfo.isNotEmpty ||
+        endpoint.hasFragment) {
+      return unavailable;
+    }
+    if (rawInput.length > 128) return LicenseValidationResult.invalidFormat;
+    final code = sanitizeAndFormatKey(rawInput);
+    if (code == null) return LicenseValidationResult.invalidFormat;
+    final type = LicenseType.fromCode(
+      int.parse(code.substring(6, 8), radix: 16),
+    );
+    if (type == LicenseType.unknown) {
+      return LicenseValidationResult.unsupportedType;
+    }
+
+    late final Map<String, dynamic> receipt;
+    late final String deviceId;
+    try {
+      deviceId = await getOrCreateDeviceId();
+      final nonce = _nonceGenerator();
+      // Reject invalid local nonce configuration before contacting the service.
+      if (!RegExp(r'^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$').hasMatch(nonce)) {
+        return unavailable;
+      }
+      final response = await (_httpPoster ?? _defaultHttpPost)(_activationUrl, {
+        'action': 'activate',
+        'key': code,
+        'deviceId': deviceId,
+        'receiptVersion': 1,
+        'nonce': nonce,
+      }).timeout(const Duration(seconds: 25));
+      if (response['success'] != true) {
+        return response['error'] == 'DEVICE_LIMIT_REACHED'
+            ? LicenseValidationResult.deviceLimitReached
+            : rejected;
+      }
+      if (response['receiptVersion'] is! int ||
+          response['receiptVersion'] != 1 ||
+          response['receipt'] is! Map<String, dynamic>) {
+        return rejected;
+      }
+      receipt = Map<String, dynamic>.from(response['receipt'] as Map);
+      final verified = _receiptVerifier.verify(
+        receipt,
+        licenseCode: code,
+        deviceId: deviceId,
+        requestNonce: nonce,
+      );
+      if (verified == null) return rejected;
+    } on SocketException {
+      return LicenseValidationResult.networkRequired;
+    } on TimeoutException {
+      return const LicenseValidationResult(
+        isValid: false,
+        errorMessage: 'Activation request timed out. Please try again.',
+      );
+    } catch (_) {
+      // Never display raw response bodies, server exceptions or request values.
+      return rejected;
+    }
+
+    try {
+      await _platform.secureWrite(
+        kStoredActivationReceipt,
+        jsonEncode(receipt),
+      );
+      await _platform.secureWrite(kStoredLicenseKey, code);
+      await _platform.secureWrite(
+        kStoredLicenseRedeemedAt,
+        DateTime.now().toUtc().toIso8601String(),
+      );
+      await _platform.secureWrite(kStoredLicenseTypeCode, type.code.toString());
+      await _platform.secureWrite(kStoredLicenseDeviceId, deviceId);
+      await _proStatus.grantPro();
+      return LicenseValidationResult(
+        isValid: true,
+        type: type,
+        formattedKey: code,
+      );
+    } catch (_) {
+      // Partial metadata may remain for retry; never delete an existing Pro
+      // entitlement (including one granted independently by Google Play).
+      return const LicenseValidationResult(
+        isValid: false,
+        errorMessage: 'Failed to securely store license. Please try again.',
+      );
+    }
+  }
+
   /// Retrieves the currently redeemed license info if available.
   Future<LicenseInfo?> getRedeemedLicense() async {
     try {
       final key = await _platform.secureRead(kStoredLicenseKey);
       if (key == null || key.isEmpty) return null;
 
-      final redeemedAtStr = await _platform.secureRead(kStoredLicenseRedeemedAt);
+      final redeemedAtStr = await _platform.secureRead(
+        kStoredLicenseRedeemedAt,
+      );
       final typeCodeStr = await _platform.secureRead(kStoredLicenseTypeCode);
       final deviceId = await _platform.secureRead(kStoredLicenseDeviceId);
 
@@ -443,7 +594,9 @@ class LicenseService {
         await response.drain();
         if (redirectUrl != null && redirectUrl.isNotEmpty) {
           final getRequest = await client.getUrl(Uri.parse(redirectUrl));
-          response = await getRequest.close().timeout(const Duration(seconds: 25));
+          response = await getRequest.close().timeout(
+            const Duration(seconds: 25),
+          );
         } else {
           break;
         }
@@ -466,5 +619,11 @@ class LicenseService {
 final licenseServiceProvider = Provider<LicenseService>((ref) {
   final platform = ref.read(platformServiceProvider);
   final proStatus = ref.read(proStatusServiceProvider);
-  return LicenseService(platform: platform, proStatus: proStatus);
+  const config = ActivationReceiptConfiguration.fromEnvironment();
+  return LicenseService(
+    platform: platform,
+    proStatus: proStatus,
+    requireSignedReceipt: config.enabled,
+    receiptVerifier: config.createVerifier(),
+  );
 });

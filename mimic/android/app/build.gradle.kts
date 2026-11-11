@@ -1,4 +1,5 @@
 import java.util.Properties
+import java.util.Base64
 import java.io.FileInputStream
 
 plugins {
@@ -6,6 +7,13 @@ plugins {
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
+
+// Opt-in only. Existing release commands retain the production identity.
+val mimicStagingDefine = providers.gradleProperty("dart-defines").orNull
+    ?.split(",")?.any {
+        String(Base64.getDecoder().decode(it), Charsets.UTF_8) == "MIMIC_STAGING=true"
+    } ?: false
+val mimicStaging = providers.gradleProperty("mimicStaging").orNull == "true" || mimicStagingDefine
 
 val keystorePropertiesFile = rootProject.file("key.properties")
 val keystoreProperties = Properties()
@@ -44,7 +52,8 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.ibem.mimic"
+        applicationId = if (mimicStaging) "com.ibem.mimic.staging" else "com.ibem.mimic"
+        manifestPlaceholders["mimicAppLabel"] = if (mimicStaging) "Mimic Staging" else "mimic"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
