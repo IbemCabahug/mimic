@@ -120,7 +120,7 @@ APK was built. Updates must use the same signing key as the installed app.
 
 ## Version History
 
-- v1.4.4 (build 3013) — upcoming Android release; not available until a verified APK is attached to Releases
+- v1.4.4 (build 3013) — signed Android build with a simpler interface; see Releases for the APK, checksum, and validation limitations
 - v1.4.3 — faster first playback for newly imported videos
 - v1.1.0 — LAN Multiplayer over hotspot, QR code room joining, rejoin flow
 - v1.0.0 — Initial release, solo gameplay, vault system

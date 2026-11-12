@@ -39,14 +39,23 @@ model, Android version, and the exact error text. Do not include private content
   hotspot, then create or join a room.
 - Internet access is not needed for local multiplayer.
 
-## v1.4.4 — Release Preparation
+## v1.4.4 — Build 3013
 
-The next Android build is **1.4.4 (3013)**. It focuses on a simpler interface and
+This Android build is **1.4.4 (3013)**. It focuses on a simpler interface and
 preserves existing user data when installed as a correctly signed update.
 
-**The APK is not yet verified or published.** Download availability, exact file
-size, SHA-256 checksum, and signing verification must be confirmed before release.
-An older APK must not be relabeled as this version.
+Release tag: **v1.4.4-build.3013**. This distinguishes the build from older releases
+with the same display version without replacing existing tags.
+
+- APK size: **98,995,241 bytes**
+- Package: `com.ibem.mimic`
+- SHA-256: `bf5b7f7b1a0bdd467063cb235bfd7db0f695dcc4c32eb236448e44c34283358d`
+- Signing certificate SHA-256: `8e8ffd75133a303fc3bf4edcb3707922dbf34b71d58798fcd24a6ef2d02a579c`
+
+Package/version, APK signature and Android alignment checks passed. On-device
+installation/gameplay testing has not been performed for this build, and full
+static analysis has not completed. No analyzer pass is claimed. Do not install
+over a higher version code or uninstall to bypass an update rejection.
 
 ## Earlier Changes
 
