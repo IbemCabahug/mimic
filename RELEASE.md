@@ -39,6 +39,34 @@ model, Android version, and the exact error text. Do not include private content
   hotspot, then create or join a room.
 - Internet access is not needed for local multiplayer.
 
+## Open Your First Vault
+
+Mimic also includes a private vault. For first-time setup, use **local play on one
+phone**, not a multiplayer room:
+
+1. Tap **PLAY → CLASSIC**, select a word pack, and add exactly three players in
+   this order: **A, B, C**. Start the game.
+2. Complete the word reveals and continue through discussion to **VOTING**.
+3. Select **A** for voter A and tap **SUBMIT VOTE**; select **C** for voter B and
+   submit; select **B** for voter C and submit. This is **first → third → second**
+   player. Keep less than **three seconds between vote submissions**. Selecting
+   cards without submitting does not count.
+4. After the brief flash, create a private **4–8 digit PIN** and confirm it.
+5. Choose your own **three-tap unlock sequence** and repeat it to confirm. The
+   three taps cannot all be identical. Remember the player positions you chose.
+6. Write down the **12 recovery words in order**, store them safely outside the
+   app, and complete the on-screen confirmation. Never share your PIN or words.
+
+To return later, use a local game's voting screen and submit votes for your saved
+player-position sequence, keeping less than three seconds between submissions,
+then enter your PIN. Use enough players for the positions in your sequence.
+After setup, use your personal sequence—not the first-time setup order.
+
+The vault's **? → Field Manual** provides more help. If first-time entry fails,
+retry in a new three-player local game, checking the vote order and timing. If a
+vault already exists, use its saved sequence. **Never uninstall or clear app data
+to restart setup**; doing so can permanently remove your local data and keys.
+
 ## v1.4.4 — Build 3013
 
 This Android build is **1.4.4 (3013)**. It focuses on a simpler interface and

@@ -70,6 +70,36 @@ Choose from themed word packs and mix up to three for a game:
 - One player creates a hotspot, others connect to it
 - Up to 8 players supported
 
+## Open Your First Vault
+
+Mimic also includes a private vault. For first-time setup, use **local play on one
+phone**, not a multiplayer room:
+
+1. From the home screen, tap **PLAY**, choose **CLASSIC**, and select a word pack.
+2. Add exactly three players in this order: **A, B, C**. Start the game.
+3. Complete the word reveals and continue through discussion to **VOTING**.
+4. Cast these votes in order, tapping **SUBMIT VOTE** after each selection:
+   - A votes for **A** (first player).
+   - B votes for **C** (third player).
+   - C votes for **B** (second player).
+   Keep less than **three seconds between vote submissions**. Selecting a card
+   alone does not count. The PIN setup screen opens after a brief flash.
+5. Choose a private **4–8 digit PIN** and enter it again to confirm.
+6. Choose your own **three-tap unlock sequence**, then repeat it to confirm. Not
+   all three taps can be the same. Remember the player positions in your sequence.
+7. Write down the **12 recovery words in order**, keep them somewhere safe outside
+   the app, and complete the on-screen confirmation. Never share your PIN or words.
+
+**Opening it later:** in a local game's voting screen, submit votes matching your
+saved player-position sequence, with less than three seconds between submissions,
+then enter your PIN. Use a game with enough players for those positions. The
+first-time sequence does not replace your personal sequence after setup.
+
+Inside the vault, open **? → Field Manual** for help. If first-time entry does not
+open, start a new three-player local game and retry the vote order and timing.
+If you already have a vault, use your saved sequence instead. **Do not uninstall
+or clear app data to try again**—that can permanently remove your data and keys.
+
 ## Game Tips
 
 - Listen more than you talk during the discussion phase — silence says more than words.
