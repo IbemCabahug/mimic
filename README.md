@@ -1,10 +1,17 @@
 # 🎭 Mimic
-> A multiplayer word-guessing party game. Also something more.
+> A free word-guessing party game for Android. Play on one phone or over local Wi-Fi.
 
 ## Download
 - [Download Latest APK](../../releases/latest)
 - Enable "Install from unknown sources" on Android when prompted
 - Minimum Android version: 7.0+
+- [Installation and release guide](RELEASE.md)
+
+Mimic is free to download and play from this repository. No activation code is
+needed to get started.
+
+**Updating? Install over your existing copy. Do not uninstall or clear app data
+to fix an installation error.** Report signature or downgrade errors instead.
 
 ## The Game
 
@@ -20,13 +27,14 @@ Tensions rise with every round. Accusations fly. Alliances form and shatter. And
 
 ## Word Packs
 
-Mix and match from five unsettling packs, each containing 20 unique word pairs:
+Choose from themed word packs and mix up to three for a game:
 
 - Dark Places
 - The Occult
 - Crime Scene
 - Survival Horror
 - Everyday Dread
+- Philippine Folklore
 
 ## How to Play (Solo)
 
@@ -73,105 +81,50 @@ Mix and match from five unsettling packs, each containing 20 unique word pairs:
 ## Building from Source
 
 ### Prerequisites
-- Flutter SDK 3.x+
+- Flutter SDK with Dart 3.12 or newer, compatible with `mimic/pubspec.yaml`
 - Android Studio or VS Code
 - Android device or emulator (API 24+)
 
 ### Steps
 ```bash
-git clone <repo-url>
-cd mimic
+git clone https://github.com/IbemCabahug/mimic.git
+cd mimic/mimic
 flutter pub get
 flutter run
 ```
 
 ### Build Release APK (universal — one file, any supported phone)
 
-Release builds need two secrets at build time — they are never committed:
+From the Flutter application directory (`mimic/`), build the public Android app:
 
 ```powershell
-$env:MIMIC_LICENSE_SECRET = '<current secret — never commit it>'
-$env:MIMIC_ACTIVATION_URL = 'https://script.google.com/macros/s/<DEPLOY_ID>/exec'
-powershell -File tool\build_release.ps1
+powershell -NoProfile -File tool\build_release.ps1 -FreeTierOnly
 ```
 
-The wrapper refuses to build if either value is missing. A plain `flutter build apk --release` still compiles, but with licensing disabled (fail-closed): no activation code can validate and Pro stays locked.
+No activation credentials are required. Configure release signing locally; never
+commit a keystore or signing passwords. Output:
+`build/app/outputs/flutter-apk/app-release.apk`. Keep generated debug symbols private.
+
+Before distribution, verify the APK version, package (`com.ibem.mimic`), signing
+certificate, and SHA-256 checksum. A source version change does not prove a new
+APK was built. Updates must use the same signing key as the installed app.
 
 > The version code comes from `pubspec.yaml` (`version: x.y.z+N`). It must only
 > ever rise — a lower build number cannot install over a distributed one, and
-> uninstalling Mimic permanently destroys its hardware-bound encryption keys
-> and everything the vault protects. See the project's M33 record.
+> uninstalling Mimic or clearing app data can permanently remove local data and
+> encryption keys. Do not use either as an update troubleshooting step.
 
 ### Known Build Notes
 - `file_picker` pinned to `10.3.10` due to v11 Android build bug
 - KGP warnings from `mobile_scanner`, `sensors_plus`, `share_plus` are non-blocking
-- These will resolve when plugin authors release Built-in Kotlin versions
 
 ## Version History
 
+- v1.4.4 (build 3013) — upcoming Android release; not available until a verified APK is attached to Releases
+- v1.4.3 — faster first playback for newly imported videos
 - v1.1.0 — LAN Multiplayer over hotspot, QR code room joining, rejoin flow
 - v1.0.0 — Initial release, solo gameplay, vault system
 
 ## License
 
 MIT
-
-<!--
-=============================================================
-PRIVATE OWNER REFERENCE — NOT VISIBLE ON GITHUB
-=============================================================
-
-VAULT ACCESS
-------------
-The app contains a hidden encrypted vault accessible only via
-a secret gesture sequence during gameplay.
-
-Trigger Method 1 — Voting Screen:
-  Tap the 2nd voting card → tap the empty area (0 zone) → 
-  tap the 2nd voting card again
-  A GlitchTransition animation will fire → PIN screen appears
-
-Trigger Method 2 — Results Screen:
-  Tap the score area 3 times rapidly
-  GlitchTransition fires → PIN screen appears
-
-FIRST TIME SETUP
-----------------
-  Enter a 6-digit PIN → confirm PIN → Vault Home unlocks
-
-VAULT FEATURES
---------------
-  Photos    — import from gallery, encrypted, never appears in system gallery
-  Videos    — import from gallery, encrypted, playable via built-in player
-  Notes     — create/edit/delete encrypted text notes
-  Audio     — import and play audio files, decrypted to memory only
-  Documents — import PDFs and files, encrypted at rest
-
-SECURITY FEATURES
------------------
-  Auto-lock     — vault locks after 60 seconds in background
-  Panic Mode    — press volume down 3x rapidly to instantly exit vault
-  Break-in Log  — wrong PIN captures intruder selfie silently
-  Recents Guard — vault content blacked out in Android app switcher
-
-RECOVERY PHRASE (BIP39)
------------------------
-  Vault Settings → Recovery Phrase → Generate
-  Write down all 12 words in order — this is your backup key
-  Use at PIN screen → Forgot PIN to reset access
-
-EXPORT / IMPORT
----------------
-  Export: Vault Settings → Backup → Export → Save to Downloads
-  File format: .mimic (encrypted, not human-readable)
-  Import: Vault Settings → Backup → Import → Choose File
-  Requires correct 12-word recovery phrase to import
-
-IMPORTANT NOTES
----------------
-  - Vault data never touches any network or cloud service
-  - Decrypted content never written to disk
-  - No vault branding visible anywhere in the app UI
-  - The app presents as a game only — always
-=============================================================
--->
