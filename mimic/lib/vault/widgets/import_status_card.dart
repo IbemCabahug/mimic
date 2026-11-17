@@ -18,13 +18,31 @@ class ImportStatusCard extends StatelessWidget {
       builder: (context, _) {
         if (!session.isActive) return const SizedBox.shrink();
         final working = session.isWorking;
-        final failed =
-            session.files.where((f) => f.status == ImportFileStatus.failed).length;
+        final failed = session.files
+            .where((f) => f.status == ImportFileStatus.failed)
+            .length;
+        final pausedCount = session.files
+            .where(
+              (f) =>
+                  f.status == ImportFileStatus.pausedLocked ||
+                  f.status == ImportFileStatus.queued,
+            )
+            .length;
+        final needsSourceCount = session.files
+            .where((f) => f.status == ImportFileStatus.needsSource)
+            .length;
         final String headerText;
         if (working) {
           headerText = 'Importing ${session.position}/${session.total} ...';
-        } else if (failed > 0) {
-          headerText = 'Import finished — $failed not imported';
+        } else if (session.isPaused) {
+          headerText = pausedCount > 0
+              ? 'Import paused — $pausedCount remaining'
+              : 'Import paused';
+        } else if (failed > 0 || needsSourceCount > 0) {
+          final issues = failed + needsSourceCount;
+          headerText = 'Import finished — $issues not imported';
+        } else if (session.hasAwaitingDeleteConfirm) {
+          headerText = 'Import saved — confirm original deletion';
         } else {
           headerText = 'Import finished (${session.total}/${session.total})';
         }
@@ -34,7 +52,9 @@ class ImportStatusCard extends StatelessWidget {
           decoration: BoxDecoration(
             color: VaultColors.surface,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: VaultColors.accent.withValues(alpha: 0.35)),
+            border: Border.all(
+              color: VaultColors.accent.withValues(alpha: 0.35),
+            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -47,9 +67,13 @@ class ImportStatusCard extends StatelessWidget {
                     height: 16,
                     child: working
                         ? const CircularProgressIndicator(
-                            strokeWidth: 2, color: VaultColors.accent)
+                            strokeWidth: 2,
+                            color: VaultColors.accent,
+                          )
                         : Icon(
-                            failed > 0 ? Icons.error_outline : Icons.check_circle,
+                            failed > 0
+                                ? Icons.error_outline
+                                : Icons.check_circle,
                             size: 16,
                             color: failed > 0 ? Colors.orange : Colors.green,
                           ),
@@ -115,7 +139,15 @@ class ImportStatusCard extends StatelessWidget {
                               ),
                               const SizedBox(width: 8),
                               Text(
-                                importFileStatusLabel(session.files[i].status),
+                                (session.files[i].status ==
+                                                ImportFileStatus.preparing ||
+                                            session.files[i].status ==
+                                                ImportFileStatus.encrypting) &&
+                                        session.files[i].progress != null
+                                    ? '${importFileStatusLabel(session.files[i].status)} ${(session.files[i].progress! * 100).round()}%'
+                                    : importFileStatusLabel(
+                                        session.files[i].status,
+                                      ),
                                 style: TextStyle(
                                   fontFamily: 'Inter',
                                   fontSize: 11,
@@ -151,16 +183,38 @@ class ImportStatusCard extends StatelessWidget {
 Widget importFileRowIcon(ImportFileStatus status) {
   switch (status) {
     case ImportFileStatus.queued:
-      return const Icon(Icons.schedule, size: 14, color: VaultColors.textTertiary);
+      return const Icon(
+        Icons.schedule,
+        size: 14,
+        color: VaultColors.textTertiary,
+      );
+    case ImportFileStatus.preparing:
     case ImportFileStatus.encrypting:
+    case ImportFileStatus.committing:
     case ImportFileStatus.restoring:
       return const SizedBox(
         width: 14,
         height: 14,
-        child: CircularProgressIndicator(strokeWidth: 2, color: VaultColors.accent),
+        child: CircularProgressIndicator(
+          strokeWidth: 2,
+          color: VaultColors.accent,
+        ),
+      );
+    case ImportFileStatus.pausedLocked:
+      return const Icon(
+        Icons.pause_circle_outline,
+        size: 14,
+        color: Colors.orange,
       );
     case ImportFileStatus.waitingDeleteConfirm:
+    case ImportFileStatus.awaitingDeleteConfirmation:
       return const Icon(Icons.help_outline, size: 14, color: Colors.orange);
+    case ImportFileStatus.needsSource:
+      return const Icon(
+        Icons.broken_image_outlined,
+        size: 14,
+        color: Colors.orange,
+      );
     case ImportFileStatus.saved:
       return const Icon(Icons.check_circle, size: 14, color: Colors.green);
     case ImportFileStatus.savedOriginalKept:
@@ -168,8 +222,11 @@ Widget importFileRowIcon(ImportFileStatus status) {
     case ImportFileStatus.failed:
       return const Icon(Icons.error_outline, size: 14, color: Colors.red);
     case ImportFileStatus.cancelled:
-      return const Icon(Icons.remove_circle_outline,
-          size: 14, color: VaultColors.textTertiary);
+      return const Icon(
+        Icons.remove_circle_outline,
+        size: 14,
+        color: VaultColors.textTertiary,
+      );
   }
 }
 
@@ -183,10 +240,15 @@ Color importFileRowColor(ImportFileStatus status) {
       return VaultColors.textTertiary;
     case ImportFileStatus.savedOriginalKept:
     case ImportFileStatus.waitingDeleteConfirm:
+    case ImportFileStatus.awaitingDeleteConfirmation:
+    case ImportFileStatus.pausedLocked:
+    case ImportFileStatus.needsSource:
       return Colors.orange;
     case ImportFileStatus.queued:
       return VaultColors.textTertiary;
+    case ImportFileStatus.preparing:
     case ImportFileStatus.encrypting:
+    case ImportFileStatus.committing:
     case ImportFileStatus.restoring:
       return VaultColors.accent;
   }

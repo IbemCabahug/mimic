@@ -14,10 +14,14 @@ import 'package:uuid/uuid.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../core/services/platform_service.dart';
+import '../crypto/crypto_isolate.dart';
 import '../crypto/vault_crypto.dart';
+import '../crypto/vault_exceptions.dart';
 import '../crypto/media_format.dart';
 import '../security/auto_lock.dart';
 import '../models/vault_tag.dart';
+import 'media_import_policy.dart';
+import 'vault_media_commit_helper.dart';
 
 class VideoMeta {
   final String id;
@@ -49,32 +53,32 @@ class VideoMeta {
   });
 
   Map<String, dynamic> toMap() => {
-        'id': id,
-        'mimeType': mimeType,
-        'size': size,
-        'durationS': durationS,
-        'createdAt': createdAt.toIso8601String(),
-        'originalName': originalName,
-        'folder': folder,
-        'tags': tags.join(','),
-        'caption': caption,
-        'contentHash': contentHash,
-      };
+    'id': id,
+    'mimeType': mimeType,
+    'size': size,
+    'durationS': durationS,
+    'createdAt': createdAt.toIso8601String(),
+    'originalName': originalName,
+    'folder': folder,
+    'tags': tags.join(','),
+    'caption': caption,
+    'contentHash': contentHash,
+  };
 
   factory VideoMeta.fromMap(Map<String, dynamic> map) => VideoMeta(
-        id: map['id'] as String,
-        mimeType: map['mimeType'] as String,
-        size: map['size'] as int,
-        durationS: map['durationS'] as int,
-        createdAt: DateTime.parse(map['createdAt'] as String),
-        originalName: map['originalName'] as String?,
-        // Pre-folder rows (and v2 backup payloads) carry no key — ?? '' keeps
-        // them readable as Unfiled instead of throwing.
-        folder: map['folder'] as String? ?? '',
-        tags: VaultTags.parseList(map['tags']),
-        caption: map['caption'] as String? ?? '',
-        contentHash: map['contentHash'] as String?,
-      );
+    id: map['id'] as String,
+    mimeType: map['mimeType'] as String,
+    size: map['size'] as int,
+    durationS: map['durationS'] as int,
+    createdAt: DateTime.parse(map['createdAt'] as String),
+    originalName: map['originalName'] as String?,
+    // Pre-folder rows (and v2 backup payloads) carry no key — ?? '' keeps
+    // them readable as Unfiled instead of throwing.
+    folder: map['folder'] as String? ?? '',
+    tags: VaultTags.parseList(map['tags']),
+    caption: map['caption'] as String? ?? '',
+    contentHash: map['contentHash'] as String?,
+  );
 
   /// Copies this metadata with the given fields replaced.
   VideoMeta copyWith({
@@ -107,25 +111,36 @@ class VideoMeta {
     return sha256.convert(bytes).toString();
   }
 
-  /// Computes a SHA-256 hash from a file.
-  static Future<String> computeHashFromFile(File file) async {
-    final bytes = await file.readAsBytes();
-    return sha256.convert(bytes).toString();
-  }
+  /// Computes a SHA-256 hash from a file using bounded 256 KB buffered reads
+  /// so large videos never allocate whole-file byte arrays in memory and can
+  /// abort cleanly when interrupted by a vault lock.
+  static Future<String> computeHashFromFile(
+    File file, {
+    bool Function()? shouldAbort,
+    void Function(int bytesProcessed)? onBytesProgress,
+  }) => VaultMediaCommitHelper.computeFileSha256Streaming(
+    file,
+    shouldAbort: shouldAbort,
+    onBytesProgress: onBytesProgress,
+  );
 }
 
 /// Why a video conversion attempt did not end with a streamable blob.
 enum VideoMigrationFailure {
   /// Nothing is wrong: the blob was already c2, or the conversion succeeded.
   none,
+
   /// The decrypted plaintext did not look like a video container we write, so
   /// the destructive re-encrypt was refused and the original was left alone.
   refusedNotAContainer,
+
   /// The vault locked while the conversion was running, so the keys were gone
   /// and the attempt was abandoned. The original blob is untouched.
   vaultLocked,
+
   /// The blob could not be read or written.
   io,
+
   /// Anything else. [VideoMigrationOutcome.detail] names the runtime type.
   unknown,
 }
@@ -200,7 +215,8 @@ class VideoVaultService {
 
   /// The most recent conversion attempt for one video, or null when no attempt
   /// has been made in this session.
-  VideoMigrationOutcome? migrationOutcomeFor(String id) => _migrationOutcomes[id];
+  VideoMigrationOutcome? migrationOutcomeFor(String id) =>
+      _migrationOutcomes[id];
 
   VideoVaultService(this._platformService, this._crypto);
 
@@ -234,32 +250,39 @@ class VideoVaultService {
         onOpen: (db) async {
           // Folder & locator feature: PRAGMA-migrate columns if missing.
           try {
-            final List<Map<String, dynamic>> columns =
-                await db.rawQuery('PRAGMA table_info($_tableName)');
-            final hasFolder =
-                columns.any((column) => column['name'] == 'folder');
+            final List<Map<String, dynamic>> columns = await db.rawQuery(
+              'PRAGMA table_info($_tableName)',
+            );
+            final hasFolder = columns.any(
+              (column) => column['name'] == 'folder',
+            );
             if (!hasFolder) {
               await db.execute(
-                  'ALTER TABLE $_tableName ADD COLUMN folder TEXT DEFAULT \'\'');
+                'ALTER TABLE $_tableName ADD COLUMN folder TEXT DEFAULT \'\'',
+              );
             }
-            final hasTags =
-                columns.any((column) => column['name'] == 'tags');
+            final hasTags = columns.any((column) => column['name'] == 'tags');
             if (!hasTags) {
               await db.execute(
-                  'ALTER TABLE $_tableName ADD COLUMN tags TEXT DEFAULT \'\'');
+                'ALTER TABLE $_tableName ADD COLUMN tags TEXT DEFAULT \'\'',
+              );
             }
-            final hasCaption =
-                columns.any((column) => column['name'] == 'caption');
+            final hasCaption = columns.any(
+              (column) => column['name'] == 'caption',
+            );
             if (!hasCaption) {
               await db.execute(
-                  'ALTER TABLE $_tableName ADD COLUMN caption TEXT DEFAULT \'\'');
+                'ALTER TABLE $_tableName ADD COLUMN caption TEXT DEFAULT \'\'',
+              );
             }
             // Duplicate detection: SHA-256 content hash column
-            final hasContentHash =
-                columns.any((column) => column['name'] == 'contentHash');
+            final hasContentHash = columns.any(
+              (column) => column['name'] == 'contentHash',
+            );
             if (!hasContentHash) {
               await db.execute(
-                  'ALTER TABLE $_tableName ADD COLUMN contentHash TEXT');
+                'ALTER TABLE $_tableName ADD COLUMN contentHash TEXT',
+              );
             }
           } catch (e) {
             debugPrint('Error updating video schema: $e');
@@ -282,13 +305,20 @@ class VideoVaultService {
   /// first play, with no CBC→CTR conversion wait (the low-end-device
   /// first-play stall). The temp plaintext is securely deleted on every path;
   /// a failed import leaves no orphan blob.
-  Future<String> saveVideo(Uint8List bytes, String mimeType, int durationS, {String? originalName}) async {
+  Future<String> saveVideo(
+    Uint8List bytes,
+    String mimeType,
+    int durationS, {
+    String? originalName,
+  }) async {
     final id = const Uuid().v4();
     final now = DateTime.now();
 
     final dest = await _platformService.resolveVaultFile(id);
     final stamp = now.millisecondsSinceEpoch;
-    final plainTemp = File(p.join(dest.parent.path, '${id}_import_plain_$stamp'));
+    final plainTemp = File(
+      p.join(dest.parent.path, '${id}_import_plain_$stamp'),
+    );
     final ctrTemp = File(p.join(dest.parent.path, '${id}_import_ctr_$stamp'));
     await dest.parent.create(recursive: true);
 
@@ -350,7 +380,12 @@ class VideoVaultService {
   /// no CBC→CTR conversion wait (the low-end-device first-play stall). The
   /// source is never the destination, and a failed import leaves no orphan
   /// blob at the final path.
-  Future<String> saveVideoFromFile(File src, String mimeType, int? durationS, {String? originalName}) async {
+  Future<String> saveVideoFromFile(
+    File src,
+    String mimeType,
+    int? durationS, {
+    String? originalName,
+  }) async {
     final id = const Uuid().v4();
     final now = DateTime.now();
 
@@ -386,6 +421,150 @@ class VideoVaultService {
         }
       }
     }
+  }
+
+  Future<File> prepareImportStagingFile(String destId) =>
+      VaultMediaCommitHelper.resolveStagingFile(_platformService, destId);
+
+  Future<void> cleanupImportStagingDir() =>
+      VaultMediaCommitHelper.cleanupStagingDirectory(_platformService);
+
+  Future<String> computeFileSha256(
+    File source, {
+    bool Function()? shouldAbort,
+    void Function(int bytesProcessed)? onBytesProgress,
+  }) => VaultMediaCommitHelper.computeFileSha256Streaming(
+    source,
+    shouldAbort: shouldAbort,
+    onBytesProgress: onBytesProgress,
+  );
+
+  Future<void> encryptVideoToStaging({
+    required File sourceFile,
+    required File stagingFile,
+    bool Function()? shouldAbort,
+    CryptoIsolateCancelHandle? cancelHandle,
+    void Function(int bytesProcessed)? onBytesProgress,
+  }) async {
+    await _crypto.encryptStreamSystemCtrV3Controlled(
+      sourceFile,
+      stagingFile,
+      shouldAbort: shouldAbort,
+      cancelHandle: cancelHandle,
+      onBytesProgress: onBytesProgress,
+    );
+  }
+
+  Future<bool> hasVideo(String id) async {
+    if (kIsWeb) {
+      final all = await getAllVideos();
+      return all.any((v) => v.id == id);
+    }
+    await _ensureDb();
+    final rows = await _db!.query(
+      _tableName,
+      columns: ['id'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  Future<BlobIntegrityStatus> verifyCommittedVideoBlob(String id) async {
+    if (kIsWeb) {
+      final bytes = await _platformService.readEncryptedFile(id);
+      return bytes != null
+          ? BlobIntegrityStatus.healthy
+          : BlobIntegrityStatus.fileNotFound;
+    }
+    final file = await _platformService.resolveVaultFile(id);
+    return _crypto.verifyFileIntegrity(file);
+  }
+
+  Future<void> removeUncommittedVideoBlob(String id) async {
+    try {
+      await _platformService.deleteFile(id);
+    } catch (_) {}
+  }
+
+  Future<void> commitStagedVideo({
+    required String id,
+    required File stagingFile,
+    required String mimeType,
+    required int durationS,
+    required int plaintextSize,
+    required String? originalName,
+    required String contentHash,
+    bool verifyIntegrity = true,
+    bool Function()? isEpochValid,
+    bool Function()? shouldAbort,
+    Future<void> Function()? onBeforeMetaCommit,
+  }) async {
+    final destFile = await _platformService.resolveVaultFile(id);
+    await VaultMediaCommitHelper.verifyAndPublishStagingFile(
+      stagingFile: stagingFile,
+      destFile: destFile,
+      crypto: _crypto,
+      verifyIntegrity: verifyIntegrity,
+      isEpochValid: isEpochValid,
+      shouldAbort: shouldAbort,
+    );
+    bool metaCommitted = false;
+    try {
+      if (onBeforeMetaCommit != null) {
+        await onBeforeMetaCommit();
+      }
+      if ((shouldAbort != null && shouldAbort()) ||
+          !_crypto.isUnlocked ||
+          (isEpochValid != null && !isEpochValid())) {
+        throw const OperationCancelledException(
+          'Vault locked before video metadata commit',
+        );
+      }
+      await _saveMeta(
+        VideoMeta(
+          id: id,
+          mimeType: mimeType,
+          size: plaintextSize,
+          durationS: durationS,
+          createdAt: DateTime.now(),
+          originalName: originalName,
+          contentHash: contentHash,
+        ),
+        requireEncryption: true,
+      );
+      metaCommitted = true;
+    } finally {
+      if (!metaCommitted) {
+        await VaultMediaCommitHelper.deleteIfExists(destFile);
+      }
+    }
+  }
+
+  Future<void> recoverVideoMetadataOnly({
+    required String id,
+    required String mimeType,
+    required int durationS,
+    required int plaintextSize,
+    required String? originalName,
+    required String contentHash,
+  }) async {
+    if (!_crypto.isUnlocked) {
+      throw const OperationCancelledException('Vault is locked');
+    }
+    await _saveMeta(
+      VideoMeta(
+        id: id,
+        mimeType: mimeType,
+        size: plaintextSize,
+        durationS: durationS,
+        createdAt: DateTime.now(),
+        originalName: originalName,
+        contentHash: contentHash,
+      ),
+      requireEncryption: true,
+    );
   }
 
   Future<Uint8List?> getVideo(String id) async {
@@ -536,7 +715,9 @@ class VideoVaultService {
         await headRaf.close();
 
         if (headRead < 12 || !looksLikeVideoContainer(head)) {
-          debugPrint('ensureVideoStreamable($id) skipped: plaintext did not look like a video');
+          debugPrint(
+            'ensureVideoStreamable($id) skipped: plaintext did not look like a video',
+          );
           return record(
             converted: false,
             failure: VideoMigrationFailure.refusedNotAContainer,
@@ -629,7 +810,9 @@ class VideoVaultService {
       final raw = await _platformService.secureRead('vault_videos_meta');
       if (raw == null || raw.isEmpty) return [];
       final List<dynamic> decoded = jsonDecode(raw);
-      return decoded.map((e) => _hydrateVideoMap(Map<String, dynamic>.from(e))).toList();
+      return decoded
+          .map((e) => _hydrateVideoMap(Map<String, dynamic>.from(e)))
+          .toList();
     }
 
     await _ensureDb();
@@ -660,22 +843,37 @@ class VideoVaultService {
     );
   }
 
-  Future<void> _saveMeta(VideoMeta meta) async {
+  Future<void> _saveMeta(
+    VideoMeta meta, {
+    bool requireEncryption = false,
+  }) async {
     final map = meta.toMap();
     if (meta.originalName != null && meta.originalName!.isNotEmpty) {
-      try {
+      if (requireEncryption) {
         map['originalName'] = _crypto.encryptString(meta.originalName!);
-      } catch (_) {}
+      } else {
+        try {
+          map['originalName'] = _crypto.encryptString(meta.originalName!);
+        } catch (_) {}
+      }
     }
     if (meta.caption.isNotEmpty) {
-      try {
+      if (requireEncryption) {
         map['caption'] = _crypto.encryptString(meta.caption);
-      } catch (_) {}
+      } else {
+        try {
+          map['caption'] = _crypto.encryptString(meta.caption);
+        } catch (_) {}
+      }
     }
     if (meta.tags.isNotEmpty) {
-      try {
+      if (requireEncryption) {
         map['tags'] = _crypto.encryptString(meta.tags.join(','));
-      } catch (_) {}
+      } else {
+        try {
+          map['tags'] = _crypto.encryptString(meta.tags.join(','));
+        } catch (_) {}
+      }
     }
     if (kIsWeb) {
       final existing = await getAllVideos();
@@ -683,25 +881,27 @@ class VideoVaultService {
       existing.add(meta);
       await _platformService.secureWrite(
         'vault_videos_meta',
-        jsonEncode(existing.map((m) {
-          final em = m.toMap();
-          if (m.originalName != null && m.originalName!.isNotEmpty) {
-            try {
-              em['originalName'] = _crypto.encryptString(m.originalName!);
-            } catch (_) {}
-          }
-          if (m.caption.isNotEmpty) {
-            try {
-              em['caption'] = _crypto.encryptString(m.caption);
-            } catch (_) {}
-          }
-          if (m.tags.isNotEmpty) {
-            try {
-              em['tags'] = _crypto.encryptString(m.tags.join(','));
-            } catch (_) {}
-          }
-          return em;
-        }).toList()),
+        jsonEncode(
+          existing.map((m) {
+            final em = m.toMap();
+            if (m.originalName != null && m.originalName!.isNotEmpty) {
+              try {
+                em['originalName'] = _crypto.encryptString(m.originalName!);
+              } catch (_) {}
+            }
+            if (m.caption.isNotEmpty) {
+              try {
+                em['caption'] = _crypto.encryptString(m.caption);
+              } catch (_) {}
+            }
+            if (m.tags.isNotEmpty) {
+              try {
+                em['tags'] = _crypto.encryptString(m.tags.join(','));
+              } catch (_) {}
+            }
+            return em;
+          }).toList(),
+        ),
       );
       return;
     }
@@ -799,17 +999,42 @@ class VideoVaultService {
     try {
       await _platformService.secureDelete('vault_videos_meta');
     } catch (_) {}
+    await cleanupImportStagingDir();
   }
 
-  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptVideo(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed, bool Function()? isCancelled}) async {
+  Future<
+    ({
+      List<String> successfulIds,
+      int totalAttempted,
+      bool stoppedEarly,
+      String? failedFileName,
+      Object? error,
+      bool originalsKept,
+    })
+  >
+  pickAndEncryptVideo(
+    BuildContext context, {
+    void Function(int index, int positionOneBased, String name)? onFileStart,
+    void Function(int index)? onFileSaved,
+    void Function()? onWaitingDeleteConfirm,
+    void Function(int total)? onPicked,
+    void Function(int index, String detail)? onFileFailed,
+    bool Function()? isCancelled,
+  }) async {
     final List<AssetEntity>? assets = await AssetPicker.pickAssets(
       context,
-      pickerConfig: const AssetPickerConfig(
-        requestType: RequestType.video,
-      ),
+      pickerConfig: MediaImportPolicy.buildPickerConfig(ImportMediaKind.video),
+      useRootNavigator: false,
     );
     if (assets == null || assets.isEmpty) {
-      return (successfulIds: <String>[], totalAttempted: 0, stoppedEarly: false, failedFileName: null, error: null, originalsKept: false);
+      return (
+        successfulIds: <String>[],
+        totalAttempted: 0,
+        stoppedEarly: false,
+        failedFileName: null,
+        error: null,
+        originalsKept: false,
+      );
     }
 
     // The picker just reported the batch size, so the live import card can list
@@ -855,7 +1080,12 @@ class VideoVaultService {
         final name = asset.title;
         final mime = await asset.mimeTypeAsync ?? 'video/mp4';
         final durationS = asset.duration;
-        final id = await saveVideoFromFile(file, mime, durationS, originalName: name);
+        final id = await saveVideoFromFile(
+          file,
+          mime,
+          durationS,
+          originalName: name,
+        );
         savedIds.add(id);
         try {
           onFileSaved?.call(i);
@@ -888,7 +1118,9 @@ class VideoVaultService {
         onWaitingDeleteConfirm?.call();
       } catch (_) {}
       try {
-        final deletedIds = await PhotoManager.editor.deleteWithIds(assets.map((a) => a.id).toList());
+        final deletedIds = await PhotoManager.editor.deleteWithIds(
+          assets.map((a) => a.id).toList(),
+        );
         if (deletedIds.length >= assets.length) originalsKept = false;
         if (deletedIds.length < assets.length && context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -941,8 +1173,8 @@ class VideoVaultService {
     String id, {
     void Function(double? progress)? onProgress,
     bool Function()? isCancelled,
-    @visibleForTesting Duration progressPollInterval =
-        const Duration(milliseconds: 150),
+    @visibleForTesting
+    Duration progressPollInterval = const Duration(milliseconds: 150),
   }) async {
     // The pill's Cancel is a real stop, not just a between-files stop: the
     // streamed decrypt polls [isCancelled] and is killed mid-file, so a
@@ -998,8 +1230,11 @@ class VideoVaultService {
               });
             }
             try {
-              await _crypto.decryptStreamSystem(srcBlob, tempFile,
-                  shouldAbort: isCancelled);
+              await _crypto.decryptStreamSystem(
+                srcBlob,
+                tempFile,
+                shouldAbort: isCancelled,
+              );
               streamed = true;
             } finally {
               poll?.cancel();
@@ -1045,14 +1280,13 @@ class VideoVaultService {
       // so "the gallery refused" is a catch branch — a null return is
       // impossible and would have been dead code here.
       try {
-        await PhotoManager.editor.saveVideo(
-          tempFile,
-          title: originalName,
-        );
+        await PhotoManager.editor.saveVideo(tempFile, title: originalName);
       } catch (_) {
         // Gallery refused — nothing left the vault. Say so instead of
         // surfacing a raw plugin error.
-        throw Exception('The gallery did not accept the video. The vault copy was kept.');
+        throw Exception(
+          'The gallery did not accept the video. The vault copy was kept.',
+        );
       }
       try {
         await deleteVideo(id);
@@ -1060,7 +1294,8 @@ class VideoVaultService {
         // Plaintext now exists in the gallery AND the vault. The user must
         // know both copies exist — a silent duplicate defeats the vault.
         throw Exception(
-            'Video was saved to the gallery, but the vault copy could not be deleted. Delete it from the vault manually.');
+          'Video was saved to the gallery, but the vault copy could not be deleted. Delete it from the vault manually.',
+        );
       }
     } finally {
       AutoLock().endProtectedOperation();
@@ -1089,13 +1324,19 @@ class VideoVaultService {
     // Folder & locator feature: PRAGMA-migrate columns if missing.
     final columns = await _db!.rawQuery('PRAGMA table_info($_tableName)');
     if (!columns.any((column) => column['name'] == 'folder')) {
-      await _db!.execute("ALTER TABLE $_tableName ADD COLUMN folder TEXT DEFAULT ''");
+      await _db!.execute(
+        "ALTER TABLE $_tableName ADD COLUMN folder TEXT DEFAULT ''",
+      );
     }
     if (!columns.any((column) => column['name'] == 'tags')) {
-      await _db!.execute("ALTER TABLE $_tableName ADD COLUMN tags TEXT DEFAULT ''");
+      await _db!.execute(
+        "ALTER TABLE $_tableName ADD COLUMN tags TEXT DEFAULT ''",
+      );
     }
     if (!columns.any((column) => column['name'] == 'caption')) {
-      await _db!.execute("ALTER TABLE $_tableName ADD COLUMN caption TEXT DEFAULT ''");
+      await _db!.execute(
+        "ALTER TABLE $_tableName ADD COLUMN caption TEXT DEFAULT ''",
+      );
     }
     await _db!.delete(_tableName);
     for (final video in decodedVideos) {
@@ -1130,7 +1371,11 @@ class VideoVaultService {
           } catch (_) {}
         }
       }
-      await _db!.insert(_tableName, map, conflictAlgorithm: ConflictAlgorithm.replace);
+      await _db!.insert(
+        _tableName,
+        map,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
     }
   }
 }

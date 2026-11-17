@@ -13,8 +13,12 @@ import 'package:sqflite/sqflite.dart';
 import 'package:uuid/uuid.dart';
 import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 import '../../core/services/platform_service.dart';
+import '../crypto/crypto_isolate.dart';
 import '../crypto/vault_crypto.dart';
+import '../crypto/vault_exceptions.dart';
 import '../models/vault_tag.dart';
+import 'media_import_policy.dart';
+import 'vault_media_commit_helper.dart';
 
 class PhotoMeta {
   final String id;
@@ -44,30 +48,30 @@ class PhotoMeta {
   });
 
   Map<String, dynamic> toMap() => {
-        'id': id,
-        'mimeType': mimeType,
-        'size': size,
-        'createdAt': createdAt.toIso8601String(),
-        'originalName': originalName,
-        'folder': folder,
-        'tags': tags.join(','),
-        'caption': caption,
-        'contentHash': contentHash,
-      };
+    'id': id,
+    'mimeType': mimeType,
+    'size': size,
+    'createdAt': createdAt.toIso8601String(),
+    'originalName': originalName,
+    'folder': folder,
+    'tags': tags.join(','),
+    'caption': caption,
+    'contentHash': contentHash,
+  };
 
   factory PhotoMeta.fromMap(Map<String, dynamic> map) => PhotoMeta(
-        id: map['id'] as String,
-        mimeType: map['mimeType'] as String,
-        size: map['size'] as int,
-        createdAt: DateTime.parse(map['createdAt'] as String),
-        originalName: map['originalName'] as String?,
-        // Pre-folder rows (and v2 backup payloads) carry no key — ?? '' keeps
-        // them readable as Unfiled instead of throwing.
-        folder: map['folder'] as String? ?? '',
-        tags: VaultTags.parseList(map['tags']),
-        caption: map['caption'] as String? ?? '',
-        contentHash: map['contentHash'] as String?,
-      );
+    id: map['id'] as String,
+    mimeType: map['mimeType'] as String,
+    size: map['size'] as int,
+    createdAt: DateTime.parse(map['createdAt'] as String),
+    originalName: map['originalName'] as String?,
+    // Pre-folder rows (and v2 backup payloads) carry no key — ?? '' keeps
+    // them readable as Unfiled instead of throwing.
+    folder: map['folder'] as String? ?? '',
+    tags: VaultTags.parseList(map['tags']),
+    caption: map['caption'] as String? ?? '',
+    contentHash: map['contentHash'] as String?,
+  );
 
   /// Copies this metadata with the given fields replaced.
   PhotoMeta copyWith({
@@ -97,6 +101,17 @@ class PhotoMeta {
   static String computeHash(Uint8List bytes) {
     return sha256.convert(bytes).toString();
   }
+
+  /// Computes a SHA-256 hash from a file using bounded chunked reads.
+  static Future<String> computeHashFromFile(
+    File file, {
+    bool Function()? shouldAbort,
+    void Function(int bytesProcessed)? onBytesProgress,
+  }) => VaultMediaCommitHelper.computeFileSha256Streaming(
+    file,
+    shouldAbort: shouldAbort,
+    onBytesProgress: onBytesProgress,
+  );
 }
 
 class FileVaultService {
@@ -142,30 +157,50 @@ class FileVaultService {
         },
         onOpen: (db) async {
           try {
-            final List<Map<String, dynamic>> columns = await db.rawQuery("PRAGMA table_info($_tableName)");
-            final hasOriginalName = columns.any((column) => column['name'] == 'originalName');
+            final List<Map<String, dynamic>> columns = await db.rawQuery(
+              "PRAGMA table_info($_tableName)",
+            );
+            final hasOriginalName = columns.any(
+              (column) => column['name'] == 'originalName',
+            );
             if (!hasOriginalName) {
-              await db.execute("ALTER TABLE $_tableName ADD COLUMN originalName TEXT");
+              await db.execute(
+                "ALTER TABLE $_tableName ADD COLUMN originalName TEXT",
+              );
             }
             // Folder feature: pre-folder installs lack the column; same
             // PRAGMA-migrate pattern as originalName above.
-            final hasFolder = columns.any((column) => column['name'] == 'folder');
+            final hasFolder = columns.any(
+              (column) => column['name'] == 'folder',
+            );
             if (!hasFolder) {
-              await db.execute("ALTER TABLE $_tableName ADD COLUMN folder TEXT DEFAULT ''");
+              await db.execute(
+                "ALTER TABLE $_tableName ADD COLUMN folder TEXT DEFAULT ''",
+              );
             }
             // Smart Vault Locator: tags and caption columns
             final hasTags = columns.any((column) => column['name'] == 'tags');
             if (!hasTags) {
-              await db.execute("ALTER TABLE $_tableName ADD COLUMN tags TEXT DEFAULT ''");
+              await db.execute(
+                "ALTER TABLE $_tableName ADD COLUMN tags TEXT DEFAULT ''",
+              );
             }
-            final hasCaption = columns.any((column) => column['name'] == 'caption');
+            final hasCaption = columns.any(
+              (column) => column['name'] == 'caption',
+            );
             if (!hasCaption) {
-              await db.execute("ALTER TABLE $_tableName ADD COLUMN caption TEXT DEFAULT ''");
+              await db.execute(
+                "ALTER TABLE $_tableName ADD COLUMN caption TEXT DEFAULT ''",
+              );
             }
             // Duplicate detection: SHA-256 content hash column
-            final hasContentHash = columns.any((column) => column['name'] == 'contentHash');
+            final hasContentHash = columns.any(
+              (column) => column['name'] == 'contentHash',
+            );
             if (!hasContentHash) {
-              await db.execute('ALTER TABLE $_tableName ADD COLUMN contentHash TEXT');
+              await db.execute(
+                'ALTER TABLE $_tableName ADD COLUMN contentHash TEXT',
+              );
             }
           } catch (e) {
             debugPrint('Error updating schema: $e');
@@ -189,7 +224,7 @@ class FileVaultService {
   Future<Uint8List?> readFile(String id) async {
     final encrypted = await _platformService.readEncryptedFile(id);
     if (encrypted == null) return null;
-    
+
     Uint8List? decrypted;
     try {
       decrypted = await _crypto.decryptSystem(encrypted);
@@ -206,7 +241,11 @@ class FileVaultService {
     return decrypted;
   }
 
-  Future<String> savePhoto(Uint8List bytes, String mimeType, {String? originalName}) async {
+  Future<String> savePhoto(
+    Uint8List bytes,
+    String mimeType, {
+    String? originalName,
+  }) async {
     final id = const Uuid().v4();
     final now = DateTime.now();
 
@@ -237,6 +276,144 @@ class FileVaultService {
         }
       }
     }
+  }
+
+  Future<File> prepareImportStagingFile(String destId) =>
+      VaultMediaCommitHelper.resolveStagingFile(_platformService, destId);
+
+  Future<void> cleanupImportStagingDir() =>
+      VaultMediaCommitHelper.cleanupStagingDirectory(_platformService);
+
+  Future<String> computeFileSha256(
+    File source, {
+    bool Function()? shouldAbort,
+    void Function(int bytesProcessed)? onBytesProgress,
+  }) => VaultMediaCommitHelper.computeFileSha256Streaming(
+    source,
+    shouldAbort: shouldAbort,
+    onBytesProgress: onBytesProgress,
+  );
+
+  Future<void> encryptPhotoToStaging({
+    required File sourceFile,
+    required File stagingFile,
+    bool Function()? shouldAbort,
+    CryptoIsolateCancelHandle? cancelHandle,
+    void Function(int bytesProcessed)? onBytesProgress,
+  }) async {
+    await _crypto.encryptStreamSystemCtrV3Controlled(
+      sourceFile,
+      stagingFile,
+      shouldAbort: shouldAbort,
+      cancelHandle: cancelHandle,
+      onBytesProgress: onBytesProgress,
+    );
+  }
+
+  Future<bool> hasPhoto(String id) async {
+    if (kIsWeb) {
+      final all = await getAllPhotos();
+      return all.any((p) => p.id == id);
+    }
+    await _ensureDb();
+    final rows = await _db!.query(
+      _tableName,
+      columns: ['id'],
+      where: 'id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    return rows.isNotEmpty;
+  }
+
+  Future<BlobIntegrityStatus> verifyCommittedPhotoBlob(String id) async {
+    if (kIsWeb) {
+      final bytes = await _platformService.readEncryptedFile(id);
+      return bytes != null
+          ? BlobIntegrityStatus.healthy
+          : BlobIntegrityStatus.fileNotFound;
+    }
+    final file = await _platformService.resolveVaultFile(id);
+    return _crypto.verifyFileIntegrity(file);
+  }
+
+  Future<void> removeUncommittedPhotoBlob(String id) async {
+    try {
+      await _platformService.deleteFile(id);
+    } catch (_) {}
+  }
+
+  Future<void> commitStagedPhoto({
+    required String id,
+    required File stagingFile,
+    required String mimeType,
+    required int plaintextSize,
+    required String? originalName,
+    required String contentHash,
+    bool verifyIntegrity = true,
+    bool Function()? isEpochValid,
+    bool Function()? shouldAbort,
+    Future<void> Function()? onBeforeMetaCommit,
+  }) async {
+    final destFile = await _platformService.resolveVaultFile(id);
+    await VaultMediaCommitHelper.verifyAndPublishStagingFile(
+      stagingFile: stagingFile,
+      destFile: destFile,
+      crypto: _crypto,
+      verifyIntegrity: verifyIntegrity,
+      isEpochValid: isEpochValid,
+      shouldAbort: shouldAbort,
+    );
+    bool metaCommitted = false;
+    try {
+      if (onBeforeMetaCommit != null) {
+        await onBeforeMetaCommit();
+      }
+      if ((shouldAbort != null && shouldAbort()) ||
+          !_crypto.isUnlocked ||
+          (isEpochValid != null && !isEpochValid())) {
+        throw const OperationCancelledException(
+          'Vault locked before photo metadata commit',
+        );
+      }
+      await _saveMeta(
+        PhotoMeta(
+          id: id,
+          mimeType: mimeType,
+          size: plaintextSize,
+          createdAt: DateTime.now(),
+          originalName: originalName,
+          contentHash: contentHash,
+        ),
+      );
+      metaCommitted = true;
+    } finally {
+      if (!metaCommitted) {
+        await VaultMediaCommitHelper.deleteIfExists(destFile);
+      }
+    }
+  }
+
+  Future<void> recoverPhotoMetadataOnly({
+    required String id,
+    required String mimeType,
+    required int plaintextSize,
+    required String? originalName,
+    required String contentHash,
+  }) async {
+    if (!_crypto.isUnlocked) {
+      throw const OperationCancelledException('Vault is locked');
+    }
+    await _saveMeta(
+      PhotoMeta(
+        id: id,
+        mimeType: mimeType,
+        size: plaintextSize,
+        createdAt: DateTime.now(),
+        originalName: originalName,
+        contentHash: contentHash,
+      ),
+    );
   }
 
   /// Reads and decrypts one stored blob, off the UI isolate when possible.
@@ -317,7 +494,9 @@ class FileVaultService {
       final raw = await _platformService.secureRead('vault_photos_meta');
       if (raw == null || raw.isEmpty) return [];
       final List<dynamic> decoded = jsonDecode(raw);
-      return decoded.map((e) => _hydratePhotoMap(Map<String, dynamic>.from(e))).toList();
+      return decoded
+          .map((e) => _hydratePhotoMap(Map<String, dynamic>.from(e)))
+          .toList();
     }
 
     await _ensureDb();
@@ -365,19 +544,21 @@ class FileVaultService {
       existing.add(meta);
       await _platformService.secureWrite(
         'vault_photos_meta',
-        jsonEncode(existing.map((m) {
-          final em = m.toMap();
-          if (m.originalName != null && m.originalName!.isNotEmpty) {
-            em['originalName'] = _crypto.encryptString(m.originalName!);
-          }
-          if (m.caption.isNotEmpty) {
-            em['caption'] = _crypto.encryptString(m.caption);
-          }
-          if (m.tags.isNotEmpty) {
-            em['tags'] = _crypto.encryptString(m.tags.join(','));
-          }
-          return em;
-        }).toList()),
+        jsonEncode(
+          existing.map((m) {
+            final em = m.toMap();
+            if (m.originalName != null && m.originalName!.isNotEmpty) {
+              em['originalName'] = _crypto.encryptString(m.originalName!);
+            }
+            if (m.caption.isNotEmpty) {
+              em['caption'] = _crypto.encryptString(m.caption);
+            }
+            if (m.tags.isNotEmpty) {
+              em['tags'] = _crypto.encryptString(m.tags.join(','));
+            }
+            return em;
+          }).toList(),
+        ),
       );
       return;
     }
@@ -477,17 +658,42 @@ class FileVaultService {
     try {
       await _platformService.secureDelete('vault_photos_meta');
     } catch (_) {}
+    await cleanupImportStagingDir();
   }
 
-  Future<({List<String> successfulIds, int totalAttempted, bool stoppedEarly, String? failedFileName, Object? error, bool originalsKept})> pickAndEncryptImage(BuildContext context, {void Function(int index, int positionOneBased, String name)? onFileStart, void Function(int index)? onFileSaved, void Function()? onWaitingDeleteConfirm, void Function(int total)? onPicked, void Function(int index, String detail)? onFileFailed, bool Function()? isCancelled}) async {
+  Future<
+    ({
+      List<String> successfulIds,
+      int totalAttempted,
+      bool stoppedEarly,
+      String? failedFileName,
+      Object? error,
+      bool originalsKept,
+    })
+  >
+  pickAndEncryptImage(
+    BuildContext context, {
+    void Function(int index, int positionOneBased, String name)? onFileStart,
+    void Function(int index)? onFileSaved,
+    void Function()? onWaitingDeleteConfirm,
+    void Function(int total)? onPicked,
+    void Function(int index, String detail)? onFileFailed,
+    bool Function()? isCancelled,
+  }) async {
     final List<AssetEntity>? assets = await AssetPicker.pickAssets(
       context,
-      pickerConfig: const AssetPickerConfig(
-        requestType: RequestType.image,
-      ),
+      pickerConfig: MediaImportPolicy.buildPickerConfig(ImportMediaKind.photo),
+      useRootNavigator: false,
     );
     if (assets == null || assets.isEmpty) {
-      return (successfulIds: <String>[], totalAttempted: 0, stoppedEarly: false, failedFileName: null, error: null, originalsKept: false);
+      return (
+        successfulIds: <String>[],
+        totalAttempted: 0,
+        stoppedEarly: false,
+        failedFileName: null,
+        error: null,
+        originalsKept: false,
+      );
     }
 
     // The picker just reported the batch size, so the live import card can list
@@ -564,7 +770,9 @@ class FileVaultService {
         onWaitingDeleteConfirm?.call();
       } catch (_) {}
       try {
-        final deletedIds = await PhotoManager.editor.deleteWithIds(assets.map((a) => a.id).toList());
+        final deletedIds = await PhotoManager.editor.deleteWithIds(
+          assets.map((a) => a.id).toList(),
+        );
         if (deletedIds.length >= assets.length) originalsKept = false;
         if (deletedIds.length < assets.length && context.mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -602,7 +810,11 @@ class FileVaultService {
       );
       if (picked == null) return null;
       final bytes = await picked.readAsBytes();
-      final id = await savePhoto(bytes, picked.mimeType ?? 'image/jpeg', originalName: p.basename(picked.path));
+      final id = await savePhoto(
+        bytes,
+        picked.mimeType ?? 'image/jpeg',
+        originalName: p.basename(picked.path),
+      );
       return id;
     } catch (e) {
       debugPrint('captureAndEncryptImage failed: $e');
@@ -645,14 +857,13 @@ class FileVaultService {
     // refused" is the catch branch — a null return is impossible and would
     // have been dead code here.
     try {
-      await PhotoManager.editor.saveImage(
-        bytes,
-        filename: originalName,
-      );
+      await PhotoManager.editor.saveImage(bytes, filename: originalName);
     } catch (_) {
       // The gallery refused. The vault copy is untouched — say so instead of
       // pretending nothing happened.
-      throw Exception('The gallery did not accept the photo. The vault copy was kept.');
+      throw Exception(
+        'The gallery did not accept the photo. The vault copy was kept.',
+      );
     }
 
     try {
@@ -661,7 +872,8 @@ class FileVaultService {
       // The plaintext now exists in the gallery AND the vault. The user must
       // know both copies exist — a silent duplicate defeats the vault.
       throw Exception(
-          'Photo was saved to the gallery, but the vault copy could not be deleted. Delete it from the vault manually.');
+        'Photo was saved to the gallery, but the vault copy could not be deleted. Delete it from the vault manually.',
+      );
     }
   }
 
@@ -684,13 +896,19 @@ class FileVaultService {
     // without the columns (IF NOT EXISTS above is a no-op then); PRAGMA-migrate.
     final columns = await _db!.rawQuery('PRAGMA table_info($_tableName)');
     if (!columns.any((column) => column['name'] == 'folder')) {
-      await _db!.execute("ALTER TABLE $_tableName ADD COLUMN folder TEXT DEFAULT ''");
+      await _db!.execute(
+        "ALTER TABLE $_tableName ADD COLUMN folder TEXT DEFAULT ''",
+      );
     }
     if (!columns.any((column) => column['name'] == 'tags')) {
-      await _db!.execute("ALTER TABLE $_tableName ADD COLUMN tags TEXT DEFAULT ''");
+      await _db!.execute(
+        "ALTER TABLE $_tableName ADD COLUMN tags TEXT DEFAULT ''",
+      );
     }
     if (!columns.any((column) => column['name'] == 'caption')) {
-      await _db!.execute("ALTER TABLE $_tableName ADD COLUMN caption TEXT DEFAULT ''");
+      await _db!.execute(
+        "ALTER TABLE $_tableName ADD COLUMN caption TEXT DEFAULT ''",
+      );
     }
     await _db!.delete(_tableName);
     for (final photo in decodedPhotos) {
@@ -725,7 +943,11 @@ class FileVaultService {
           } catch (_) {}
         }
       }
-      await _db!.insert(_tableName, map, conflictAlgorithm: ConflictAlgorithm.replace);
+      await _db!.insert(
+        _tableName,
+        map,
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
     }
   }
 }

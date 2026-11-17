@@ -22,21 +22,41 @@ import 'package:flutter/foundation.dart';
 
 enum ImportFileStatus {
   queued,
+  preparing,
   encrypting,
+  committing,
   restoring,
   waitingDeleteConfirm,
+  awaitingDeleteConfirmation,
+  pausedLocked,
+  needsSource,
   saved,
   savedOriginalKept,
   failed,
   cancelled,
 }
 
+enum ImportPauseReason {
+  none,
+  locked,
+  userPaused,
+  permissionDenied,
+  lowStorage,
+  databaseFailure,
+  serviceTimedOut,
+  serviceStopped,
+}
+
 String importFileStatusLabel(ImportFileStatus status) {
   switch (status) {
     case ImportFileStatus.queued:
       return 'Queued';
+    case ImportFileStatus.preparing:
+      return 'Preparing';
     case ImportFileStatus.encrypting:
       return 'Encrypting';
+    case ImportFileStatus.committing:
+      return 'Saving';
     // One row covers the WHOLE restore of one vault file: the decrypt (a real
     // percent, polled off the growing temp file) and the gallery/save write
     // (no measurable percent — the OS copy is opaque). While the percent is
@@ -49,7 +69,12 @@ String importFileStatusLabel(ImportFileStatus status) {
     // and the delete pass the OS runs after "Allow"). There is no observable
     // boundary between those, so one honest label covers them all.
     case ImportFileStatus.waitingDeleteConfirm:
+    case ImportFileStatus.awaitingDeleteConfirmation:
       return 'Waiting for delete confirmation';
+    case ImportFileStatus.pausedLocked:
+      return 'Paused (locked)';
+    case ImportFileStatus.needsSource:
+      return 'Needs source';
     case ImportFileStatus.saved:
       return 'Saved';
     case ImportFileStatus.savedOriginalKept:
@@ -62,6 +87,7 @@ String importFileStatusLabel(ImportFileStatus status) {
 }
 
 class ImportFileEntry {
+  final String? jobId;
   String name;
   ImportFileStatus status;
   String? detail;
@@ -70,11 +96,13 @@ class ImportFileEntry {
   /// null when the work is under way but not measurable (gallery write) or
   /// not applicable (import encrypting). Null never means "not started".
   double? progress;
-  ImportFileEntry(
-      {required this.name,
-      this.status = ImportFileStatus.queued,
-      this.detail,
-      this.progress});
+  ImportFileEntry({
+    this.jobId,
+    required this.name,
+    this.status = ImportFileStatus.queued,
+    this.detail,
+    this.progress,
+  });
 }
 
 /// One import session: the ordered file list plus a 1-based position cursor.
@@ -91,14 +119,61 @@ class ImportSession extends ChangeNotifier {
   final List<ImportFileEntry> files = [];
   int position = 0;
   String verb = 'Importing';
+  ImportPauseReason pauseReason = ImportPauseReason.none;
+  String? pauseMessage;
+
+  VoidCallback? onRequestCancelCallback;
+  VoidCallback? onRetryAll;
+  VoidCallback? onClearFinished;
+  Future<void> Function()? onConfirmPendingDeletes;
+  void Function(int index)? onRetryItem;
+  void Function(int index)? onCancelItem;
+
   int get total => files.length;
 
   bool get isActive => files.isNotEmpty;
-  bool get isWorking => files.any((f) =>
-      f.status == ImportFileStatus.queued ||
-      f.status == ImportFileStatus.encrypting ||
-      f.status == ImportFileStatus.restoring ||
-      f.status == ImportFileStatus.waitingDeleteConfirm);
+  bool get isWorking => files.any(
+    (f) =>
+        f.status == ImportFileStatus.queued ||
+        f.status == ImportFileStatus.preparing ||
+        f.status == ImportFileStatus.encrypting ||
+        f.status == ImportFileStatus.committing ||
+        f.status == ImportFileStatus.restoring ||
+        f.status == ImportFileStatus.waitingDeleteConfirm,
+  );
+
+  bool get hasPausedLocked =>
+      files.any((f) => f.status == ImportFileStatus.pausedLocked);
+
+  bool get hasNeedsSource =>
+      files.any((f) => f.status == ImportFileStatus.needsSource);
+
+  bool get hasAwaitingDeleteConfirm => files.any(
+    (f) =>
+        f.status == ImportFileStatus.awaitingDeleteConfirmation ||
+        f.status == ImportFileStatus.waitingDeleteConfirm,
+  );
+
+  bool get isPaused =>
+      !isWorking && (pauseReason != ImportPauseReason.none || hasPausedLocked);
+
+  bool get hasRetryableWork =>
+      !isWorking &&
+      (pauseReason != ImportPauseReason.none ||
+          hasPausedLocked ||
+          hasNeedsSource ||
+          files.any((f) => f.status == ImportFileStatus.failed));
+
+  bool get hasClearableItems =>
+      !isWorking &&
+      files.any(
+        (f) =>
+            f.status == ImportFileStatus.saved ||
+            f.status == ImportFileStatus.savedOriginalKept ||
+            f.status == ImportFileStatus.cancelled ||
+            f.status == ImportFileStatus.failed ||
+            f.status == ImportFileStatus.needsSource,
+      );
 
   /// The cancellation token for the whole batch. The pill's ✕ and the
   /// sheet's Cancel both set it; the owning screen's loop (or the service's
@@ -111,10 +186,40 @@ class ImportSession extends ChangeNotifier {
   /// Requests that the batch stop after the file currently in flight.
   /// Idempotent.
   void requestCancel() {
+    if (onRequestCancelCallback != null) {
+      cancelRequested = true;
+      onRequestCancelCallback!();
+      notifyListeners();
+      return;
+    }
     if (!cancelRequested) {
       cancelRequested = true;
       notifyListeners();
     }
+  }
+
+  String? backgroundServiceWarning;
+
+  /// Replaces the projected view entries cleanly from app-scoped coordinator
+  /// state while keeping [notifyListeners] atomic.
+  void syncFromProjection({
+    required List<ImportFileEntry> entries,
+    required int activePosition,
+    required bool cancelRequestedFlag,
+    required ImportPauseReason pauseReasonValue,
+    String? pauseDetail,
+    String? backgroundWarning,
+  }) {
+    files
+      ..clear()
+      ..addAll(entries);
+    position = activePosition;
+    verb = 'Importing';
+    cancelRequested = cancelRequestedFlag;
+    pauseReason = pauseReasonValue;
+    pauseMessage = pauseDetail;
+    backgroundServiceWarning = backgroundWarning;
+    notifyListeners();
   }
 
   void begin(List<String> names) {
@@ -131,8 +236,11 @@ class ImportSession extends ChangeNotifier {
   /// switches so all labels read "Restoring …".
   void beginRestore(List<String> names) {
     files.clear();
-    files.addAll(names.map((n) =>
-        ImportFileEntry(name: n, status: ImportFileStatus.restoring)));
+    files.addAll(
+      names.map(
+        (n) => ImportFileEntry(name: n, status: ImportFileStatus.restoring),
+      ),
+    );
     position = names.isEmpty ? 0 : 1;
     verb = 'Restoring';
     cancelRequested = false;
@@ -209,8 +317,10 @@ class ImportSession extends ChangeNotifier {
   }
 
   void markSaved(int index) => _set(index, ImportFileStatus.saved);
-  void markSavedOriginalKept(int index) => _set(index, ImportFileStatus.savedOriginalKept);
-  void markFailed(int index, [String? detail]) => _set(index, ImportFileStatus.failed, detail: detail);
+  void markSavedOriginalKept(int index) =>
+      _set(index, ImportFileStatus.savedOriginalKept);
+  void markFailed(int index, [String? detail]) =>
+      _set(index, ImportFileStatus.failed, detail: detail);
 
   /// A row the cancelled loop never reached. 'Cancelled' is the honest label:
   /// the file was not processed and nothing happened to it — 'Failed' would

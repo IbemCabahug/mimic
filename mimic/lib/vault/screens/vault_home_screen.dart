@@ -11,8 +11,11 @@ import '../services/notes_service.dart';
 import '../services/video_vault_service.dart';
 import '../services/document_vault_service.dart';
 import '../services/backup_reminder_service.dart';
+import '../services/import_coordinator.dart';
 import '../services/onboarding_service.dart';
+import '../widgets/import_activity_button.dart';
 import '../widgets/vault_scaffold.dart';
+import '../security/auto_lock.dart';
 import '../security/shake_wipe_service.dart';
 import '../widgets/blood_splatter_overlay.dart';
 import '../widgets/backup_out_of_date_banner.dart';
@@ -79,7 +82,9 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
   /// (a locked home is already redirecting to /vault-pin).
   Future<void> _maybeShowManual() async {
     try {
-      final seen = await ref.read(onboardingServiceProvider).isVaultManualSeen();
+      final seen = await ref
+          .read(onboardingServiceProvider)
+          .isVaultManualSeen();
       if (seen || !mounted) return;
       if (!ref.read(vaultCryptoProvider).isUnlocked) return;
       if (!Navigator.of(context).canPop()) return;
@@ -106,8 +111,11 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
     // Capture the root overlay state BEFORE pushNamedAndRemoveUntil disposes this screen
     final overlay = Navigator.of(context, rootNavigator: true).overlay;
 
-    // Lock the vault in memory
-    ref.read(vaultCryptoProvider).clearKey();
+    // Revoke any active background import authorization and lock vault in memory
+    AutoLock().revokeAllAndLock(
+      reason: 'shake_to_hide',
+      fallbackCrypto: ref.read(vaultCryptoProvider),
+    );
 
     // Navigate to the game home on the root navigator
     Navigator.of(
@@ -135,7 +143,9 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
       final photos = await ref.read(fileVaultServiceProvider).getAllPhotos();
       final notes = await ref.read(notesServiceProvider).getAllNotes();
       final videos = await ref.read(videoVaultServiceProvider).getAllVideos();
-      final documents = await ref.read(documentVaultServiceProvider).listDocuments();
+      final documents = await ref
+          .read(documentVaultServiceProvider)
+          .listDocuments();
       if (mounted) {
         setState(() {
           _photoCount = photos.length;
@@ -151,9 +161,28 @@ class _VaultHomeScreenState extends ConsumerState<VaultHomeScreen>
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<int>(
+      importCoordinatorProvider.select((c) => c.libraryRevision),
+      (prev, next) {
+        if (prev != next && mounted) {
+          _loadCounts();
+        }
+      },
+    );
+    final importActive = ref.watch(
+      importCoordinatorProvider.select((c) => c.uiSession.isActive),
+    );
+    final importSession = ref.read(importCoordinatorProvider).uiSession;
     return VaultScaffold(
       title: null,
       showBackButton: false,
+      floatingActionButton: importActive
+          ? ImportActivityButton(
+              key: const ValueKey('home_import_activity_button'),
+              session: importSession,
+              onTap: () => showImportDetailsSheet(context, importSession),
+            )
+          : null,
       actions: [
         // F30: the field manual stays one tap away forever — the first-run
         // walkthrough is never the only chance to read it.

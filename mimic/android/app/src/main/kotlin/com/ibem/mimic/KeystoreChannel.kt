@@ -23,7 +23,10 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-class KeystoreChannel(private val activity: FragmentActivity? = null) : MethodChannel.MethodCallHandler {
+class KeystoreChannel(
+    private val activityProvider: () -> FragmentActivity?,
+) : MethodChannel.MethodCallHandler {
+    constructor(activity: FragmentActivity? = null) : this({ activity })
     private val KEY_ALIAS = "mimic_vault_kek"
     private val BIO_KEY_ALIAS = "mimic_vault_bio_kek"
     private val ANDROID_KEYSTORE = "AndroidKeyStore"
@@ -219,7 +222,7 @@ class KeystoreChannel(private val activity: FragmentActivity? = null) : MethodCh
     }
 
     private fun bioAvailable(result: MethodChannel.Result) {
-        val act = activity
+        val act = activityProvider()
         if (act == null) {
             result.error("NO_ACTIVITY", "activity unavailable", null)
             return
@@ -319,7 +322,7 @@ class KeystoreChannel(private val activity: FragmentActivity? = null) : MethodCh
         result: MethodChannel.Result,
         cryptoOp: (Cipher) -> ByteArray
     ) {
-        val act = activity
+        val act = activityProvider()
         if (act == null) {
             result.error("NO_ACTIVITY", "activity unavailable", null)
             return

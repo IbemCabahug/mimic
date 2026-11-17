@@ -10,6 +10,7 @@ import '../../core/widgets/biometric_vault_unlock.dart';
 import '../services/intruder_service.dart';
 import '../security/panic_mode.dart';
 import '../security/auto_lock.dart';
+import '../security/vault_ui_access.dart';
 import '../security/duress_service.dart';
 import '../security/decoy_vault_service.dart';
 import '../security/vault_conceal_service.dart';
@@ -149,13 +150,19 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     lockoutService.remainingLockout().then((initialRemaining) {
       if (!mounted) return;
       if (initialRemaining <= Duration.zero) {
-        setState(() { _remainingLockout = Duration.zero; _error = null; });
+        setState(() {
+          _remainingLockout = Duration.zero;
+          _error = null;
+        });
         return;
       }
       _lockoutCountdown = initialRemaining;
       _lockoutReconcileTick = 0;
       _lockoutTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        if (!mounted) { timer.cancel(); return; }
+        if (!mounted) {
+          timer.cancel();
+          return;
+        }
         _lockoutCountdown -= const Duration(seconds: 1);
         if (_lockoutCountdown > Duration.zero) {
           setState(() {
@@ -169,7 +176,10 @@ class _PinScreenState extends ConsumerState<PinScreen> {
               if (!mounted) return;
               if (authoritative <= Duration.zero) {
                 timer.cancel();
-                setState(() { _remainingLockout = Duration.zero; _error = null; });
+                setState(() {
+                  _remainingLockout = Duration.zero;
+                  _error = null;
+                });
                 return;
               }
               _lockoutCountdown = authoritative;
@@ -182,7 +192,10 @@ class _PinScreenState extends ConsumerState<PinScreen> {
           return;
         }
         timer.cancel();
-        setState(() { _remainingLockout = Duration.zero; _error = null; });
+        setState(() {
+          _remainingLockout = Duration.zero;
+          _error = null;
+        });
         _confirmLockoutExpiry();
       });
     });
@@ -223,6 +236,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
 
         PanicMode().init(context, ref);
         AutoLock().init(context, ref);
+        ref.read(vaultUiAccessProvider.notifier).restoreUiAccessAfterAuth();
 
         // The gesture chooser appears only inside deliberate vault creation and is unreachable otherwise.
         final needsHardwareMigration = _crypto.needsHardwareMigration;
@@ -319,6 +333,10 @@ class _PinScreenState extends ConsumerState<PinScreen> {
       final isFakePin = await duressService.isFakePin(pin);
 
       if (isFakePin) {
+        AutoLock().revokeAllAndLock(
+          reason: 'duress_pin',
+          fallbackCrypto: _crypto,
+        );
         _pinController.clear();
         await ref.read(lockoutServiceProvider).reset();
         await Future.delayed(const Duration(milliseconds: 450));
@@ -337,6 +355,13 @@ class _PinScreenState extends ConsumerState<PinScreen> {
       final isDecoyPin = isPro && await decoyService.isDecoyPin(pin);
 
       if (isDecoyPin) {
+        AutoLock().revokeBackgroundImport(
+          reason: 'decoy_pin',
+          lockVault: false,
+        );
+        if (_crypto.isUnlocked) {
+          _crypto.clearKey();
+        }
         _pinController.clear();
         await ref.read(lockoutServiceProvider).reset();
         await Future.delayed(const Duration(milliseconds: 450));
@@ -384,6 +409,7 @@ class _PinScreenState extends ConsumerState<PinScreen> {
 
         PanicMode().init(context, ref);
         AutoLock().init(context, ref);
+        ref.read(vaultUiAccessProvider.notifier).restoreUiAccessAfterAuth();
 
         if (!_crypto.hasRecoveryPhrase) {
           navigator.pushReplacement(
@@ -417,7 +443,9 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     } on KeystoreInvalidException catch (e) {
       if (!kIsWeb && prospectiveAttempts > 0) {
         try {
-          await ref.read(platformServiceProvider).secureWrite(
+          await ref
+              .read(platformServiceProvider)
+              .secureWrite(
                 'wrong_attempts',
                 (prospectiveAttempts - 1).toString(),
               );
@@ -439,7 +467,13 @@ class _PinScreenState extends ConsumerState<PinScreen> {
         try {
           final currentCount = prospectiveAttempts > 0
               ? prospectiveAttempts
-              : ((int.tryParse(await ref.read(platformServiceProvider).secureRead('wrong_attempts') ?? '') ?? 0));
+              : ((int.tryParse(
+                      await ref
+                              .read(platformServiceProvider)
+                              .secureRead('wrong_attempts') ??
+                          '',
+                    ) ??
+                    0));
           if (currentCount % 3 == 0) {
             _intruderService.captureIntruder(_crypto);
           }
@@ -479,7 +513,9 @@ class _PinScreenState extends ConsumerState<PinScreen> {
       // Operational failure (e.g. storage error, keystore wrap error, serialization wait): do not increment wrong_attempts!
       if (!kIsWeb && prospectiveAttempts > 0) {
         try {
-          await ref.read(platformServiceProvider).secureWrite(
+          await ref
+              .read(platformServiceProvider)
+              .secureWrite(
                 'wrong_attempts',
                 (prospectiveAttempts - 1).toString(),
               );
@@ -663,6 +699,10 @@ class _PinScreenState extends ConsumerState<PinScreen> {
               BiometricVaultUnlock(
                 onUnlockedVault: (secret) => _authenticateWithSecret(secret),
                 onDecoyAdmin: () {
+                  AutoLock().revokeAllAndLock(
+                    reason: 'biometric_decoy_admin',
+                    fallbackCrypto: _crypto,
+                  );
                   if (mounted) {
                     Navigator.of(context).pushReplacementNamed('/admin-panel');
                   }

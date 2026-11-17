@@ -33,16 +33,20 @@ class InvalidPinException implements Exception {
 
 class SystemKeyMissingException implements Exception {
   final String message;
-  SystemKeyMissingException([this.message =
-    'System key is missing but the vault was already provisioned. Refusing to regenerate to avoid orphaning encrypted data.']);
+  SystemKeyMissingException([
+    this.message =
+        'System key is missing but the vault was already provisioned. Refusing to regenerate to avoid orphaning encrypted data.',
+  ]);
   @override
   String toString() => 'SystemKeyMissingException: $message';
 }
 
 class VaultSwapRecoveryException implements Exception {
   final String message;
-  VaultSwapRecoveryException([this.message =
-    'Interrupted vault swap detected with incomplete backup data; cannot safely recover.']);
+  VaultSwapRecoveryException([
+    this.message =
+        'Interrupted vault swap detected with incomplete backup data; cannot safely recover.',
+  ]);
   @override
   String toString() => 'VaultSwapRecoveryException: $message';
 }
@@ -74,6 +78,20 @@ class VaultCrypto extends ChangeNotifier {
   bool _hasRecoveryPhrase = false;
   int _lockEpoch = 0;
 
+  /// Monotonically incremented whenever [lock] or [clearKey] runs.
+  /// Callers can capture an epoch at job start and verify it still matches
+  /// before committing metadata or blobs into the vault.
+  int get lockEpoch => _lockEpoch;
+
+  final List<void Function(int newEpoch)> _beforeLockListeners = [];
+
+  /// Registers a synchronous callback invoked immediately when [lock] starts
+  /// (before async key cleanup completes). Returns a disposer function.
+  void Function() addBeforeLockListener(void Function(int newEpoch) listener) {
+    _beforeLockListeners.add(listener);
+    return () => _beforeLockListeners.remove(listener);
+  }
+
   /// M13 follow-up: long-lived range-decrypt worker (one Isolate.spawn per
   /// unlock). Started lazily on the first range request; disposed on lock.
   RangeDecryptWorker? _rangeWorker;
@@ -91,19 +109,22 @@ class VaultCrypto extends ChangeNotifier {
     final completer = Completer<void>();
     _mutex = completer.future;
 
-    return previous.catchError((_) {}).then((_) {
-      return action();
-    }).whenComplete(() {
-      completer.complete();
-    });
+    return previous
+        .catchError((_) {})
+        .then((_) {
+          return action();
+        })
+        .whenComplete(() {
+          completer.complete();
+        });
   }
 
   VaultCrypto(
     this._platformService, [
     KeystoreService? keystoreService,
     BiometricUnlockStore? biometricUnlockStore,
-  ])  : _keystoreService = keystoreService ?? AndroidKeystoreService(),
-        _biometricUnlockStore = biometricUnlockStore {
+  ]) : _keystoreService = keystoreService ?? AndroidKeystoreService(),
+       _biometricUnlockStore = biometricUnlockStore {
     _instance = this;
   }
 
@@ -123,7 +144,10 @@ class VaultCrypto extends ChangeNotifier {
       if (kIsWeb) {
         final salt = _webKeyStore[_storageKeySalt];
         final storedHash = _webKeyStore[_storageKeyPinHash];
-        if (salt == null || salt.isEmpty || storedHash == null || storedHash.isEmpty) {
+        if (salt == null ||
+            salt.isEmpty ||
+            storedHash == null ||
+            storedHash.isEmpty) {
           return false;
         }
         final parsed = parseAnyPinVerifier(storedHash);
@@ -189,14 +213,17 @@ class VaultCrypto extends ChangeNotifier {
         throw const InvalidPinException();
       }
       final kek = _deriveKek(candidateKey);
-      final wrapped =
-          await _platformService.secureRead(_storageKeyMasterWrapped);
+      final wrapped = await _platformService.secureRead(
+        _storageKeyMasterWrapped,
+      );
       Uint8List dek;
       bool needsHwMigration = false;
       if (wrapped == null) {
         dek = candidateKey;
         await _platformService.secureWrite(
-            _storageKeyMasterWrapped, _wrapKey(dek, kek));
+          _storageKeyMasterWrapped,
+          _wrapKey(dek, kek),
+        );
         needsHwMigration = true;
       } else {
         if (wrapped.startsWith('hw1:')) {
@@ -238,15 +265,18 @@ class VaultCrypto extends ChangeNotifier {
       }
       await _platformService.secureWrite('vault_setup_completed', 'true');
       await _platformService.secureDelete('vault_wiped');
-      
+
       final blob = await _platformService.secureRead('recovery_blob');
       if (_lockEpoch == capturedEpoch) {
         _hasRecoveryPhrase = blob != null;
       }
     } else {
-      final isSetup = await _platformService.secureRead('vault_setup_completed');
-      final restoredPendingPin =
-          await _platformService.secureRead('vault_restored_pending_pin');
+      final isSetup = await _platformService.secureRead(
+        'vault_setup_completed',
+      );
+      final restoredPendingPin = await _platformService.secureRead(
+        'vault_restored_pending_pin',
+      );
       if (isSetup == 'true' || restoredPendingPin == 'true') {
         throw SystemKeyMissingException(
           'Vault backup restored without PIN setup. Please recover via phrase.',
@@ -261,7 +291,10 @@ class VaultCrypto extends ChangeNotifier {
       // key on first run), so deriving at 600,000 while writing a v3 record
       // claiming 100,000 would make the vault impossible to unlock.
       final candidateKey = await _deriveKey(
-          pin, freshSaltBase64, kHardenedVerifierIterations);
+        pin,
+        freshSaltBase64,
+        kHardenedVerifierIterations,
+      );
       final kek = _deriveKek(candidateKey);
 
       final innerWrapped = _wrapKey(candidateKey, kek);
@@ -278,9 +311,13 @@ class VaultCrypto extends ChangeNotifier {
       await _platformService.secureDelete('vault_restored_pending_pin');
 
       await _platformService.secureWrite(
-          _storageKeyPinHash, formatHardenedVerifier(candidateKey));
+        _storageKeyPinHash,
+        formatHardenedVerifier(candidateKey),
+      );
       await _platformService.secureWrite(
-          _storageKeyMasterWrapped, 'hw1:$hwWrapped');
+        _storageKeyMasterWrapped,
+        'hw1:$hwWrapped',
+      );
       await _platformService.secureWrite(_storageKeySalt, freshSaltBase64);
 
       if (_lockEpoch == capturedEpoch) {
@@ -337,6 +374,13 @@ class VaultCrypto extends ChangeNotifier {
   void lock() {
     _isUnlocked = false;
     _lockEpoch++;
+    for (final listener in List<void Function(int)>.from(
+      _beforeLockListeners,
+    )) {
+      try {
+        listener(_lockEpoch);
+      } catch (_) {}
+    }
     final rangeWorker = _rangeWorker;
     _rangeWorker = null;
     // A spawn may still be in flight (photo grid asked for every tile in the
@@ -404,10 +448,15 @@ class VaultCrypto extends ChangeNotifier {
 
   Future<void> storeRecoveryBlob([List<String>? recoveryWords]) {
     final epoch = _lockEpoch;
-    return _synchronized(() => _storeRecoveryBlobInternal(recoveryWords, epoch));
+    return _synchronized(
+      () => _storeRecoveryBlobInternal(recoveryWords, epoch),
+    );
   }
 
-  Future<void> _storeRecoveryBlobInternal([List<String>? recoveryWords, int? capturedEpoch]) async {
+  Future<void> _storeRecoveryBlobInternal([
+    List<String>? recoveryWords,
+    int? capturedEpoch,
+  ]) async {
     if (_isStoringRecovery) return;
     _isStoringRecovery = true;
     try {
@@ -467,7 +516,10 @@ class VaultCrypto extends ChangeNotifier {
     // never changes, only the key that protects it — so this is safe for
     // a vault that already holds files.
     final newCandidateKey = await _deriveKey(
-        pin, saltBase64, kHardenedVerifierIterations);
+      pin,
+      saltBase64,
+      kHardenedVerifierIterations,
+    );
     final newKek = _deriveKek(newCandidateKey);
     try {
       final hashVerifier = formatHardenedVerifier(newCandidateKey);
@@ -498,8 +550,10 @@ class VaultCrypto extends ChangeNotifier {
       }
 
       final parsedStaged = parseAnyPinVerifier(readHash);
-      final expectedStagedVerifier =
-          rebuildVerifierFor(parsedStaged, newCandidateKey);
+      final expectedStagedVerifier = rebuildVerifierFor(
+        parsedStaged,
+        newCandidateKey,
+      );
       if (expectedStagedVerifier == null ||
           !_constantTimeEquals(readHash, expectedStagedVerifier)) {
         await _cleanupTempKeys();
@@ -511,8 +565,9 @@ class VaultCrypto extends ChangeNotifier {
         throw StateError('Staged wrapped key missing hw1 prefix');
       }
       try {
-        final verifyInner =
-            await _keystoreService.unwrap(readWrapped.substring(4));
+        final verifyInner = await _keystoreService.unwrap(
+          readWrapped.substring(4),
+        );
         if (verifyInner == 'KEY_INVALID') {
           await _cleanupTempKeys();
           throw StateError('Staged wrapped key failed hardware unwrap');
@@ -530,8 +585,9 @@ class VaultCrypto extends ChangeNotifier {
 
       final canonSalt = await _platformService.secureRead(_storageKeySalt);
       final canonHash = await _platformService.secureRead(_storageKeyPinHash);
-      final canonWrapped =
-          await _platformService.secureRead(_storageKeyMasterWrapped);
+      final canonWrapped = await _platformService.secureRead(
+        _storageKeyMasterWrapped,
+      );
       if (canonSalt != null) {
         await _platformService.secureWrite(_bakSalt, canonSalt);
       }
@@ -546,7 +602,10 @@ class VaultCrypto extends ChangeNotifier {
 
       await _platformService.secureWrite(_storageKeySalt, saltBase64);
       await _platformService.secureWrite(_storageKeyPinHash, hashVerifier);
-      await _platformService.secureWrite(_storageKeyMasterWrapped, wrappedValue);
+      await _platformService.secureWrite(
+        _storageKeyMasterWrapped,
+        wrappedValue,
+      );
 
       await _platformService.secureWrite(_swapMarker, '$markerPrefix:swapped');
 
@@ -569,7 +628,11 @@ class VaultCrypto extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Future<void> _changePinInternal(String newPin, Uint8List capturedDek, int capturedEpoch) async {
+  Future<void> _changePinInternal(
+    String newPin,
+    Uint8List capturedDek,
+    int capturedEpoch,
+  ) async {
     final dek = capturedDek;
 
     await _commitStagedTriple(newPin, dek, markerPrefix: 'pin');
@@ -627,7 +690,9 @@ class VaultCrypto extends ChangeNotifier {
     }
 
     try {
-      final verifyInner = await _keystoreService.unwrap(readWrapped.substring(4));
+      final verifyInner = await _keystoreService.unwrap(
+        readWrapped.substring(4),
+      );
       if (verifyInner == 'KEY_INVALID') {
         await _cleanupTempKeys();
         throw StateError('Staged wrapped key failed hardware unwrap');
@@ -643,8 +708,9 @@ class VaultCrypto extends ChangeNotifier {
       throw StateError('Staged wrapped key failed verification: $e');
     }
 
-    final canonWrapped =
-        await _platformService.secureRead(_storageKeyMasterWrapped);
+    final canonWrapped = await _platformService.secureRead(
+      _storageKeyMasterWrapped,
+    );
     if (canonWrapped != null) {
       await _platformService.secureWrite(_bakMasterWrapped, canonWrapped);
     }
@@ -663,10 +729,15 @@ class VaultCrypto extends ChangeNotifier {
 
   Future<bool> recoverWithPhrase(List<String> recoveryWords) {
     final epoch = _lockEpoch;
-    return _synchronized(() => _recoverWithPhraseInternal(recoveryWords, epoch));
+    return _synchronized(
+      () => _recoverWithPhraseInternal(recoveryWords, epoch),
+    );
   }
 
-  Future<bool> _recoverWithPhraseInternal(List<String> recoveryWords, int capturedEpoch) async {
+  Future<bool> _recoverWithPhraseInternal(
+    List<String> recoveryWords,
+    int capturedEpoch,
+  ) async {
     final storedBlob = await _platformService.secureRead('recovery_blob');
     final storedSalt = await _platformService.secureRead('recovery_salt');
     if (storedBlob == null || storedSalt == null) {
@@ -677,7 +748,10 @@ class VaultCrypto extends ChangeNotifier {
       final salt = base64Decode(storedSalt);
       final blob = base64Decode(storedBlob);
 
-      final recoveryKey = await RecoveryPhrase.deriveKeyAsync(recoveryWords, salt);
+      final recoveryKey = await RecoveryPhrase.deriveKeyAsync(
+        recoveryWords,
+        salt,
+      );
 
       if (blob.length < _ivLength) return false;
       final iv = blob.sublist(0, _ivLength);
@@ -757,13 +831,17 @@ class VaultCrypto extends ChangeNotifier {
   Future<Uint8List> _getSystemKey() async {
     final storedKey = await _platformService.secureRead('system_key');
     if (storedKey != null) {
-      final isProvisioned = await _platformService.secureRead('system_key_provisioned');
+      final isProvisioned = await _platformService.secureRead(
+        'system_key_provisioned',
+      );
       if (isProvisioned != 'true') {
         await _platformService.secureWrite('system_key_provisioned', 'true');
       }
       return base64Decode(storedKey);
     }
-    final isProvisioned = await _platformService.secureRead('system_key_provisioned');
+    final isProvisioned = await _platformService.secureRead(
+      'system_key_provisioned',
+    );
     if (isProvisioned == 'true') {
       throw SystemKeyMissingException();
     }
@@ -864,14 +942,14 @@ class VaultCrypto extends ChangeNotifier {
       try {
         final buffer = Uint8List(64 * 1024);
         final outBuffer = Uint8List(64 * 1024 + 16);
-        
+
         var leftover = <int>[];
         var bytesRead = 0;
 
         while ((bytesRead = await srcRaf.readInto(buffer)) > 0) {
           int offset = 0;
           int outOffset = 0;
-          
+
           if (leftover.isNotEmpty) {
             final needed = 16 - leftover.length;
             if (bytesRead < needed) {
@@ -941,14 +1019,14 @@ class VaultCrypto extends ChangeNotifier {
         final buffer = Uint8List(64 * 1024);
         final outBuffer = Uint8List(64 * 1024 + 16);
         var bytesRead = 0;
-        
+
         var leftoverCipher = <int>[];
         Uint8List? heldPlaintextBlock;
 
         while ((bytesRead = await srcRaf.readInto(buffer)) > 0) {
           int offset = 0;
           int outOffset = 0;
-          
+
           if (leftoverCipher.isNotEmpty) {
             final needed = 16 - leftoverCipher.length;
             if (bytesRead < needed) {
@@ -957,17 +1035,25 @@ class VaultCrypto extends ChangeNotifier {
             } else {
               final temp = Uint8List(16);
               temp.setRange(0, leftoverCipher.length, leftoverCipher);
-              temp.setRange(leftoverCipher.length, 16, buffer.sublist(0, needed));
-              
+              temp.setRange(
+                leftoverCipher.length,
+                16,
+                buffer.sublist(0, needed),
+              );
+
               final tempOut = Uint8List(16);
               cipher.processBlock(temp, 0, tempOut, 0);
-              
+
               if (heldPlaintextBlock != null) {
-                outBuffer.setRange(outOffset, outOffset + 16, heldPlaintextBlock);
+                outBuffer.setRange(
+                  outOffset,
+                  outOffset + 16,
+                  heldPlaintextBlock,
+                );
                 outOffset += 16;
               }
               heldPlaintextBlock = tempOut;
-              
+
               offset = needed;
               leftoverCipher.clear();
             }
@@ -976,7 +1062,7 @@ class VaultCrypto extends ChangeNotifier {
           while (offset + 16 <= bytesRead) {
             final tempOut = Uint8List(16);
             cipher.processBlock(buffer, offset, tempOut, 0);
-            
+
             if (heldPlaintextBlock != null) {
               outBuffer.setRange(outOffset, outOffset + 16, heldPlaintextBlock);
               outOffset += 16;
@@ -1015,7 +1101,12 @@ class VaultCrypto extends ChangeNotifier {
     }
   }
 
-  Future<void> encryptStreamSystem(File src, File dest) async {
+  Future<void> encryptStreamSystem(
+    File src,
+    File dest, {
+    bool Function()? shouldAbort,
+    CryptoIsolateCancelHandle? cancelHandle,
+  }) async {
     if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
     final iv = _generateSecureRandomBytes(_ivLength);
     await cryptoIsolateEncryptFile(
@@ -1023,6 +1114,8 @@ class VaultCrypto extends ChangeNotifier {
       iv: iv,
       srcPath: src.path,
       destPath: dest.path,
+      shouldAbort: shouldAbort,
+      cancelHandle: cancelHandle,
     );
   }
 
@@ -1038,12 +1131,13 @@ class VaultCrypto extends ChangeNotifier {
     File dest, {
     bool Function()? shouldAbort,
   }) async {
-    int magicType = 0; // 0 = legacy, 1 = v1 (CBC), 2 = c1 (CTR, system key), 3 = c2 (CTR, master key)
+    int magicType =
+        0; // 0 = legacy, 1 = v1 (CBC), 2 = c1 (CTR, system key), 3 = c2 (CTR, master key)
     final raf = await src.open(mode: FileMode.read);
     try {
       final magicBuffer = Uint8List(_mediaMagic.length);
       final magicRead = await raf.readInto(magicBuffer);
-      
+
       if (magicRead == _mediaMagic.length) {
         bool isV1 = true;
         bool isC1 = true;
@@ -1067,7 +1161,8 @@ class VaultCrypto extends ChangeNotifier {
       }
 
       if (magicType == 1) {
-        if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+        if (!_isUnlocked || _derivedKey == null)
+          throw Exception('Vault is locked');
         await cryptoIsolateDecryptFile(
           key: Uint8List.fromList(_derivedKey!),
           srcPath: src.path,
@@ -1088,7 +1183,8 @@ class VaultCrypto extends ChangeNotifier {
           shouldAbort: shouldAbort,
         );
       } else if (magicType == 3 || magicType == 4) {
-        if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+        if (!_isUnlocked || _derivedKey == null)
+          throw Exception('Vault is locked');
         await cryptoIsolateDecryptFile(
           key: Uint8List.fromList(_derivedKey!),
           srcPath: src.path,
@@ -1154,15 +1250,16 @@ class VaultCrypto extends ChangeNotifier {
       }
     } else if (magicType == 2) {
       final actualCiphertext = ciphertext.sublist(_mediaMagic.length);
-      if (actualCiphertext.length < 16) throw const CorruptedMediaFileException();
+      if (actualCiphertext.length < 16)
+        throw const CorruptedMediaFileException();
       final iv = actualCiphertext.sublist(0, 16);
       final encrypted = actualCiphertext.sublist(16);
-      
+
       final systemKey = await _getSystemKey();
       final aes = AESEngine()..init(true, KeyParameter(systemKey));
       final counter = Uint8List.fromList(iv);
       final ksBlock = Uint8List(16);
-      
+
       final outBuffer = Uint8List(encrypted.length);
       int offset = 0;
       while (offset + 16 <= encrypted.length) {
@@ -1182,16 +1279,18 @@ class VaultCrypto extends ChangeNotifier {
       }
       return outBuffer;
     } else if (magicType == 3) {
-      if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+      if (!_isUnlocked || _derivedKey == null)
+        throw Exception('Vault is locked');
       final actualCiphertext = ciphertext.sublist(_mediaMagic.length);
-      if (actualCiphertext.length < 16) throw const CorruptedMediaFileException();
+      if (actualCiphertext.length < 16)
+        throw const CorruptedMediaFileException();
       final iv = actualCiphertext.sublist(0, 16);
       final encrypted = actualCiphertext.sublist(16);
-      
+
       final aes = AESEngine()..init(true, KeyParameter(_derivedKey!));
       final counter = Uint8List.fromList(iv);
       final ksBlock = Uint8List(16);
-      
+
       final outBuffer = Uint8List(encrypted.length);
       int offset = 0;
       while (offset + 16 <= encrypted.length) {
@@ -1211,7 +1310,8 @@ class VaultCrypto extends ChangeNotifier {
       }
       return outBuffer;
     } else if (magicType == 4) {
-      if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+      if (!_isUnlocked || _derivedKey == null)
+        throw Exception('Vault is locked');
       final macKey = deriveMacKey(_derivedKey!);
       final Uint8List rawCiphertext;
       final AuthenticatedBlobHeader header;
@@ -1255,7 +1355,8 @@ class VaultCrypto extends ChangeNotifier {
   Future<Uint8List> _decryptLegacySystem(Uint8List ciphertext) async {
     if (ciphertext.isEmpty) return Uint8List(0);
     final key = await _getSystemKey();
-    if (ciphertext.length < _ivLength) throw const CorruptedMediaFileException();
+    if (ciphertext.length < _ivLength)
+      throw const CorruptedMediaFileException();
     final iv = ciphertext.sublist(0, _ivLength);
     final encrypted = ciphertext.sublist(_ivLength);
     try {
@@ -1344,11 +1445,14 @@ class VaultCrypto extends ChangeNotifier {
 
     // 2. If marker is 'hw:staged', hardware migration was interrupted.
     if (marker == 'hw:staged') {
-      final bakWrappedVal =
-          await _platformService.secureRead(_bakMasterWrapped);
+      final bakWrappedVal = await _platformService.secureRead(
+        _bakMasterWrapped,
+      );
       if (bakWrappedVal != null) {
         await _platformService.secureWrite(
-            _storageKeyMasterWrapped, bakWrappedVal);
+          _storageKeyMasterWrapped,
+          bakWrappedVal,
+        );
         await _cleanupSwapArtifacts();
         return;
       }
@@ -1362,14 +1466,15 @@ class VaultCrypto extends ChangeNotifier {
     // treat as staged full PIN/upgrade swap.
     final bakSaltVal = await _platformService.secureRead(_bakSalt);
     final bakHashVal = await _platformService.secureRead(_bakPinHash);
-    final bakWrappedVal =
-        await _platformService.secureRead(_bakMasterWrapped);
+    final bakWrappedVal = await _platformService.secureRead(_bakMasterWrapped);
 
     if (bakSaltVal != null && bakHashVal != null && bakWrappedVal != null) {
       await _platformService.secureWrite(_storageKeySalt, bakSaltVal);
       await _platformService.secureWrite(_storageKeyPinHash, bakHashVal);
       await _platformService.secureWrite(
-          _storageKeyMasterWrapped, bakWrappedVal);
+        _storageKeyMasterWrapped,
+        bakWrappedVal,
+      );
       await _cleanupSwapArtifacts();
       return;
     }
@@ -1409,10 +1514,16 @@ class VaultCrypto extends ChangeNotifier {
 
   Uint8List _generateSecureRandomBytes(int length) {
     final random = Random.secure();
-    return Uint8List.fromList(List.generate(length, (_) => random.nextInt(256)));
+    return Uint8List.fromList(
+      List.generate(length, (_) => random.nextInt(256)),
+    );
   }
 
-  Future<Uint8List> _deriveKey(String pin, String saltBase64, [int iterations = kPbkdf2Iterations]) async {
+  Future<Uint8List> _deriveKey(
+    String pin,
+    String saltBase64, [
+    int iterations = kPbkdf2Iterations,
+  ]) async {
     final passwordBytes = Uint8List.fromList(utf8.encode(pin));
     final saltBytes = base64Decode(saltBase64);
     final key = await derivePbkdf2Async(
@@ -1429,7 +1540,10 @@ class VaultCrypto extends ChangeNotifier {
     final paddedCipher = PaddedBlockCipherImpl(PKCS7Padding(), cipher);
     paddedCipher.init(
       forEncryption,
-      PaddedBlockCipherParameters(ParametersWithIV(KeyParameter(key), iv), null),
+      PaddedBlockCipherParameters(
+        ParametersWithIV(KeyParameter(key), iv),
+        null,
+      ),
     );
     return paddedCipher;
   }
@@ -1455,7 +1569,20 @@ class VaultCrypto extends ChangeNotifier {
   /// Encrypts [src] to [dest] using AES-CTR keyed by the master DEK (_derivedKey).
   /// Defaults to writing legacy unauthenticated "MVKEYc2\0" (writeC3: false).
   /// Setting [writeC3] to true or calling [encryptStreamSystemCtrV3] writes authenticated "MVKEYc3\0" format with HMAC-SHA256 authentication.
-  Future<void> encryptStreamSystemCtr(File src, File dest, {bool writeC3 = false}) async {
+  Future<void> encryptStreamSystemCtr(
+    File src,
+    File dest, {
+    bool writeC3 = false,
+  }) => _encryptStreamSystemCtrInternal(src, dest, writeC3: writeC3);
+
+  Future<void> _encryptStreamSystemCtrInternal(
+    File src,
+    File dest, {
+    bool writeC3 = false,
+    bool Function()? shouldAbort,
+    CryptoIsolateCancelHandle? cancelHandle,
+    void Function(int bytesProcessed)? onBytesProgress,
+  }) async {
     if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
     final iv = _generateSecureRandomBytes(16);
     // The c3/c2 write runs in a background isolate (H15): a whole-file CTR pass
@@ -1468,6 +1595,9 @@ class VaultCrypto extends ChangeNotifier {
       srcPath: src.path,
       destPath: dest.path,
       writeC3: writeC3,
+      shouldAbort: shouldAbort,
+      cancelHandle: cancelHandle,
+      onBytesProgress: onBytesProgress,
     );
   }
 
@@ -1475,6 +1605,23 @@ class VaultCrypto extends ChangeNotifier {
   /// Files written in this format are authenticated via HMAC-SHA256 and fully recoverable from the 12-word recovery phrase upon reinstall.
   Future<void> encryptStreamSystemCtrV3(File src, File dest) =>
       encryptStreamSystemCtr(src, dest, writeC3: true);
+
+  /// Cancellable, progress-reporting variant of [encryptStreamSystemCtrV3]
+  /// used by the app-scoped gallery import pipeline.
+  Future<void> encryptStreamSystemCtrV3Controlled(
+    File src,
+    File dest, {
+    bool Function()? shouldAbort,
+    CryptoIsolateCancelHandle? cancelHandle,
+    void Function(int bytesProcessed)? onBytesProgress,
+  }) => _encryptStreamSystemCtrInternal(
+    src,
+    dest,
+    writeC3: true,
+    shouldAbort: shouldAbort,
+    cancelHandle: cancelHandle,
+    onBytesProgress: onBytesProgress,
+  );
 
   Future<RangeDecryptWorker?> _ensureRangeWorker() {
     final existing = _rangeWorker;
@@ -1484,8 +1631,9 @@ class VaultCrypto extends ChangeNotifier {
     // them, so each caller spawned its own isolate and all but the last became
     // orphaned isolates still holding a copy of the master key. Serialising the
     // spawn means nine concurrent tile reads share one worker.
-    return _rangeWorkerSpawn ??=
-        _spawnRangeWorker().whenComplete(() => _rangeWorkerSpawn = null);
+    return _rangeWorkerSpawn ??= _spawnRangeWorker().whenComplete(
+      () => _rangeWorkerSpawn = null,
+    );
   }
 
   /// Spawns the long-lived range worker if this unlock has not created one
@@ -1537,7 +1685,11 @@ class VaultCrypto extends ChangeNotifier {
         final worker = await _ensureRangeWorker();
         if (worker != null && worker.isAlive) {
           try {
-            return await worker.decrypt(path: src.path, offset: offset, length: length);
+            return await worker.decrypt(
+              path: src.path,
+              offset: offset,
+              length: length,
+            );
           } on UnsupportedMediaFormatException {
             // v1-CBC / legacy: fall through to the inline path below.
           }
@@ -1588,7 +1740,11 @@ class VaultCrypto extends ChangeNotifier {
   /// Original inline range decrypt (pre-M13-follow-up behavior). Kept as the
   /// fallback for formats the worker does not serve and for locked/worker-down
   /// states. Byte-for-byte identical to the old `decryptRangeSystem`.
-  Future<Uint8List> _decryptRangeInline(File src, int offset, int length) async {
+  Future<Uint8List> _decryptRangeInline(
+    File src,
+    int offset,
+    int length,
+  ) async {
     int magicType = 0;
     final raf = await src.open(mode: FileMode.read);
     try {
@@ -1621,7 +1777,7 @@ class VaultCrypto extends ChangeNotifier {
         final fileLength = await src.length();
         final maxReadable = fileLength - headerLength;
         if (offset >= maxReadable || offset < 0) return Uint8List(0);
-        
+
         int actualLength = length;
         if (offset + length > maxReadable) {
           actualLength = maxReadable - offset;
@@ -1630,7 +1786,8 @@ class VaultCrypto extends ChangeNotifier {
 
         final Uint8List key;
         if (magicType == 3 || magicType == 4) {
-          if (!_isUnlocked || _derivedKey == null) throw Exception('Vault is locked');
+          if (!_isUnlocked || _derivedKey == null)
+            throw Exception('Vault is locked');
           key = _derivedKey!;
         } else {
           key = await _getSystemKey();
@@ -1659,22 +1816,25 @@ class VaultCrypto extends ChangeNotifier {
         await raf.readInto(ciphertext);
 
         final outBuffer = Uint8List(actualLength);
-        
+
         int outPos = 0;
         int inPos = 0;
-        
+
         if (blockOffset > 0) {
           aes.processBlock(rangeCounter, 0, ksBlock, 0);
           _ctrIncrement(rangeCounter);
-          
+
           final availableInThisBlock = 16 - blockOffset;
-          final toProcess = (actualLength < availableInThisBlock) ? actualLength : availableInThisBlock;
-          
+          final toProcess = (actualLength < availableInThisBlock)
+              ? actualLength
+              : availableInThisBlock;
+
           for (int i = 0; i < toProcess; i++) {
-            outBuffer[outPos++] = ciphertext[inPos++] ^ ksBlock[blockOffset + i];
+            outBuffer[outPos++] =
+                ciphertext[inPos++] ^ ksBlock[blockOffset + i];
           }
         }
-        
+
         while (inPos + 16 <= actualLength) {
           aes.processBlock(rangeCounter, 0, ksBlock, 0);
           for (int i = 0; i < 16; i++) {
@@ -1684,7 +1844,7 @@ class VaultCrypto extends ChangeNotifier {
           inPos += 16;
           outPos += 16;
         }
-        
+
         if (inPos < actualLength) {
           aes.processBlock(rangeCounter, 0, ksBlock, 0);
           final remaining = actualLength - inPos;
@@ -1692,7 +1852,7 @@ class VaultCrypto extends ChangeNotifier {
             outBuffer[outPos + i] = ciphertext[inPos + i] ^ ksBlock[i];
           }
         }
-        
+
         return outBuffer;
       }
     } finally {
@@ -1700,7 +1860,9 @@ class VaultCrypto extends ChangeNotifier {
     }
 
     final tempDir = Directory.systemTemp;
-    final tempFile = File('${tempDir.path}/temp_decrypt_${DateTime.now().millisecondsSinceEpoch}');
+    final tempFile = File(
+      '${tempDir.path}/temp_decrypt_${DateTime.now().millisecondsSinceEpoch}',
+    );
     try {
       await decryptStreamSystem(src, tempFile);
       if (!await tempFile.exists()) return Uint8List(0);
@@ -1708,12 +1870,12 @@ class VaultCrypto extends ChangeNotifier {
       try {
         final fileLen = await tempFile.length();
         if (offset >= fileLen) return Uint8List(0);
-        
+
         int actualLength = length;
         if (offset + length > fileLen) {
           actualLength = fileLen - offset;
         }
-        
+
         await readRaf.setPosition(offset);
         final buffer = Uint8List(actualLength);
         await readRaf.readInto(buffer);
@@ -1772,7 +1934,11 @@ class VaultCrypto extends ChangeNotifier {
           final macKey = deriveMacKey(_derivedKey!);
           try {
             final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(macKey));
-            hmac.update(Uint8List.fromList(kMediaMagicCtrV3), 0, kMediaMagicCtrV3.length);
+            hmac.update(
+              Uint8List.fromList(kMediaMagicCtrV3),
+              0,
+              kMediaMagicCtrV3.length,
+            );
             hmac.update(iv, 0, iv.length);
 
             final checkBuffer = Uint8List(64 * 1024);
@@ -1804,7 +1970,8 @@ class VaultCrypto extends ChangeNotifier {
           final readEnd = await raf.readInto(endBlock);
           if (readEnd < 16) return BlobIntegrityStatus.truncatedPayload;
           return BlobIntegrityStatus.healthy;
-        } else if (format == MediaBlobFormat.ctrV1 || format == MediaBlobFormat.ctrV2) {
+        } else if (format == MediaBlobFormat.ctrV1 ||
+            format == MediaBlobFormat.ctrV2) {
           if (fileLen < 24) {
             return BlobIntegrityStatus.fileTooShort;
           }

@@ -20,6 +20,7 @@ class CryptoIsolateEncryptParams {
   final String destPath;
   final SendPort? progressPort;
   final SendPort replyPort;
+  final bool sendControlPort;
 
   CryptoIsolateEncryptParams({
     required this.key,
@@ -28,6 +29,7 @@ class CryptoIsolateEncryptParams {
     required this.destPath,
     this.progressPort,
     required this.replyPort,
+    this.sendControlPort = false,
   });
 }
 
@@ -40,6 +42,7 @@ class CryptoIsolateEncryptCtrParams {
   final SendPort? progressPort;
   final SendPort replyPort;
   final bool writeC3;
+  final bool sendControlPort;
 
   CryptoIsolateEncryptCtrParams({
     required this.key,
@@ -49,6 +52,7 @@ class CryptoIsolateEncryptCtrParams {
     this.progressPort,
     required this.replyPort,
     this.writeC3 = true,
+    this.sendControlPort = false,
   });
 }
 
@@ -78,8 +82,30 @@ Future<void> isolateEncryptWorker(CryptoIsolateEncryptParams params) async {
   final src = File(params.srcPath);
   final dest = File(params.destPath);
   final progressPort = params.progressPort;
+  final ReceivePort? controlPort = params.sendControlPort
+      ? ReceivePort()
+      : null;
+  bool abortRequested = false;
+  StreamSubscription<dynamic>? controlSub;
+  if (controlPort != null) {
+    controlSub = controlPort.listen((msg) {
+      if (msg == 'abort') {
+        abortRequested = true;
+      }
+    });
+    params.replyPort.send({
+      'type': 'control',
+      'sendPort': controlPort.sendPort,
+    });
+  }
+
+  final buffer = Uint8List(64 * 1024);
+  final outBuffer = Uint8List(64 * 1024 + 16);
+  final finalBlock = Uint8List(16);
+  final outBlock = Uint8List(16);
 
   try {
+    if (abortRequested) throw const OperationCancelledException();
     final raf = await dest.open(mode: FileMode.write);
     bool writeSucceeded = false;
     try {
@@ -91,14 +117,15 @@ Future<void> isolateEncryptWorker(CryptoIsolateEncryptParams params) async {
 
       final srcRaf = await src.open(mode: FileMode.read);
       try {
-        final buffer = Uint8List(64 * 1024);
-        final outBuffer = Uint8List(64 * 1024 + 16);
-
         var leftover = <int>[];
         var bytesRead = 0;
         var totalBytesRead = 0;
 
-        while ((bytesRead = await srcRaf.readInto(buffer)) > 0) {
+        while (true) {
+          if (abortRequested) throw const OperationCancelledException();
+          bytesRead = await srcRaf.readInto(buffer);
+          if (bytesRead <= 0) break;
+          if (abortRequested) throw const OperationCancelledException();
           totalBytesRead += bytesRead;
           if (progressPort != null) {
             progressPort.send(totalBytesRead);
@@ -117,6 +144,7 @@ Future<void> isolateEncryptWorker(CryptoIsolateEncryptParams params) async {
               temp.setRange(0, leftover.length, leftover);
               temp.setRange(leftover.length, 16, buffer.sublist(0, needed));
               cipher.processBlock(temp, 0, outBuffer, outOffset);
+              temp.fillRange(0, temp.length, 0);
               outOffset += 16;
               offset = needed;
               leftover.clear();
@@ -130,6 +158,7 @@ Future<void> isolateEncryptWorker(CryptoIsolateEncryptParams params) async {
           }
 
           if (outOffset > 0) {
+            if (abortRequested) throw const OperationCancelledException();
             await raf.writeFrom(outBuffer, 0, outOffset);
           }
 
@@ -138,15 +167,15 @@ Future<void> isolateEncryptWorker(CryptoIsolateEncryptParams params) async {
           }
         }
 
+        if (abortRequested) throw const OperationCancelledException();
         final padLength = 16 - leftover.length;
-        final finalBlock = Uint8List(16);
+        finalBlock.fillRange(0, finalBlock.length, 0);
         if (leftover.isNotEmpty) {
           finalBlock.setRange(0, leftover.length, leftover);
         }
         for (int i = leftover.length; i < 16; i++) {
           finalBlock[i] = padLength;
         }
-        final outBlock = Uint8List(16);
         cipher.processBlock(finalBlock, 0, outBlock, 0);
         await raf.writeFrom(outBlock);
         writeSucceeded = true;
@@ -168,7 +197,10 @@ Future<void> isolateEncryptWorker(CryptoIsolateEncryptParams params) async {
   } catch (e, st) {
     final String errorKind;
     final String message;
-    if (e is CorruptedMediaFileException) {
+    if (e is OperationCancelledException) {
+      errorKind = 'cancelled';
+      message = e.message;
+    } else if (e is CorruptedMediaFileException) {
       errorKind = 'corrupted';
       message = e.message;
     } else if (e is UnsupportedMediaFormatException) {
@@ -188,6 +220,14 @@ Future<void> isolateEncryptWorker(CryptoIsolateEncryptParams params) async {
     });
   } finally {
     params.key.fillRange(0, params.key.length, 0);
+    buffer.fillRange(0, buffer.length, 0);
+    outBuffer.fillRange(0, outBuffer.length, 0);
+    finalBlock.fillRange(0, finalBlock.length, 0);
+    outBlock.fillRange(0, outBlock.length, 0);
+    try {
+      await controlSub?.cancel();
+    } catch (_) {}
+    controlPort?.close();
   }
 }
 
@@ -195,14 +235,33 @@ Future<void> isolateEncryptWorker(CryptoIsolateEncryptParams params) async {
 /// stream as c3 (authenticated AES-CTR) or c2 (legacy AES-CTR under the passed key).
 ///
 /// WARNING: Zeroes params.key in finally; must never be invoked directly with a live caller key.
-Future<void> isolateEncryptCtrWorker(CryptoIsolateEncryptCtrParams params) async {
+Future<void> isolateEncryptCtrWorker(
+  CryptoIsolateEncryptCtrParams params,
+) async {
   final key = params.key;
   final iv = params.iv;
   final src = File(params.srcPath);
   final dest = File(params.destPath);
   final progressPort = params.progressPort;
+  final ReceivePort? controlPort = params.sendControlPort
+      ? ReceivePort()
+      : null;
+  bool abortRequested = false;
+  StreamSubscription<dynamic>? controlSub;
+  if (controlPort != null) {
+    controlSub = controlPort.listen((msg) {
+      if (msg == 'abort') {
+        abortRequested = true;
+      }
+    });
+    params.replyPort.send({
+      'type': 'control',
+      'sendPort': controlPort.sendPort,
+    });
+  }
 
   try {
+    if (abortRequested) throw const OperationCancelledException();
     final destRaf = await dest.open(mode: FileMode.write);
     bool writeSucceeded = false;
     try {
@@ -214,7 +273,14 @@ Future<void> isolateEncryptCtrWorker(CryptoIsolateEncryptCtrParams params) async
 
         final srcRaf = await src.open(mode: FileMode.read);
         try {
-          await _encryptStreamCtrV3(key, iv, srcRaf, destRaf, progressPort);
+          await _encryptStreamCtrV3(
+            key,
+            iv,
+            srcRaf,
+            destRaf,
+            progressPort,
+            isAborted: () => abortRequested,
+          );
           writeSucceeded = true;
         } finally {
           await srcRaf.close();
@@ -225,7 +291,14 @@ Future<void> isolateEncryptCtrWorker(CryptoIsolateEncryptCtrParams params) async
 
         final srcRaf = await src.open(mode: FileMode.read);
         try {
-          await _encryptStreamCtrV2(key, iv, srcRaf, destRaf, progressPort);
+          await _encryptStreamCtrV2(
+            key,
+            iv,
+            srcRaf,
+            destRaf,
+            progressPort,
+            isAborted: () => abortRequested,
+          );
           writeSucceeded = true;
         } finally {
           await srcRaf.close();
@@ -246,7 +319,10 @@ Future<void> isolateEncryptCtrWorker(CryptoIsolateEncryptCtrParams params) async
   } catch (e, st) {
     final String errorKind;
     final String message;
-    if (e is CorruptedMediaFileException) {
+    if (e is OperationCancelledException) {
+      errorKind = 'cancelled';
+      message = e.message;
+    } else if (e is CorruptedMediaFileException) {
       errorKind = 'corrupted';
       message = e.message;
     } else if (e is UnsupportedMediaFormatException) {
@@ -266,6 +342,10 @@ Future<void> isolateEncryptCtrWorker(CryptoIsolateEncryptCtrParams params) async
     });
   } finally {
     params.key.fillRange(0, params.key.length, 0);
+    try {
+      await controlSub?.cancel();
+    } catch (_) {}
+    controlPort?.close();
   }
 }
 
@@ -284,7 +364,9 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
       final magicBuffer = Uint8List(kMediaMagicV1.length);
       final magicRead = await raf.readInto(magicBuffer);
       if (magicRead < kMediaMagicV1.length) {
-        throw const CorruptedMediaFileException('Invalid ciphertext: missing magic header');
+        throw const CorruptedMediaFileException(
+          'Invalid ciphertext: missing magic header',
+        );
       }
       bool magicMatches = true;
       bool magicMatchesCtrV1 = true;
@@ -304,27 +386,40 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
           magicMatchesCtrV3 = false;
         }
       }
-      if (!magicMatches && !magicMatchesCtrV1 && !magicMatchesCtrV2 && !magicMatchesCtrV3) {
-        throw const UnsupportedMediaFormatException('Unsupported media format header');
+      if (!magicMatches &&
+          !magicMatchesCtrV1 &&
+          !magicMatchesCtrV2 &&
+          !magicMatchesCtrV3) {
+        throw const UnsupportedMediaFormatException(
+          'Unsupported media format header',
+        );
       }
 
       if (magicMatchesCtrV3) {
         final iv = Uint8List(16);
         final ivRead = await raf.readInto(iv);
         if (ivRead < 16) {
-          throw const CorruptedMediaFileException('Invalid ciphertext: missing IV');
+          throw const CorruptedMediaFileException(
+            'Invalid ciphertext: missing IV',
+          );
         }
         final tag = Uint8List(kAuthTagLength);
         final tagRead = await raf.readInto(tag);
         if (tagRead < kAuthTagLength) {
-          throw const CorruptedMediaFileException('Invalid ciphertext: missing auth tag');
+          throw const CorruptedMediaFileException(
+            'Invalid ciphertext: missing auth tag',
+          );
         }
 
         // Authenticate ciphertext before decrypting or writing any plaintext
         final macKey = deriveMacKey(key);
         try {
           final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(macKey));
-          hmac.update(Uint8List.fromList(kMediaMagicCtrV3), 0, kMediaMagicCtrV3.length);
+          hmac.update(
+            Uint8List.fromList(kMediaMagicCtrV3),
+            0,
+            kMediaMagicCtrV3.length,
+          );
           hmac.update(iv, 0, iv.length);
 
           final checkBuffer = Uint8List(64 * 1024);
@@ -358,7 +453,9 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
         final iv = Uint8List(16);
         final ivRead = await raf.readInto(iv);
         if (ivRead < 16) {
-          throw const CorruptedMediaFileException('Invalid ciphertext: missing IV');
+          throw const CorruptedMediaFileException(
+            'Invalid ciphertext: missing IV',
+          );
         }
 
         final destRaf = await dest.open(mode: FileMode.write);
@@ -372,7 +469,9 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
         final iv = Uint8List(16);
         final ivRead = await raf.readInto(iv);
         if (ivRead < 16) {
-          throw const CorruptedMediaFileException('Invalid ciphertext: missing IV');
+          throw const CorruptedMediaFileException(
+            'Invalid ciphertext: missing IV',
+          );
         }
         final destRaf = await dest.open(mode: FileMode.write);
         try {
@@ -404,13 +503,21 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
               } else {
                 final temp = Uint8List(16);
                 temp.setRange(0, leftoverCipher.length, leftoverCipher);
-                temp.setRange(leftoverCipher.length, 16, buffer.sublist(0, needed));
+                temp.setRange(
+                  leftoverCipher.length,
+                  16,
+                  buffer.sublist(0, needed),
+                );
 
                 final tempOut = Uint8List(16);
                 cipher.processBlock(temp, 0, tempOut, 0);
 
                 if (heldPlaintextBlock != null) {
-                  outBuffer.setRange(outOffset, outOffset + 16, heldPlaintextBlock);
+                  outBuffer.setRange(
+                    outOffset,
+                    outOffset + 16,
+                    heldPlaintextBlock,
+                  );
                   outOffset += 16;
                 }
                 heldPlaintextBlock = tempOut;
@@ -425,7 +532,11 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
               cipher.processBlock(buffer, offset, tempOut, 0);
 
               if (heldPlaintextBlock != null) {
-                outBuffer.setRange(outOffset, outOffset + 16, heldPlaintextBlock);
+                outBuffer.setRange(
+                  outOffset,
+                  outOffset + 16,
+                  heldPlaintextBlock,
+                );
                 outOffset += 16;
               }
               heldPlaintextBlock = tempOut;
@@ -442,18 +553,24 @@ Future<void> isolateDecryptWorker(CryptoIsolateDecryptParams params) async {
           }
 
           if (leftoverCipher.isNotEmpty) {
-            throw const CorruptedMediaFileException('Invalid ciphertext: not a multiple of block size');
+            throw const CorruptedMediaFileException(
+              'Invalid ciphertext: not a multiple of block size',
+            );
           }
 
           if (heldPlaintextBlock != null) {
             final padLength = heldPlaintextBlock[15];
             if (padLength > 0 && padLength <= 16) {
-              await destRaf.writeFrom(heldPlaintextBlock.sublist(0, 16 - padLength));
+              await destRaf.writeFrom(
+                heldPlaintextBlock.sublist(0, 16 - padLength),
+              );
             } else {
               throw const CorruptedMediaFileException('Invalid PKCS7 padding');
             }
           } else {
-            throw const CorruptedMediaFileException('Invalid ciphertext: empty payload');
+            throw const CorruptedMediaFileException(
+              'Invalid ciphertext: empty payload',
+            );
           }
         } finally {
           await destRaf.flush();
@@ -505,41 +622,60 @@ Future<void> _decryptStreamCtrV2(
   Uint8List iv,
   RandomAccessFile raf,
   RandomAccessFile destRaf,
-  SendPort? progressPort,
-) async {
+  SendPort? progressPort, {
+  bool Function()? isAborted,
+}) async {
   final aes = AESEngine()..init(true, KeyParameter(key));
   final counter = Uint8List.fromList(iv);
   final ksBlock = Uint8List(16);
 
   final buffer = Uint8List(64 * 1024);
   final outBuffer = Uint8List(64 * 1024);
-  var bytesRead = 0;
-  var totalBytesRead = 0;
+  try {
+    var bytesRead = 0;
+    var totalBytesRead = 0;
 
-  while ((bytesRead = await raf.readInto(buffer)) > 0) {
-    totalBytesRead += bytesRead;
-    if (progressPort != null) {
-      progressPort.send(totalBytesRead);
-    }
+    while (true) {
+      if (isAborted != null && isAborted()) {
+        throw const OperationCancelledException();
+      }
+      bytesRead = await raf.readInto(buffer);
+      if (bytesRead <= 0) break;
+      if (isAborted != null && isAborted()) {
+        throw const OperationCancelledException();
+      }
+      totalBytesRead += bytesRead;
+      if (progressPort != null) {
+        progressPort.send(totalBytesRead);
+      }
 
-    int offset = 0;
-    while (offset + 16 <= bytesRead) {
-      aes.processBlock(counter, 0, ksBlock, 0);
-      for (int i = 0; i < 16; i++) {
-        outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+      int offset = 0;
+      while (offset + 16 <= bytesRead) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        for (int i = 0; i < 16; i++) {
+          outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+        }
+        _ctrIncrement(counter);
+        offset += 16;
       }
-      _ctrIncrement(counter);
-      offset += 16;
-    }
-    if (offset < bytesRead) {
-      aes.processBlock(counter, 0, ksBlock, 0);
-      final remaining = bytesRead - offset;
-      for (int i = 0; i < remaining; i++) {
-        outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+      if (offset < bytesRead) {
+        aes.processBlock(counter, 0, ksBlock, 0);
+        final remaining = bytesRead - offset;
+        for (int i = 0; i < remaining; i++) {
+          outBuffer[offset + i] = buffer[offset + i] ^ ksBlock[i];
+        }
+        _ctrIncrement(counter);
       }
-      _ctrIncrement(counter);
+      if (isAborted != null && isAborted()) {
+        throw const OperationCancelledException();
+      }
+      await destRaf.writeFrom(outBuffer, 0, bytesRead);
     }
-    await destRaf.writeFrom(outBuffer, 0, bytesRead);
+  } finally {
+    counter.fillRange(0, counter.length, 0);
+    ksBlock.fillRange(0, ksBlock.length, 0);
+    buffer.fillRange(0, buffer.length, 0);
+    outBuffer.fillRange(0, outBuffer.length, 0);
   }
 }
 
@@ -555,9 +691,17 @@ Future<void> _encryptStreamCtrV2(
   Uint8List iv,
   RandomAccessFile raf,
   RandomAccessFile destRaf,
-  SendPort? progressPort,
-) {
-  return _decryptStreamCtrV2(key, iv, raf, destRaf, progressPort);
+  SendPort? progressPort, {
+  bool Function()? isAborted,
+}) {
+  return _decryptStreamCtrV2(
+    key,
+    iv,
+    raf,
+    destRaf,
+    progressPort,
+    isAborted: isAborted,
+  );
 }
 
 /// Encrypts plaintext from [srcRaf] into [destRaf] as authenticated AES-CTR (MVKEYc3\0)
@@ -568,24 +712,38 @@ Future<void> _encryptStreamCtrV3(
   Uint8List iv,
   RandomAccessFile srcRaf,
   RandomAccessFile destRaf,
-  SendPort? progressPort,
-) async {
+  SendPort? progressPort, {
+  bool Function()? isAborted,
+}) async {
   final macKey = deriveMacKey(key);
+  final counter = Uint8List.fromList(iv);
+  final ksBlock = Uint8List(16);
+  final buffer = Uint8List(64 * 1024);
+  final outBuffer = Uint8List(64 * 1024);
+  final tag = Uint8List(kAuthTagLength);
   try {
     final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(macKey));
-    hmac.update(Uint8List.fromList(kMediaMagicCtrV3), 0, kMediaMagicCtrV3.length);
+    hmac.update(
+      Uint8List.fromList(kMediaMagicCtrV3),
+      0,
+      kMediaMagicCtrV3.length,
+    );
     hmac.update(iv, 0, iv.length);
 
     final aes = AESEngine()..init(true, KeyParameter(key));
-    final counter = Uint8List.fromList(iv);
-    final ksBlock = Uint8List(16);
 
-    final buffer = Uint8List(64 * 1024);
-    final outBuffer = Uint8List(64 * 1024);
     var bytesRead = 0;
     var totalBytesRead = 0;
 
-    while ((bytesRead = await srcRaf.readInto(buffer)) > 0) {
+    while (true) {
+      if (isAborted != null && isAborted()) {
+        throw const OperationCancelledException();
+      }
+      bytesRead = await srcRaf.readInto(buffer);
+      if (bytesRead <= 0) break;
+      if (isAborted != null && isAborted()) {
+        throw const OperationCancelledException();
+      }
       totalBytesRead += bytesRead;
       if (progressPort != null) {
         progressPort.send(totalBytesRead);
@@ -610,10 +768,15 @@ Future<void> _encryptStreamCtrV3(
       }
 
       hmac.update(outBuffer, 0, bytesRead);
+      if (isAborted != null && isAborted()) {
+        throw const OperationCancelledException();
+      }
       await destRaf.writeFrom(outBuffer, 0, bytesRead);
     }
 
-    final tag = Uint8List(kAuthTagLength);
+    if (isAborted != null && isAborted()) {
+      throw const OperationCancelledException();
+    }
     hmac.doFinal(tag, 0);
 
     final finalPos = await destRaf.position();
@@ -622,6 +785,11 @@ Future<void> _encryptStreamCtrV3(
     await destRaf.setPosition(finalPos);
   } finally {
     macKey.fillRange(0, macKey.length, 0);
+    counter.fillRange(0, counter.length, 0);
+    ksBlock.fillRange(0, ksBlock.length, 0);
+    buffer.fillRange(0, buffer.length, 0);
+    outBuffer.fillRange(0, outBuffer.length, 0);
+    tag.fillRange(0, tag.length, 0);
   }
 }
 
@@ -633,15 +801,69 @@ void _ctrIncrement(Uint8List counter) {
   }
 }
 
-/// Spawns a background isolate to encrypt [srcPath] to [destPath].
-Future<void> cryptoIsolateEncryptFile({
-  required Uint8List key,
-  required Uint8List iv,
-  required String srcPath,
+/// Cooperative + hard-stop cancellation handle for active file encryption isolates.
+class CryptoIsolateCancelHandle {
+  bool _cancelled = false;
+  SendPort? _controlPort;
+  Future<void> Function()? _onAbort;
+
+  bool get isCancelled => _cancelled;
+
+  void attach({SendPort? controlPort, Future<void> Function()? onAbort}) {
+    _controlPort = controlPort;
+    _onAbort = onAbort;
+    if (_cancelled) {
+      abort().ignore();
+    }
+  }
+
+  void updateControlPort(SendPort controlPort) {
+    _controlPort = controlPort;
+    if (_cancelled) {
+      try {
+        controlPort.send('abort');
+      } catch (_) {}
+    }
+  }
+
+  /// Signals the worker to abort cleanly (close handles, zero key buffers,
+  /// remove partial staging output) and forces termination if needed.
+  Future<void> abort() async {
+    _cancelled = true;
+    final control = _controlPort;
+    if (control != null) {
+      try {
+        control.send('abort');
+      } catch (_) {}
+    }
+    final hook = _onAbort;
+    if (hook != null) {
+      try {
+        await hook();
+      } catch (_) {}
+    }
+  }
+}
+
+Future<void> _runEncryptIsolate({
+  required Uint8List keyCopy,
   required String destPath,
-  SendPort? progressPort,
+  required bool Function()? shouldAbort,
+  required CryptoIsolateCancelHandle? cancelHandle,
+  required Duration abortPollInterval,
+  required Future<Isolate> Function(
+    SendPort replyPort,
+    SendPort exitPort,
+    SendPort errorPort,
+  )
+  spawnWorker,
 }) async {
-  final keyForWorker = Uint8List.fromList(key);
+  if ((shouldAbort != null && shouldAbort()) ||
+      (cancelHandle != null && cancelHandle.isCancelled)) {
+    keyCopy.fillRange(0, keyCopy.length, 0);
+    throw const OperationCancelledException();
+  }
+
   final replyPort = ReceivePort();
   final exitPort = ReceivePort();
   final errorPort = ReceivePort();
@@ -649,29 +871,72 @@ Future<void> cryptoIsolateEncryptFile({
   StreamSubscription<dynamic>? replySub;
   StreamSubscription<dynamic>? errorSub;
   StreamSubscription<dynamic>? exitSub;
+  Timer? abortTimer;
   Isolate? isolate;
+  bool exited = false;
+  final exitedCompleter = Completer<void>();
+  bool abortedOrFailed = true;
 
   try {
-    final params = CryptoIsolateEncryptParams(
-      key: keyForWorker,
-      iv: iv,
-      srcPath: srcPath,
-      destPath: destPath,
-      progressPort: progressPort,
-      replyPort: replyPort.sendPort,
-    );
-
-    isolate = await Isolate.spawn(
-      isolateEncryptWorker,
-      params,
-      onExit: exitPort.sendPort,
-      onError: errorPort.sendPort,
-      errorsAreFatal: true,
-    );
-
     final completer = Completer<dynamic>();
+    bool abortInProgress = false;
+
+    Future<void> deleteDestBestEffort() async {
+      final destFile = File(destPath);
+      for (var attempt = 0; attempt < 5; attempt++) {
+        try {
+          if (!await destFile.exists()) return;
+          await destFile.delete();
+          return;
+        } catch (_) {
+          if (attempt < 4) {
+            await Future<void>.delayed(const Duration(milliseconds: 15));
+          }
+        }
+      }
+    }
+
+    Future<void> stopWorkerAndCleanup() async {
+      abortInProgress = true;
+      if (isolate != null && !exited) {
+        await Future.any<void>([
+          exitedCompleter.future,
+          Future<void>.delayed(const Duration(seconds: 5)),
+        ]);
+        if (!exited) {
+          isolate.kill(priority: Isolate.immediate);
+          await Future.any<void>([
+            exitedCompleter.future,
+            Future<void>.delayed(const Duration(milliseconds: 200)),
+          ]);
+        }
+      }
+      await deleteDestBestEffort();
+      if (!completer.isCompleted) {
+        completer.completeError(const OperationCancelledException());
+      }
+    }
+
+    cancelHandle?.attach(onAbort: stopWorkerAndCleanup);
+
+    isolate = await spawnWorker(
+      replyPort.sendPort,
+      exitPort.sendPort,
+      errorPort.sendPort,
+    );
+    if ((shouldAbort != null && shouldAbort()) ||
+        (cancelHandle != null && cancelHandle.isCancelled)) {
+      isolate.kill(priority: Isolate.immediate);
+      throw const OperationCancelledException();
+    }
 
     replySub = replyPort.listen((message) {
+      if (message is Map &&
+          message['type'] == 'control' &&
+          message['sendPort'] is SendPort) {
+        cancelHandle?.updateControlPort(message['sendPort'] as SendPort);
+        return;
+      }
       if (!completer.isCompleted) {
         completer.complete(message);
       }
@@ -690,16 +955,50 @@ Future<void> cryptoIsolateEncryptFile({
     });
 
     exitSub = exitPort.listen((_) {
-      if (!completer.isCompleted) {
-        completer.completeError(Exception('Crypto isolate worker exited prematurely without returning a result'));
+      exited = true;
+      if (!exitedCompleter.isCompleted) {
+        exitedCompleter.complete();
+      }
+      if (!abortInProgress && !completer.isCompleted) {
+        if ((cancelHandle != null && cancelHandle.isCancelled) ||
+            (shouldAbort != null && shouldAbort())) {
+          completer.completeError(const OperationCancelledException());
+        } else {
+          completer.completeError(
+            Exception(
+              'Crypto isolate worker exited prematurely without returning a result',
+            ),
+          );
+        }
       }
     });
+
+    if ((shouldAbort != null && shouldAbort()) ||
+        (cancelHandle != null && cancelHandle.isCancelled)) {
+      await (cancelHandle != null
+          ? cancelHandle.abort()
+          : stopWorkerAndCleanup());
+    } else if (shouldAbort != null) {
+      abortTimer = Timer.periodic(abortPollInterval, (t) {
+        if (shouldAbort()) {
+          t.cancel();
+          if (cancelHandle != null) {
+            cancelHandle.abort().ignore();
+          } else {
+            stopWorkerAndCleanup().ignore();
+          }
+        }
+      });
+    }
 
     final response = await completer.future;
     if (response is Map && response['errorKind'] != null) {
       final kind = response['errorKind'] as String;
-      final message = response['message'] as String? ?? 'Crypto isolate operation failed';
+      final message =
+          response['message'] as String? ?? 'Crypto isolate operation failed';
       switch (kind) {
+        case 'cancelled':
+          throw OperationCancelledException(message);
         case 'corrupted':
           throw CorruptedMediaFileException(message);
         case 'unsupportedFormat':
@@ -711,8 +1010,29 @@ Future<void> cryptoIsolateEncryptFile({
           throw Exception(message);
       }
     }
+    abortedOrFailed = false;
   } finally {
-    keyForWorker.fillRange(0, keyForWorker.length, 0);
+    abortTimer?.cancel();
+    keyCopy.fillRange(0, keyCopy.length, 0);
+    if (isolate != null && !exited) {
+      isolate.kill(
+        priority: abortedOrFailed ? Isolate.immediate : Isolate.beforeNextEvent,
+      );
+      if (abortedOrFailed) {
+        await Future.any<void>([
+          exitedCompleter.future,
+          Future<void>.delayed(const Duration(milliseconds: 100)),
+        ]);
+      }
+    }
+    if (abortedOrFailed) {
+      try {
+        final destFile = File(destPath);
+        if (await destFile.exists()) {
+          await destFile.delete();
+        }
+      } catch (_) {}
+    }
     try {
       await replySub?.cancel();
     } catch (_) {}
@@ -725,14 +1045,49 @@ Future<void> cryptoIsolateEncryptFile({
     replyPort.close();
     errorPort.close();
     exitPort.close();
-    if (isolate != null) {
-      isolate.kill(priority: Isolate.beforeNextEvent);
-    }
   }
 }
 
-/// Spawns a background isolate to encrypt [srcPath] to [destPath] as c2
-/// (AES-CTR under [key], 24-byte c2 header written by the worker).
+/// Spawns a background isolate to encrypt [srcPath] to [destPath].
+Future<void> cryptoIsolateEncryptFile({
+  required Uint8List key,
+  required Uint8List iv,
+  required String srcPath,
+  required String destPath,
+  SendPort? progressPort,
+  bool Function()? shouldAbort,
+  CryptoIsolateCancelHandle? cancelHandle,
+  Duration abortPollInterval = const Duration(milliseconds: 50),
+}) async {
+  final keyForWorker = Uint8List.fromList(key);
+  await _runEncryptIsolate(
+    keyCopy: keyForWorker,
+    destPath: destPath,
+    shouldAbort: shouldAbort,
+    cancelHandle: cancelHandle,
+    abortPollInterval: abortPollInterval,
+    spawnWorker: (replyPort, exitPort, errorPort) {
+      final params = CryptoIsolateEncryptParams(
+        key: keyForWorker,
+        iv: iv,
+        srcPath: srcPath,
+        destPath: destPath,
+        progressPort: progressPort,
+        replyPort: replyPort,
+        sendControlPort: true,
+      );
+      return Isolate.spawn(
+        isolateEncryptWorker,
+        params,
+        onExit: exitPort,
+        onError: errorPort,
+        errorsAreFatal: true,
+      );
+    },
+  );
+}
+
+/// Spawns a background isolate to encrypt [srcPath] to [destPath] as c3 or c2.
 ///
 /// A private copy of [key] is sent to the worker, which zeroes that copy on
 /// exit, so the caller's buffer is never touched.
@@ -742,96 +1097,57 @@ Future<void> cryptoIsolateEncryptFileCtr({
   required String srcPath,
   required String destPath,
   SendPort? progressPort,
+  void Function(int bytesProcessed)? onBytesProgress,
   bool writeC3 = true,
+  bool Function()? shouldAbort,
+  CryptoIsolateCancelHandle? cancelHandle,
+  Duration abortPollInterval = const Duration(milliseconds: 50),
 }) async {
   final keyForWorker = Uint8List.fromList(key);
-  final replyPort = ReceivePort();
-  final exitPort = ReceivePort();
-  final errorPort = ReceivePort();
-
-  StreamSubscription<dynamic>? replySub;
-  StreamSubscription<dynamic>? errorSub;
-  StreamSubscription<dynamic>? exitSub;
-  Isolate? isolate;
-
+  ReceivePort? ownedProgressPort;
+  StreamSubscription<dynamic>? progressSub;
+  SendPort? effectiveProgressPort = progressPort;
+  if (effectiveProgressPort == null && onBytesProgress != null) {
+    ownedProgressPort = ReceivePort();
+    effectiveProgressPort = ownedProgressPort.sendPort;
+    progressSub = ownedProgressPort.listen((msg) {
+      if (msg is int) {
+        try {
+          onBytesProgress(msg);
+        } catch (_) {}
+      }
+    });
+  }
   try {
-    final params = CryptoIsolateEncryptCtrParams(
-      key: keyForWorker,
-      iv: iv,
-      srcPath: srcPath,
+    await _runEncryptIsolate(
+      keyCopy: keyForWorker,
       destPath: destPath,
-      progressPort: progressPort,
-      replyPort: replyPort.sendPort,
-      writeC3: writeC3,
+      shouldAbort: shouldAbort,
+      cancelHandle: cancelHandle,
+      abortPollInterval: abortPollInterval,
+      spawnWorker: (replyPort, exitPort, errorPort) {
+        final params = CryptoIsolateEncryptCtrParams(
+          key: keyForWorker,
+          iv: iv,
+          srcPath: srcPath,
+          destPath: destPath,
+          progressPort: effectiveProgressPort,
+          replyPort: replyPort,
+          writeC3: writeC3,
+          sendControlPort: true,
+        );
+        return Isolate.spawn(
+          isolateEncryptCtrWorker,
+          params,
+          onExit: exitPort,
+          onError: errorPort,
+          errorsAreFatal: true,
+        );
+      },
     );
-
-    isolate = await Isolate.spawn(
-      isolateEncryptCtrWorker,
-      params,
-      onExit: exitPort.sendPort,
-      onError: errorPort.sendPort,
-      errorsAreFatal: true,
-    );
-
-    final completer = Completer<dynamic>();
-
-    replySub = replyPort.listen((message) {
-      if (!completer.isCompleted) {
-        completer.complete(message);
-      }
-    });
-
-    errorSub = errorPort.listen((errorData) {
-      if (!completer.isCompleted) {
-        String msg = 'Crypto isolate worker failed with unhandled error';
-        if (errorData is List && errorData.isNotEmpty) {
-          msg = errorData[0].toString();
-        } else if (errorData != null) {
-          msg = errorData.toString();
-        }
-        completer.completeError(Exception(msg));
-      }
-    });
-
-    exitSub = exitPort.listen((_) {
-      if (!completer.isCompleted) {
-        completer.completeError(Exception('Crypto isolate worker exited prematurely without returning a result'));
-      }
-    });
-
-    final response = await completer.future;
-    if (response is Map && response['errorKind'] != null) {
-      final kind = response['errorKind'] as String;
-      final message = response['message'] as String? ?? 'Crypto isolate operation failed';
-      switch (kind) {
-        case 'corrupted':
-          throw CorruptedMediaFileException(message);
-        case 'unsupportedFormat':
-          throw UnsupportedMediaFormatException(message);
-        case 'io':
-          throw FileSystemException(message);
-        case 'unknown':
-        default:
-          throw Exception(message);
-      }
-    }
   } finally {
-    keyForWorker.fillRange(0, keyForWorker.length, 0);
-    try {
-      await replySub?.cancel();
-    } catch (_) {}
-    try {
-      await errorSub?.cancel();
-    } catch (_) {}
-    try {
-      await exitSub?.cancel();
-    } catch (_) {}
-    replyPort.close();
-    errorPort.close();
-    exitPort.close();
-    if (isolate != null) {
-      isolate.kill(priority: Isolate.beforeNextEvent);
-    }
+    await progressSub?.cancel();
+    ownedProgressPort?.close();
   }
 }
 
@@ -911,7 +1227,11 @@ Future<void> cryptoIsolateDecryptFile({
 
     exitSub = exitPort.listen((_) {
       if (!completer.isCompleted) {
-        completer.completeError(Exception('Crypto isolate worker exited prematurely without returning a result'));
+        completer.completeError(
+          Exception(
+            'Crypto isolate worker exited prematurely without returning a result',
+          ),
+        );
       }
     });
 
@@ -940,11 +1260,15 @@ Future<void> cryptoIsolateDecryptFile({
     }
     if (response is Map && response['errorKind'] != null) {
       final kind = response['errorKind'] as String;
-      final message = response['message'] as String? ?? 'Crypto isolate operation failed';
+      final message =
+          response['message'] as String? ?? 'Crypto isolate operation failed';
       switch (kind) {
         case 'authentication':
           final isTamper = response['isTamperSuspected'] as bool? ?? true;
-          throw BlobAuthenticationException(message, isTamperSuspected: isTamper);
+          throw BlobAuthenticationException(
+            message,
+            isTamperSuspected: isTamper,
+          );
         case 'corrupted':
           throw CorruptedMediaFileException(message);
         case 'unsupportedFormat':
@@ -975,4 +1299,3 @@ Future<void> cryptoIsolateDecryptFile({
     }
   }
 }
-
