@@ -190,7 +190,20 @@ class _FastWidgetCrypto extends Fake
   bool isLegacySystemBlob(Uint8List blob) => false;
 
   @override
-  Future<BlobIntegrityStatus> verifyFileIntegrity(File file) async {
+  Future<BlobIntegrityStatus> verifyFileIntegrity(File file) =>
+      verifyFileIntegrityControlled(file);
+
+  @override
+  Future<BlobIntegrityStatus> verifyFileIntegrityControlled(
+    File file, {
+    void Function(int bytesProcessed)? onBytesProgress,
+    bool Function()? shouldAbort,
+    CryptoIsolateCancelHandle? cancelHandle,
+  }) async {
+    if ((shouldAbort != null && shouldAbort()) ||
+        (cancelHandle != null && cancelHandle.isCancelled)) {
+      throw const OperationCancelledException();
+    }
     if (!await file.exists()) return BlobIntegrityStatus.fileNotFound;
     final bytes = await file.readAsBytes();
     if (bytes.length < kAuthHeaderLength) {
@@ -203,6 +216,7 @@ class _FastWidgetCrypto extends Fake
     if (!_unlocked || key == null) return BlobIntegrityStatus.vaultLocked;
     try {
       authenticateBlob(blob: bytes, macKey: deriveMacKey(key));
+      onBytesProgress?.call(bytes.length);
       return BlobIntegrityStatus.healthy;
     } on BlobAuthenticationException {
       return BlobIntegrityStatus.tamperedOrCorrupted;

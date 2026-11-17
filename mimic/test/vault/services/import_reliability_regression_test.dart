@@ -79,6 +79,7 @@ class _HarnessCrypto extends Fake with ChangeNotifier implements VaultCrypto {
   bool _unlocked = false;
   int _lockEpoch = 0;
   Uint8List? _key;
+  int verifyCallCount = 0;
 
   @override
   bool get isUnlocked => _unlocked;
@@ -218,7 +219,21 @@ class _HarnessCrypto extends Fake with ChangeNotifier implements VaultCrypto {
   bool isLegacySystemBlob(Uint8List blob) => false;
 
   @override
-  Future<BlobIntegrityStatus> verifyFileIntegrity(File file) async {
+  Future<BlobIntegrityStatus> verifyFileIntegrity(File file) =>
+      verifyFileIntegrityControlled(file);
+
+  @override
+  Future<BlobIntegrityStatus> verifyFileIntegrityControlled(
+    File file, {
+    void Function(int bytesProcessed)? onBytesProgress,
+    bool Function()? shouldAbort,
+    CryptoIsolateCancelHandle? cancelHandle,
+  }) async {
+    if ((shouldAbort != null && shouldAbort()) ||
+        (cancelHandle != null && cancelHandle.isCancelled)) {
+      throw const OperationCancelledException();
+    }
+    verifyCallCount++;
     if (!await file.exists()) return BlobIntegrityStatus.fileNotFound;
     final bytes = await file.readAsBytes();
     if (bytes.length < kAuthHeaderLength) {
@@ -231,6 +246,7 @@ class _HarnessCrypto extends Fake with ChangeNotifier implements VaultCrypto {
     if (!_unlocked || key == null) return BlobIntegrityStatus.vaultLocked;
     try {
       authenticateBlob(blob: bytes, macKey: deriveMacKey(key));
+      onBytesProgress?.call(bytes.length);
       return BlobIntegrityStatus.healthy;
     } on BlobAuthenticationException {
       return BlobIntegrityStatus.tamperedOrCorrupted;
@@ -275,6 +291,7 @@ class _ControllablePickerAdapter implements MediaPickerAdapter {
   final Map<String, _ControlledGalleryAsset> assets = {};
   final List<List<String>> deleteRequests = [];
   bool throwDeletePermissionDenied = false;
+  Future<MediaDeleteResult> Function(List<String>)? onDeleteOriginals;
 
   void addAsset(_ControlledGalleryAsset asset) {
     assets[asset.id] = asset;
@@ -361,6 +378,10 @@ class _ControllablePickerAdapter implements MediaPickerAdapter {
   @override
   Future<MediaDeleteResult> deleteOriginals(List<String> assetIds) async {
     deleteRequests.add(List<String>.from(assetIds));
+    final handler = onDeleteOriginals;
+    if (handler != null) {
+      return handler(assetIds);
+    }
     if (throwDeletePermissionDenied || !permissionState.hasAccess) {
       return MediaDeleteResult(
         deletedIds: const <String>{},
@@ -1390,6 +1411,7 @@ void main() {
           );
         }
       },
+      timeout: const Timeout(Duration(minutes: 2)),
     );
   });
 
@@ -2546,6 +2568,410 @@ void main() {
           }
         },
       );
+
+      test(
+        'committing (Saving) verification refreshes stall lease, projects live Saving percent, and completes past initial stall deadline without pausing unlocked UI',
+        () async {
+          final platform = AndroidPlatformService();
+          final crypto = _HarnessCrypto()..unlockWithKey(masterKeyA);
+          final fileVault = FileVaultService(platform, crypto);
+          final firstVerifyChunk = Completer<void>();
+          final resumeVerify = Completer<void>();
+          final videoVault = _ProgressGatingVideoVaultService(
+            platform,
+            crypto,
+            onHashChunk: (_) async {},
+            onVerifyChunk: (_) async {
+              if (!firstVerifyChunk.isCompleted) {
+                firstVerifyChunk.complete();
+                await resumeVerify.future;
+              }
+            },
+          );
+          final picker = _ControllablePickerAdapter();
+          final journal = ImportJournalStore(crypto);
+          final bridge = _FakeBackgroundImportBridge();
+          final container = ProviderContainer(
+            overrides: [
+              vaultCryptoProvider.overrideWith((_) => crypto),
+              backgroundImportBridgeProvider.overrideWithValue(bridge),
+            ],
+          );
+          final uiAccess = container.read(vaultUiAccessProvider);
+          AutoLock().attachContainerForTesting(container);
+
+          var now = DateTime(2026, 5, 2, 14, 0, 0);
+          AutoLock().setNowForTesting(() => now);
+          AutoLock().setImportStallDeadlineForTesting(
+            const Duration(seconds: 10),
+          );
+
+          final coordinator = ImportCoordinator(
+            crypto: crypto,
+            platformService: platform,
+            fileVault: fileVault,
+            videoVault: videoVault,
+            pickerAdapter: picker,
+            journal: journal,
+            backgroundBridge: bridge,
+            uiAccess: uiAccess,
+            storageProbe: () async => 500 * 1024 * 1024,
+          );
+
+          final committingPercents = <double>[];
+          final committingDetails = <String>[];
+          void listener() {
+            for (final entry in coordinator.uiSession.files) {
+              if (entry.status == ImportFileStatus.committing &&
+                  entry.progress != null) {
+                committingPercents.add(entry.progress!);
+                if (entry.detail != null) {
+                  committingDetails.add(entry.detail!);
+                }
+              }
+            }
+          }
+
+          coordinator.uiSession.addListener(listener);
+          try {
+            final payload = deterministicPayload(992, 800 * 1024);
+            final asset = _ControlledGalleryAsset(
+              id: 'slow_commit_vid',
+              kind: ImportMediaKind.video,
+              name: 'large_saving_clip.mp4',
+              mimeType: 'video/mp4',
+              durationS: 30,
+              file: writeGalleryFile('large_saving_clip.mp4', payload),
+            );
+            picker.addAsset(asset);
+
+            await coordinator.enqueueBatch(
+              sources: [asset.toRef()],
+              scope: const VaultImportScope(),
+            );
+            await firstVerifyChunk.future;
+
+            expect(committingPercents, isNotEmpty);
+            expect(
+              committingDetails.any((d) => d.startsWith('Verifying · ')),
+              isTrue,
+            );
+
+            // Advance 6s before resume + 6s across subsequent verify chunks (>10s total).
+            now = now.add(const Duration(seconds: 6));
+            AutoLock().checkImportWatchdogsNow();
+            expect(coordinator.isPaused, isFalse);
+
+            resumeVerify.complete();
+            await Future<void>.delayed(Duration.zero);
+            now = now.add(const Duration(seconds: 6));
+            AutoLock().checkImportWatchdogsNow();
+            expect(coordinator.isPaused, isFalse);
+
+            await waitUntilSettled(coordinator);
+            expect(coordinator.isPaused, isFalse);
+            expect(coordinator.pauseReason, ImportPauseReason.none);
+            expect((await videoVault.getAllVideos()).length, 1);
+            expect(coordinator.jobs.single.isCommittedToVault, isTrue);
+          } finally {
+            coordinator.uiSession.removeListener(listener);
+            if (!resumeVerify.isCompleted) resumeVerify.complete();
+            coordinator.dispose();
+            await Future<void>.delayed(const Duration(milliseconds: 20));
+            AutoLock().dispose();
+            AutoLock().resetClockForTesting();
+            container.dispose();
+            await journal.close();
+            await fileVault.closeDatabase();
+            await videoVault.closeDatabase();
+          }
+        },
+      );
+
+      test(
+        'hung OS delete confirmation during syncAfterUnlock never deadlocks subsequent enqueueBatch, pill visibility, worker, or foreground notification',
+        () async {
+          final env = await buildEnv();
+          final deleteStarted = Completer<void>();
+          final hungDeleteCompleter = Completer<MediaDeleteResult>();
+          final bridge = _FakeBackgroundImportBridge();
+          final fgCoordinator = ImportCoordinator(
+            crypto: env.crypto,
+            platformService: env.platform,
+            fileVault: env.fileVault,
+            videoVault: env.videoVault,
+            pickerAdapter: env.picker,
+            journal: env.journal,
+            backgroundBridge: bridge,
+            storageProbe: () async => 500 * 1024 * 1024,
+          );
+          Object? fgToken;
+          try {
+            final a1 = _ControlledGalleryAsset(
+              id: 'hung_del_1',
+              kind: ImportMediaKind.photo,
+              name: 'first.jpg',
+              mimeType: 'image/jpeg',
+              file: writeGalleryFile('first.jpg', deterministicPayload(401, 2048)),
+            );
+            final a2 = _ControlledGalleryAsset(
+              id: 'hung_del_2',
+              kind: ImportMediaKind.video,
+              name: 'second.mp4',
+              mimeType: 'video/mp4',
+              durationS: 8,
+              file: writeGalleryFile('second.mp4', deterministicPayload(402, 2048)),
+            );
+            env.picker
+              ..addAsset(a1)
+              ..addAsset(a2);
+
+            await fgCoordinator.enqueueBatch(
+              sources: [a1.toRef()],
+              scope: const VaultImportScope(),
+            );
+            await waitUntilSettled(fgCoordinator);
+            expect(
+              fgCoordinator.jobs.single.state,
+              ImportJobState.awaitingDeleteConfirmation,
+            );
+
+            // Simulate re-unlock while foreground UI is active and OS deleteWithIds hangs.
+            env.crypto.lock();
+            env.crypto.unlockWithKey(masterKeyA);
+            env.picker.onDeleteOriginals = (_) {
+              if (!deleteStarted.isCompleted) deleteStarted.complete();
+              return hungDeleteCompleter.future;
+            };
+            fgToken = fgCoordinator.acquireForegroundUi();
+            await fgCoordinator.syncAfterUnlock();
+            await deleteStarted.future;
+
+            // Even while OS deleteWithIds is still hung, enqueueBatch for a new video
+            // MUST complete immediately, show up in uiSession, start worker, and notify!
+            final startCountBefore = bridge.startCalls.length;
+            final batch2 = await fgCoordinator
+                .enqueueBatch(
+                  sources: [a2.toRef()],
+                  scope: const VaultImportScope(),
+                )
+                .timeout(const Duration(seconds: 2));
+            expect(batch2, isNotNull);
+            expect(fgCoordinator.uiSession.isActive, isTrue);
+            expect(
+              fgCoordinator.uiSession.files.any((f) => f.name == 'second.mp4'),
+              isTrue,
+            );
+            await waitUntil(
+              () =>
+                  !fgCoordinator.isWorkerRunningForTest &&
+                  fgCoordinator.jobs.any(
+                    (j) =>
+                        j.payload.displayName == 'second.mp4' &&
+                        j.isCommittedToVault,
+                  ),
+              fgCoordinator,
+            );
+            expect(bridge.startCalls.length, greaterThan(startCountBefore));
+            expect((await env.videoVault.getAllVideos()).length, 1);
+          } finally {
+            if (!hungDeleteCompleter.isCompleted) {
+              hungDeleteCompleter.complete(
+                const MediaDeleteResult(deletedIds: {}, keptIds: {'hung_del_1'}),
+              );
+            }
+            if (fgToken != null) {
+              fgCoordinator.releaseForegroundUi(fgToken);
+            }
+            await disposeEnv(
+              coordinator: env.coordinator,
+              fileVault: env.fileVault,
+              videoVault: env.videoVault,
+              journal: env.journal,
+            );
+            fgCoordinator.dispose();
+          }
+        },
+      );
+
+      test(
+        'cancelActive mid-commit does not strand an already-committed item in committing and next enqueueBatch restarts foreground notification',
+        () async {
+          final env = await buildEnv();
+          final bridge = _FakeBackgroundImportBridge();
+          final postCommitCanceller = _PostCommitCancelFileVaultService(
+            env.platform,
+            env.crypto,
+          );
+          final coord = ImportCoordinator(
+            crypto: env.crypto,
+            platformService: env.platform,
+            fileVault: postCommitCanceller,
+            videoVault: env.videoVault,
+            pickerAdapter: env.picker,
+            journal: env.journal,
+            backgroundBridge: bridge,
+            storageProbe: () async => 500 * 1024 * 1024,
+          );
+          postCommitCanceller.onAfterCommitForId = (id, originalName) {
+            if (originalName == 'commit_race.jpg') {
+              return coord.cancelActive();
+            }
+            return Future.value();
+          };
+          try {
+            final a1 = _ControlledGalleryAsset(
+              id: 'cr1',
+              kind: ImportMediaKind.photo,
+              name: 'commit_race.jpg',
+              mimeType: 'image/jpeg',
+              file: writeGalleryFile('commit_race.jpg', deterministicPayload(501, 2048)),
+            );
+            final a2 = _ControlledGalleryAsset(
+              id: 'cr2',
+              kind: ImportMediaKind.photo,
+              name: 'queued_second.jpg',
+              mimeType: 'image/jpeg',
+              file: writeGalleryFile('queued_second.jpg', deterministicPayload(502, 2048)),
+            );
+            final a3 = _ControlledGalleryAsset(
+              id: 'cr3',
+              kind: ImportMediaKind.video,
+              name: 'next_upload.mp4',
+              mimeType: 'video/mp4',
+              durationS: 5,
+              file: writeGalleryFile('next_upload.mp4', deterministicPayload(503, 2048)),
+            );
+            env.picker
+              ..addAsset(a1)
+              ..addAsset(a2)
+              ..addAsset(a3);
+
+            await coord.enqueueBatch(
+              sources: [a1.toRef(), a2.toRef()],
+              scope: const VaultImportScope(),
+            );
+            await waitUntilSettled(coord);
+
+            // First item committed to DB/vault -> must report savedOriginalKept (never stuck in committing).
+            expect(coord.jobs[0].state, ImportJobState.savedOriginalKept);
+            expect(coord.jobs[1].state, ImportJobState.cancelled);
+            expect((await postCommitCanceller.getAllPhotos()).length, 1);
+            expect(coord.uiSession.hasConfirmableSavedOriginals, isTrue);
+
+            // Explicit manual delete action deletes ONLY saved originals while keeping cancelled untouched.
+            await coord.confirmSavedOriginals();
+            expect(coord.jobs[0].state, ImportJobState.saved);
+            expect(a1.file.existsSync(), isFalse);
+            expect(a2.file.existsSync(), isTrue);
+            expect(coord.uiSession.hasConfirmableSavedOriginals, isFalse);
+
+            // Next batch MUST start worker + restart foreground service notification cleanly.
+            final startCallsBefore = bridge.startCalls.length;
+            await coord.enqueueBatch(
+              sources: [a3.toRef()],
+              scope: const VaultImportScope(),
+            );
+            await waitUntilSettled(coord);
+            expect(bridge.startCalls.length, greaterThan(startCallsBefore));
+            expect((await env.videoVault.getAllVideos()).length, 1);
+          } finally {
+            await postCommitCanceller.closeDatabase();
+            await disposeEnv(
+              coordinator: env.coordinator,
+              fileVault: env.fileVault,
+              videoVault: env.videoVault,
+              journal: env.journal,
+            );
+            coord.dispose();
+          }
+        },
+      );
+
+      test(
+        'vaultUiAccessProvider stays alive across VaultCrypto unlock/lock cycles without being disposed under ImportCoordinator',
+        () async {
+          final crypto = _HarnessCrypto();
+          final container = ProviderContainer(
+            overrides: [vaultCryptoProvider.overrideWith((_) => crypto)],
+          );
+          try {
+            final initial = container.read(vaultUiAccessProvider);
+            crypto.unlockWithKey(masterKeyA);
+            final afterUnlock = container.read(vaultUiAccessProvider);
+            expect(identical(initial, afterUnlock), isTrue);
+            expect(afterUnlock.isUiAuthorized, isTrue);
+
+            afterUnlock.requireReauthentication(reason: 'ui_idle_timeout');
+            expect(afterUnlock.isUiAuthorized, isFalse);
+
+            crypto.lock();
+            await Future<void>.delayed(Duration.zero);
+            final afterLock = container.read(vaultUiAccessProvider);
+            expect(identical(initial, afterLock), isTrue);
+            expect(afterLock.isUiAuthorized, isFalse);
+          } finally {
+            container.dispose();
+          }
+        },
+      );
+
+      test(
+        'syncAfterUnlock skips redundant full-file HMAC re-verify on committed savedOriginalKept jobs, serializes lock cleanup, and enqueueBatch throws locked when locked',
+        () async {
+          final env = await buildEnv();
+          try {
+            final vid = _ControlledGalleryAsset(
+              id: 'kept_vid_1',
+              kind: ImportMediaKind.video,
+              name: 'kept_vid_1.mp4',
+              mimeType: 'video/mp4',
+              durationS: 6,
+              file: writeGalleryFile(
+                'kept_vid_1.mp4',
+                deterministicPayload(601, 300 * 1024),
+              ),
+            );
+            env.picker.addAsset(vid);
+            vid.deleteConfirmed = false;
+
+            await env.coordinator.enqueueBatch(
+              sources: [vid.toRef()],
+              scope: const VaultImportScope(),
+            );
+            await waitUntilSettled(env.coordinator);
+            final fgToken = env.coordinator.acquireForegroundUi();
+            await Future<void>.delayed(const Duration(milliseconds: 50));
+            env.coordinator.releaseForegroundUi(fgToken);
+            expect(env.coordinator.jobs.single.state, ImportJobState.savedOriginalKept);
+            final callsAfterFirstCommit = env.crypto.verifyCallCount;
+            expect(callsAfterFirstCommit, greaterThan(0));
+
+            // Lock then quickly unlock before async cleanup can race:
+            env.crypto.lock();
+            await expectLater(
+              () => env.coordinator.enqueueBatch(
+                sources: [vid.toRef()],
+                scope: const VaultImportScope(),
+              ),
+              throwsA(isA<ImportJournalException>()),
+            );
+
+            env.crypto.unlockWithKey(masterKeyA);
+            await env.coordinator.syncAfterUnlock();
+            // Already-committed savedOriginalKept job must NOT re-hash ciphertext on unlock!
+            expect(env.crypto.verifyCallCount, callsAfterFirstCommit);
+            expect(env.coordinator.jobs.single.state, ImportJobState.savedOriginalKept);
+          } finally {
+            await disposeEnv(
+              coordinator: env.coordinator,
+              fileVault: env.fileVault,
+              videoVault: env.videoVault,
+              journal: env.journal,
+            );
+          }
+        },
+      );
     },
   );
 }
@@ -2619,14 +3045,121 @@ class _FakeBackgroundImportBridge implements BackgroundImportBridge {
   }
 }
 
+class _PostCommitCancelFileVaultService extends FileVaultService {
+  Future<void> Function(String id, String? originalName)? onAfterCommitForId;
+
+  _PostCommitCancelFileVaultService(super.platformService, super.crypto);
+
+  @override
+  Future<void> commitStagedPhoto({
+    required String id,
+    required File stagingFile,
+    required String mimeType,
+    required int plaintextSize,
+    required String? originalName,
+    required String contentHash,
+    bool verifyIntegrity = true,
+    bool Function()? isEpochValid,
+    bool Function()? shouldAbort,
+    void Function(int bytesProcessed)? onVerifyBytesProgress,
+    void Function()? onBeforePublish,
+    CryptoIsolateCancelHandle? verifyCancelHandle,
+    Future<void> Function()? onBeforeMetaCommit,
+  }) async {
+    await super.commitStagedPhoto(
+      id: id,
+      stagingFile: stagingFile,
+      mimeType: mimeType,
+      plaintextSize: plaintextSize,
+      originalName: originalName,
+      contentHash: contentHash,
+      verifyIntegrity: verifyIntegrity,
+      isEpochValid: isEpochValid,
+      shouldAbort: shouldAbort,
+      onVerifyBytesProgress: onVerifyBytesProgress,
+      onBeforePublish: onBeforePublish,
+      verifyCancelHandle: verifyCancelHandle,
+      onBeforeMetaCommit: onBeforeMetaCommit,
+    );
+    await onAfterCommitForId?.call(id, originalName);
+  }
+}
+
 class _ProgressGatingVideoVaultService extends VideoVaultService {
   final Future<void> Function(int bytesProcessed) onHashChunk;
+  final Future<void> Function(int bytesProcessed)? onVerifyChunk;
 
   _ProgressGatingVideoVaultService(
     super.platformService,
     super.crypto, {
     required this.onHashChunk,
+    this.onVerifyChunk,
   });
+
+  @override
+  Future<void> commitStagedVideo({
+    required String id,
+    required File stagingFile,
+    required String mimeType,
+    required int durationS,
+    required int plaintextSize,
+    required String? originalName,
+    required String contentHash,
+    bool verifyIntegrity = true,
+    bool Function()? isEpochValid,
+    bool Function()? shouldAbort,
+    void Function(int bytesProcessed)? onVerifyBytesProgress,
+    void Function()? onBeforePublish,
+    CryptoIsolateCancelHandle? verifyCancelHandle,
+    Future<void> Function()? onBeforeMetaCommit,
+  }) async {
+    final hook = onVerifyChunk;
+    if (hook == null) {
+      return super.commitStagedVideo(
+        id: id,
+        stagingFile: stagingFile,
+        mimeType: mimeType,
+        durationS: durationS,
+        plaintextSize: plaintextSize,
+        originalName: originalName,
+        contentHash: contentHash,
+        verifyIntegrity: verifyIntegrity,
+        isEpochValid: isEpochValid,
+        shouldAbort: shouldAbort,
+        onVerifyBytesProgress: onVerifyBytesProgress,
+        onBeforePublish: onBeforePublish,
+        verifyCancelHandle: verifyCancelHandle,
+        onBeforeMetaCommit: onBeforeMetaCommit,
+      );
+    }
+
+    final totalLen = await stagingFile.length();
+    const chunkSize = 256 * 1024;
+    var offset = 0;
+    while (offset < totalLen) {
+      if (shouldAbort != null && shouldAbort()) {
+        throw const OperationCancelledException();
+      }
+      offset = (offset + chunkSize).clamp(0, totalLen);
+      onVerifyBytesProgress?.call(offset);
+      await hook(offset);
+    }
+    return super.commitStagedVideo(
+      id: id,
+      stagingFile: stagingFile,
+      mimeType: mimeType,
+      durationS: durationS,
+      plaintextSize: plaintextSize,
+      originalName: originalName,
+      contentHash: contentHash,
+      verifyIntegrity: false,
+      isEpochValid: isEpochValid,
+      shouldAbort: shouldAbort,
+      onBeforePublish: onBeforePublish,
+      verifyCancelHandle: verifyCancelHandle,
+      onBeforeMetaCommit: onBeforeMetaCommit,
+    );
+  }
 
   @override
   Future<String> computeFileSha256(

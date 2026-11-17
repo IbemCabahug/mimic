@@ -463,11 +463,31 @@ object MimicEngineHost {
                     effectiveSdkInt() < Build.VERSION_CODES.TIRAMISU
                 ) {
                     result.success(true)
-                } else if (act == null || pendingNotifPermissionResult != null) {
+                } else if (act == null) {
                     result.success(false)
                 } else {
-                    pendingNotifPermissionResult = result
-                    pendingPermissionActivityRef = WeakReference(act)
+                    var staleResult: MethodChannel.Result? = null
+                    synchronized(lock) {
+                        val existing = pendingNotifPermissionResult
+                        if (existing != null) {
+                            val existingAct = pendingPermissionActivityRef?.get()
+                            if (existingAct != null && existingAct === act) {
+                                result.success(false)
+                                return
+                            }
+                            // Fail orphaned callback from an earlier detached Activity so
+                            // future permission prompts cannot stay latched out.
+                            staleResult = existing
+                            pendingNotifPermissionResult = null
+                            pendingPermissionActivityRef = null
+                        }
+                        pendingNotifPermissionResult = result
+                        pendingPermissionActivityRef = WeakReference(act)
+                    }
+                    try {
+                        staleResult?.success(false)
+                    } catch (_: Exception) {
+                    }
                     val launcher = requestPermissionLauncherForTest
                     if (launcher != null) {
                         launcher(

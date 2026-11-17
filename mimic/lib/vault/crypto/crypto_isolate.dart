@@ -73,6 +73,24 @@ class CryptoIsolateDecryptParams {
   });
 }
 
+/// Parameters passed to the crypto worker isolate to stream-verify an
+/// authenticated c3 (`MVKEYc3\0`) media blob off the UI isolate.
+class CryptoIsolateVerifyCtrV3Params {
+  final Uint8List key;
+  final String filePath;
+  final SendPort? progressPort;
+  final SendPort replyPort;
+  final bool sendControlPort;
+
+  CryptoIsolateVerifyCtrV3Params({
+    required this.key,
+    required this.filePath,
+    this.progressPort,
+    required this.replyPort,
+    this.sendControlPort = false,
+  });
+}
+
 /// Top-level worker function running in a background isolate to encrypt a stream.
 ///
 /// WARNING: Zeroes params.key in finally; must never be invoked directly with a live caller key.
@@ -1297,5 +1315,321 @@ Future<void> cryptoIsolateDecryptFile({
     if (isolate != null) {
       isolate.kill(priority: Isolate.beforeNextEvent);
     }
+  }
+}
+
+/// Top-level worker function running in a background isolate to verify an
+/// authenticated `MVKEYc3\0` blob via streaming HMAC-SHA256 without blocking the
+/// UI isolate.
+///
+/// WARNING: Zeroes [params.key] and derived subkeys in `finally`; never modifies
+/// or deletes the target file.
+Future<void> isolateVerifyCtrV3Worker(
+  CryptoIsolateVerifyCtrV3Params params,
+) async {
+  final key = params.key;
+  final file = File(params.filePath);
+  final progressPort = params.progressPort;
+  final ReceivePort? controlPort = params.sendControlPort
+      ? ReceivePort()
+      : null;
+  bool abortRequested = false;
+  StreamSubscription<dynamic>? controlSub;
+  if (controlPort != null) {
+    controlSub = controlPort.listen((msg) {
+      if (msg == 'abort') {
+        abortRequested = true;
+      }
+    });
+    params.replyPort.send({
+      'type': 'control',
+      'sendPort': controlPort.sendPort,
+    });
+  }
+
+  Uint8List? macKey;
+  final buffer = Uint8List(256 * 1024);
+  final computedTag = Uint8List(kAuthTagLength);
+  RandomAccessFile? raf;
+  try {
+    if (abortRequested) throw const OperationCancelledException();
+    if (!await file.exists()) {
+      params.replyPort.send({'status': 'fileNotFound'});
+      return;
+    }
+    final fileLen = await file.length();
+    if (fileLen < 8) {
+      params.replyPort.send({'status': 'fileTooShort'});
+      return;
+    }
+
+    raf = await file.open(mode: FileMode.read);
+    final magic = Uint8List(8);
+    if (await raf.readInto(magic) < 8) {
+      params.replyPort.send({'status': 'fileTooShort'});
+      return;
+    }
+    if (classifyMediaHeader(magic) != MediaBlobFormat.ctrV3) {
+      params.replyPort.send({'status': 'unsupportedFormat'});
+      return;
+    }
+    if (fileLen < kAuthHeaderLength) {
+      params.replyPort.send({'status': 'fileTooShort'});
+      return;
+    }
+
+    final iv = Uint8List(16);
+    if (await raf.readInto(iv) < 16) {
+      params.replyPort.send({'status': 'fileTooShort'});
+      return;
+    }
+    final tag = Uint8List(kAuthTagLength);
+    if (await raf.readInto(tag) < kAuthTagLength) {
+      params.replyPort.send({'status': 'fileTooShort'});
+      return;
+    }
+
+    macKey = deriveMacKey(key);
+    final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(macKey));
+    hmac.update(
+      Uint8List.fromList(kMediaMagicCtrV3),
+      0,
+      kMediaMagicCtrV3.length,
+    );
+    hmac.update(iv, 0, iv.length);
+
+    var totalBytesVerified = kAuthHeaderLength;
+    progressPort?.send(totalBytesVerified);
+    int bytesRead;
+    while (true) {
+      if (abortRequested) throw const OperationCancelledException();
+      bytesRead = await raf.readInto(buffer);
+      if (bytesRead <= 0) break;
+      if (abortRequested) throw const OperationCancelledException();
+      hmac.update(buffer, 0, bytesRead);
+      totalBytesVerified += bytesRead;
+      progressPort?.send(totalBytesVerified);
+    }
+
+    hmac.doFinal(computedTag, 0);
+    final healthy = constantTimeBytesEqual(tag, computedTag);
+    params.replyPort.send({
+      'status': healthy ? 'healthy' : 'tamperedOrCorrupted',
+    });
+  } on OperationCancelledException catch (e) {
+    params.replyPort.send({
+      'errorKind': 'cancelled',
+      'message': e.message,
+    });
+  } catch (_) {
+    params.replyPort.send({'status': 'ioError'});
+  } finally {
+    try {
+      await raf?.close();
+    } catch (_) {}
+    key.fillRange(0, key.length, 0);
+    macKey?.fillRange(0, macKey.length, 0);
+    buffer.fillRange(0, buffer.length, 0);
+    computedTag.fillRange(0, computedTag.length, 0);
+    try {
+      await controlSub?.cancel();
+    } catch (_) {}
+    controlPort?.close();
+  }
+}
+
+/// Verifies an authenticated `MVKEYc3\0` blob in a background isolate,
+/// streaming byte progress for lease heartbeats/UI and supporting cancellation.
+///
+/// Returns one of: `'healthy'`, `'tamperedOrCorrupted'`, `'fileNotFound'`,
+/// `'fileTooShort'`, `'unsupportedFormat'`, or `'ioError'`. Throws
+/// [OperationCancelledException] when cancelled via [shouldAbort] or
+/// [cancelHandle]. Never modifies or deletes [filePath].
+Future<String> cryptoIsolateVerifyCtrV3({
+  required Uint8List key,
+  required String filePath,
+  void Function(int bytesProcessed)? onBytesProgress,
+  bool Function()? shouldAbort,
+  CryptoIsolateCancelHandle? cancelHandle,
+  Duration abortPollInterval = const Duration(milliseconds: 50),
+}) async {
+  if ((shouldAbort != null && shouldAbort()) ||
+      (cancelHandle != null && cancelHandle.isCancelled)) {
+    throw const OperationCancelledException();
+  }
+
+  final keyForWorker = Uint8List.fromList(key);
+  final replyPort = ReceivePort();
+  final exitPort = ReceivePort();
+  final errorPort = ReceivePort();
+  ReceivePort? ownedProgressPort;
+  StreamSubscription<dynamic>? progressSub;
+  StreamSubscription<dynamic>? replySub;
+  StreamSubscription<dynamic>? errorSub;
+  StreamSubscription<dynamic>? exitSub;
+  Timer? abortTimer;
+  Isolate? isolate;
+  bool exited = false;
+  final exitedCompleter = Completer<void>();
+  bool abortedOrFailed = true;
+
+  if (onBytesProgress != null) {
+    ownedProgressPort = ReceivePort();
+    progressSub = ownedProgressPort.listen((msg) {
+      if (msg is int) {
+        try {
+          onBytesProgress(msg);
+        } catch (_) {}
+      }
+    });
+  }
+
+  try {
+    final completer = Completer<dynamic>();
+    bool abortInProgress = false;
+
+    Future<void> stopWorker() async {
+      abortInProgress = true;
+      if (isolate != null && !exited) {
+        await Future.any<void>([
+          exitedCompleter.future,
+          Future<void>.delayed(const Duration(seconds: 5)),
+        ]);
+        if (!exited) {
+          isolate.kill(priority: Isolate.immediate);
+          await Future.any<void>([
+            exitedCompleter.future,
+            Future<void>.delayed(const Duration(milliseconds: 200)),
+          ]);
+        }
+      }
+      if (!completer.isCompleted) {
+        completer.completeError(const OperationCancelledException());
+      }
+    }
+
+    cancelHandle?.attach(onAbort: stopWorker);
+
+    final params = CryptoIsolateVerifyCtrV3Params(
+      key: keyForWorker,
+      filePath: filePath,
+      progressPort: ownedProgressPort?.sendPort,
+      replyPort: replyPort.sendPort,
+      sendControlPort: true,
+    );
+    isolate = await Isolate.spawn(
+      isolateVerifyCtrV3Worker,
+      params,
+      onExit: exitPort.sendPort,
+      onError: errorPort.sendPort,
+      errorsAreFatal: true,
+    );
+
+    if ((shouldAbort != null && shouldAbort()) ||
+        (cancelHandle != null && cancelHandle.isCancelled)) {
+      isolate.kill(priority: Isolate.immediate);
+      throw const OperationCancelledException();
+    }
+
+    replySub = replyPort.listen((message) {
+      if (message is Map &&
+          message['type'] == 'control' &&
+          message['sendPort'] is SendPort) {
+        cancelHandle?.updateControlPort(message['sendPort'] as SendPort);
+        return;
+      }
+      if (!completer.isCompleted) {
+        completer.complete(message);
+      }
+    });
+
+    errorSub = errorPort.listen((errorData) {
+      if (!completer.isCompleted) {
+        String msg = 'Crypto isolate verify worker failed';
+        if (errorData is List && errorData.isNotEmpty) {
+          msg = errorData[0].toString();
+        } else if (errorData != null) {
+          msg = errorData.toString();
+        }
+        completer.completeError(Exception(msg));
+      }
+    });
+
+    exitSub = exitPort.listen((_) {
+      exited = true;
+      if (!exitedCompleter.isCompleted) {
+        exitedCompleter.complete();
+      }
+      if (!abortInProgress && !completer.isCompleted) {
+        if ((cancelHandle != null && cancelHandle.isCancelled) ||
+            (shouldAbort != null && shouldAbort())) {
+          completer.completeError(const OperationCancelledException());
+        } else {
+          completer.completeError(
+            Exception(
+              'Crypto isolate verify worker exited prematurely without returning a result',
+            ),
+          );
+        }
+      }
+    });
+
+    if ((shouldAbort != null && shouldAbort()) ||
+        (cancelHandle != null && cancelHandle.isCancelled)) {
+      await (cancelHandle != null ? cancelHandle.abort() : stopWorker());
+    } else if (shouldAbort != null) {
+      abortTimer = Timer.periodic(abortPollInterval, (t) {
+        if (shouldAbort()) {
+          t.cancel();
+          if (cancelHandle != null) {
+            cancelHandle.abort().ignore();
+          } else {
+            stopWorker().ignore();
+          }
+        }
+      });
+    }
+
+    final response = await completer.future;
+    if (response is Map && response['errorKind'] == 'cancelled') {
+      throw OperationCancelledException(
+        response['message'] as String? ?? 'Operation cancelled',
+      );
+    }
+    abortedOrFailed = false;
+    if (response is Map && response['status'] is String) {
+      return response['status'] as String;
+    }
+    return 'ioError';
+  } finally {
+    abortTimer?.cancel();
+    keyForWorker.fillRange(0, keyForWorker.length, 0);
+    if (isolate != null && !exited) {
+      isolate.kill(
+        priority: abortedOrFailed ? Isolate.immediate : Isolate.beforeNextEvent,
+      );
+      if (abortedOrFailed) {
+        await Future.any<void>([
+          exitedCompleter.future,
+          Future<void>.delayed(const Duration(milliseconds: 100)),
+        ]);
+      }
+    }
+    try {
+      await progressSub?.cancel();
+    } catch (_) {}
+    ownedProgressPort?.close();
+    try {
+      await replySub?.cancel();
+    } catch (_) {}
+    try {
+      await errorSub?.cancel();
+    } catch (_) {}
+    try {
+      await exitSub?.cancel();
+    } catch (_) {}
+    replyPort.close();
+    errorPort.close();
+    exitPort.close();
   }
 }

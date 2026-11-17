@@ -147,6 +147,10 @@ class VaultUiAccessController extends ChangeNotifier {
 final vaultUiAccessProvider = ChangeNotifierProvider<VaultUiAccessController>((
   ref,
 ) {
-  final crypto = ref.watch(vaultCryptoProvider);
+  // Use ref.read (never ref.watch) because VaultUiAccessController already
+  // subscribes directly to VaultCrypto.addListener(_onCryptoChanged). Rebuilding
+  // on every VaultCrypto.notifyListeners() would dispose the instance retained
+  // by ImportCoordinator.
+  final crypto = ref.read(vaultCryptoProvider);
   return VaultUiAccessController(crypto);
 });

@@ -2,10 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 
 import '../../core/services/platform_service.dart';
+import '../crypto/crypto_isolate.dart';
 import '../crypto/vault_crypto.dart';
 
 const String kImportStagingDirName = '.import_staging';
@@ -103,7 +105,15 @@ class VaultMediaCommitHelper {
     bool verifyIntegrity = true,
     bool Function()? isEpochValid,
     bool Function()? shouldAbort,
+    void Function(int bytesProcessed)? onVerifyBytesProgress,
+    void Function()? onBeforePublish,
+    CryptoIsolateCancelHandle? verifyCancelHandle,
   }) async {
+    bool isCancelledOrStale() =>
+        (shouldAbort != null && shouldAbort()) ||
+        !crypto.isUnlocked ||
+        (isEpochValid != null && !isEpochValid());
+
     void assertActive() {
       if (shouldAbort != null && shouldAbort()) {
         throw const OperationCancelledException();
@@ -121,7 +131,12 @@ class VaultMediaCommitHelper {
     }
 
     if (verifyIntegrity) {
-      final status = await crypto.verifyFileIntegrity(stagingFile);
+      final status = await crypto.verifyFileIntegrityControlled(
+        stagingFile,
+        onBytesProgress: onVerifyBytesProgress,
+        shouldAbort: isCancelledOrStale,
+        cancelHandle: verifyCancelHandle,
+      );
       if (status != BlobIntegrityStatus.healthy) {
         try {
           if (await stagingFile.exists()) await stagingFile.delete();
@@ -138,6 +153,7 @@ class VaultMediaCommitHelper {
     }
 
     assertActive();
+    onBeforePublish?.call();
 
     final parent = destFile.parent;
     if (!await parent.exists()) {
@@ -154,6 +170,28 @@ class VaultMediaCommitHelper {
       if (await stagingFile.exists()) {
         await stagingFile.delete();
       }
+    }
+    onBeforePublish?.call();
+  }
+
+  /// Fast presence check for an already-committed vault blob on disk so
+  /// unlock reconciliation does not re-HMAC gigabytes of saved media unless the
+  /// file itself is missing or test storage requires [fallbackVerify].
+  static Future<bool> hasCommittedBlobFile(
+    PlatformService platformService,
+    String id,
+    Future<BlobIntegrityStatus> Function() fallbackVerify,
+  ) async {
+    if (kIsWeb) {
+      return (await fallbackVerify()) == BlobIntegrityStatus.healthy;
+    }
+    try {
+      final file = await platformService.resolveVaultFile(id);
+      return file.existsSync() && file.lengthSync() > 0;
+    } on UnimplementedError {
+      return (await fallbackVerify()) == BlobIntegrityStatus.healthy;
+    } catch (_) {
+      return false;
     }
   }
 

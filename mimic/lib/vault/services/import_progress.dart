@@ -126,6 +126,7 @@ class ImportSession extends ChangeNotifier {
   VoidCallback? onRetryAll;
   VoidCallback? onClearFinished;
   Future<void> Function()? onConfirmPendingDeletes;
+  Future<void> Function()? onConfirmSavedOriginals;
   void Function(int index)? onRetryItem;
   void Function(int index)? onCancelItem;
 
@@ -199,6 +200,7 @@ class ImportSession extends ChangeNotifier {
   }
 
   String? backgroundServiceWarning;
+  bool hasConfirmableSavedOriginals = false;
 
   /// Replaces the projected view entries cleanly from app-scoped coordinator
   /// state while keeping [notifyListeners] atomic.
@@ -209,6 +211,7 @@ class ImportSession extends ChangeNotifier {
     required ImportPauseReason pauseReasonValue,
     String? pauseDetail,
     String? backgroundWarning,
+    bool hasConfirmableSavedOriginalsFlag = false,
   }) {
     files
       ..clear()
@@ -219,6 +222,7 @@ class ImportSession extends ChangeNotifier {
     pauseReason = pauseReasonValue;
     pauseMessage = pauseDetail;
     backgroundServiceWarning = backgroundWarning;
+    hasConfirmableSavedOriginals = hasConfirmableSavedOriginalsFlag;
     notifyListeners();
   }
 
@@ -228,6 +232,7 @@ class ImportSession extends ChangeNotifier {
     position = names.isEmpty ? 0 : 1;
     verb = 'Importing';
     cancelRequested = false;
+    hasConfirmableSavedOriginals = false;
     notifyListeners();
   }
 
@@ -244,6 +249,7 @@ class ImportSession extends ChangeNotifier {
     position = names.isEmpty ? 0 : 1;
     verb = 'Restoring';
     cancelRequested = false;
+    hasConfirmableSavedOriginals = false;
     notifyListeners();
   }
 
@@ -332,6 +338,7 @@ class ImportSession extends ChangeNotifier {
     position = 0;
     verb = 'Importing';
     cancelRequested = false;
+    hasConfirmableSavedOriginals = false;
     notifyListeners();
   }
 }

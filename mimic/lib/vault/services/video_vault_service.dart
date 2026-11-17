@@ -482,6 +482,13 @@ class VideoVaultService {
     return _crypto.verifyFileIntegrity(file);
   }
 
+  Future<bool> hasCommittedVideoBlobFile(String id) =>
+      VaultMediaCommitHelper.hasCommittedBlobFile(
+        _platformService,
+        id,
+        () => verifyCommittedVideoBlob(id),
+      );
+
   Future<void> removeUncommittedVideoBlob(String id) async {
     try {
       await _platformService.deleteFile(id);
@@ -499,6 +506,9 @@ class VideoVaultService {
     bool verifyIntegrity = true,
     bool Function()? isEpochValid,
     bool Function()? shouldAbort,
+    void Function(int bytesProcessed)? onVerifyBytesProgress,
+    void Function()? onBeforePublish,
+    CryptoIsolateCancelHandle? verifyCancelHandle,
     Future<void> Function()? onBeforeMetaCommit,
   }) async {
     final destFile = await _platformService.resolveVaultFile(id);
@@ -509,6 +519,9 @@ class VideoVaultService {
       verifyIntegrity: verifyIntegrity,
       isEpochValid: isEpochValid,
       shouldAbort: shouldAbort,
+      onVerifyBytesProgress: onVerifyBytesProgress,
+      onBeforePublish: onBeforePublish,
+      verifyCancelHandle: verifyCancelHandle,
     );
     bool metaCommitted = false;
     try {

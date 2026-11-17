@@ -104,9 +104,11 @@ class ImportCoordinator extends ChangeNotifier {
 
   bool _disposed = false;
   bool _isWorkerRunning = false;
+  bool _foregroundServiceActive = false;
   bool _lockFreezeRequested = false;
   bool _cancelAllRequested = false;
   bool _deletingOriginals = false;
+  bool _recheckPendingDeletes = false;
   int _activeSessionEpoch = -1;
   int _lastSyncedUnlockEpoch = -1;
   int _workerGeneration = 0;
@@ -167,6 +169,9 @@ class ImportCoordinator extends ChangeNotifier {
     uiSession.onConfirmPendingDeletes = () async {
       await confirmPendingDeleteBatches();
     };
+    uiSession.onConfirmSavedOriginals = () async {
+      await confirmSavedOriginals();
+    };
     uiSession.onRetryItem = (index) {
       if (index >= 0 && index < _jobs.length) {
         retryJob(_jobs[index].jobId).ignore();
@@ -223,6 +228,7 @@ class ImportCoordinator extends ChangeNotifier {
       _crypto.isUnlocked &&
       !_lockFreezeRequested &&
       (_isWorkerRunning ||
+          _deletingOriginals ||
           _syncingDepth > 0 ||
           (_pauseReason == ImportPauseReason.none &&
               _jobs.any(
@@ -309,7 +315,7 @@ class ImportCoordinator extends ChangeNotifier {
     if (lease != null && !lease.isReleased) {
       lease.release();
     }
-    _backgroundBridge.stopImportService().ignore();
+    _backgroundServiceActiveResetAndStop();
 
     final cancelHandle = _activeCancelHandle;
     _activeCancelHandle = null;
@@ -339,7 +345,7 @@ class ImportCoordinator extends ChangeNotifier {
     _projectSession();
     _safeNotify();
 
-    unawaited(_persistPauseAndCleanupOnLock(nowMs));
+    _serializeOp(() => _persistPauseAndCleanupOnLock(nowMs)).ignore();
   }
 
   void _handleAuthorizationRevoked(String reason) {
@@ -446,6 +452,7 @@ class ImportCoordinator extends ChangeNotifier {
     if (cancelHandle != null) {
       await cancelHandle.abort();
     }
+    _foregroundServiceActive = false;
     await _backgroundBridge.stopImportService();
 
     if (dirty.isNotEmpty && _crypto.isUnlocked) {
@@ -474,9 +481,11 @@ class ImportCoordinator extends ChangeNotifier {
   }
 
   Future<void> _persistPauseAndCleanupOnLock(int nowMs) async {
+    if (_disposed || _crypto.isUnlocked) return;
     try {
       await _journal.markActiveJobsPausedOnLock(nowMs);
     } catch (_) {}
+    if (_disposed || _crypto.isUnlocked) return;
     await VaultMediaCommitHelper.cleanupStagingDirectory(_platformService);
   }
 
@@ -500,6 +509,7 @@ class ImportCoordinator extends ChangeNotifier {
     final lease = _activeImportLease;
     _activeImportLease = null;
     lease?.release();
+    _foregroundServiceActive = false;
     await _backgroundBridge.stopImportService();
     final cancelHandle = _activeCancelHandle;
     _activeCancelHandle = null;
@@ -576,10 +586,14 @@ class ImportCoordinator extends ChangeNotifier {
             current.mediaKind,
             current.destId,
           );
-          final blobStatus = await _verifyVaultBlob(
-            current.mediaKind,
-            current.destId,
-          );
+          final bool alreadyCommittedQuickOk =
+              hasMeta &&
+              current.isCommittedToVault &&
+              current.committedVaultId == current.destId &&
+              await _hasCommittedVaultFile(current.mediaKind, current.destId);
+          final blobStatus = alreadyCommittedQuickOk
+              ? BlobIntegrityStatus.healthy
+              : await _verifyVaultBlob(current.mediaKind, current.destId);
 
           if (hasMeta && blobStatus == BlobIntegrityStatus.healthy) {
             // Blob & DB row already committed before crash/lock -> NEVER re-import.
@@ -674,7 +688,9 @@ class ImportCoordinator extends ChangeNotifier {
         if (_jobs.any((j) => j.state == ImportJobState.queued)) {
           _startWorkerIfNeeded(unlockEpoch);
         } else {
-          await triggerPendingDeleteConfirmationsIfForeground();
+          // Do not await OS delete-confirmation dialogs inside _serializeOp;
+          // a stalled Activity result must never deadlock future enqueueBatch calls.
+          triggerPendingDeleteConfirmationsIfForeground().ignore();
         }
       } finally {
         _syncingDepth--;
@@ -701,7 +717,13 @@ class ImportCoordinator extends ChangeNotifier {
     }
 
     return _serializeOp(() async {
-      if (_disposed || !_crypto.isUnlocked) return null;
+      if (_disposed) return null;
+      if (!_crypto.isUnlocked) {
+        throw const ImportJournalException(
+          ImportJournalErrorKind.locked,
+          'Vault must be unlocked before importing',
+        );
+      }
       final epoch = _crypto.lockEpoch;
       final batchId = _uuid.v4();
       final nowMs = DateTime.now().millisecondsSinceEpoch;
@@ -818,7 +840,8 @@ class ImportCoordinator extends ChangeNotifier {
   int? _currentActivePercent() {
     for (final j in _jobs) {
       if (j.state == ImportJobState.encrypting ||
-          j.state == ImportJobState.preparing) {
+          j.state == ImportJobState.preparing ||
+          j.state == ImportJobState.committing) {
         final fraction = _activeJobProgress[j.jobId]?.fraction;
         if (fraction != null) {
           return (fraction * 100).round().clamp(0, 99);
@@ -844,9 +867,12 @@ class ImportCoordinator extends ChangeNotifier {
     required ImportJobState phase,
     required int attempt,
   }) {
-    final phaseWord = phase == ImportJobState.preparing
-        ? 'Checking'
-        : 'Encrypting';
+    final phaseWord = switch (phase) {
+      ImportJobState.preparing => 'Checking',
+      ImportJobState.encrypting => 'Encrypting',
+      ImportJobState.committing => 'Verifying',
+      _ => 'Saving',
+    };
     final prefix = attempt > 1 ? 'Restarted #$attempt · $phaseWord' : phaseWord;
     if (totalBytes <= 0) return prefix;
     return '$prefix · ${_formatBytesCompact(bytesProcessed)} / ${_formatBytesCompact(totalBytes)}';
@@ -922,20 +948,29 @@ class ImportCoordinator extends ChangeNotifier {
         .ignore();
   }
 
-  Future<void> _workerLoop(int epoch, int gen) async {
-    final lease = AutoLock().acquireImportAuthorization(
-      cryptoEpoch: epoch,
-      onRevoke: _handleAuthorizationRevoked,
-    );
-    _activeImportLease = lease;
-    _lastNotifiedCompleted = -1;
-    _lastNotifiedTotal = -1;
+  void _backgroundServiceActiveResetAndStop() {
+    _foregroundServiceActive = false;
+    _backgroundBridge.stopImportService().ignore();
+  }
 
-    final startCounts = _progressCounts();
+  Future<void> _ensureBackgroundServiceStarted({
+    required int epoch,
+    required int gen,
+  }) async {
+    if (_disposed ||
+        _lockFreezeRequested ||
+        !_crypto.isUnlocked ||
+        _crypto.lockEpoch != epoch ||
+        _workerGeneration != gen) {
+      return;
+    }
+    final counts = _progressCounts();
+    final activePercent = _currentActivePercent();
     try {
       final startRes = await _backgroundBridge.startImportService(
-        completed: startCounts.completed,
-        total: startCounts.total,
+        completed: counts.completed,
+        total: counts.total,
+        activePercent: activePercent,
       );
       if (_disposed ||
           _lockFreezeRequested ||
@@ -944,6 +979,7 @@ class ImportCoordinator extends ChangeNotifier {
           _workerGeneration != gen) {
         return;
       }
+      _foregroundServiceActive = startRes.started;
       _lastServiceStartResult = startRes;
       if (!startRes.started) {
         _backgroundServiceWarning =
@@ -955,17 +991,32 @@ class ImportCoordinator extends ChangeNotifier {
       } else {
         _backgroundServiceWarning = null;
       }
-      _lastNotifiedCompleted = startCounts.completed;
-      _lastNotifiedTotal = startCounts.total;
+      _lastNotifiedCompleted = counts.completed;
+      _lastNotifiedTotal = counts.total;
+      _lastNotifiedPercent = activePercent;
       _projectSession();
       _safeNotify();
     } catch (_) {
+      _foregroundServiceActive = false;
       if (!_disposed) {
         _backgroundServiceWarning =
             'Background service unavailable — keep the app open until imports finish.';
       }
     }
+  }
 
+  Future<void> _workerLoop(int epoch, int gen) async {
+    final lease = AutoLock().acquireImportAuthorization(
+      cryptoEpoch: epoch,
+      onRevoke: _handleAuthorizationRevoked,
+    );
+    _activeImportLease = lease;
+    _lastNotifiedCompleted = -1;
+    _lastNotifiedTotal = -1;
+
+    await _ensureBackgroundServiceStarted(epoch: epoch, gen: gen);
+
+    var restartQueuedAfterExit = false;
     try {
       while (!_disposed &&
           !_lockFreezeRequested &&
@@ -985,6 +1036,18 @@ class ImportCoordinator extends ChangeNotifier {
           continue;
         }
 
+        if (!_foregroundServiceActive) {
+          await _ensureBackgroundServiceStarted(epoch: epoch, gen: gen);
+          if (_disposed ||
+              _lockFreezeRequested ||
+              !_crypto.isUnlocked ||
+              _crypto.lockEpoch != epoch ||
+              _workerGeneration != gen ||
+              _pauseReason != ImportPauseReason.none) {
+            break;
+          }
+        }
+
         lease.recordProgress();
         _maybeUpdateBackgroundProgress();
         await _processSingleJob(job, epoch, gen, lease);
@@ -993,7 +1056,16 @@ class ImportCoordinator extends ChangeNotifier {
       if (_workerGeneration == gen) {
         _isWorkerRunning = false;
         _clearActiveProgress();
+        restartQueuedAfterExit =
+            !_disposed &&
+            !_lockFreezeRequested &&
+            !_cancelAllRequested &&
+            _crypto.isUnlocked &&
+            _crypto.lockEpoch == epoch &&
+            _pauseReason == ImportPauseReason.none &&
+            _jobs.any((j) => j.state == ImportJobState.queued);
       }
+      _foregroundServiceActive = false;
       try {
         await _backgroundBridge.stopImportService();
       } catch (_) {}
@@ -1005,6 +1077,9 @@ class ImportCoordinator extends ChangeNotifier {
         _safeNotify();
       }
       lease.release();
+      if (restartQueuedAfterExit) {
+        scheduleMicrotask(() => _startWorkerIfNeeded(epoch));
+      }
     }
   }
 
@@ -1328,44 +1403,93 @@ class ImportCoordinator extends ChangeNotifier {
         return;
       }
 
-      if (job.mediaKind == ImportMediaKind.photo) {
-        await _fileVault.commitStagedPhoto(
-          id: job.destId,
-          stagingFile: stagingFile,
-          mimeType: resolved.mimeType,
-          plaintextSize: sourceSize,
-          originalName: resolved.displayName,
-          contentHash: contentHash,
-          isEpochValid: () => _isRunValid(epoch, gen, job.jobId),
-          shouldAbort: () => !_isRunValid(epoch, gen, job.jobId),
-          onBeforeMetaCommit: _stageHooks?.onBeforeCommitMeta == null
-              ? null
-              : () => _stageHooks!.onBeforeCommitMeta!(job),
-        );
-      } else {
-        await _videoVault.commitStagedVideo(
-          id: job.destId,
-          stagingFile: stagingFile,
-          mimeType: resolved.mimeType,
-          durationS: resolved.durationSeconds,
-          plaintextSize: sourceSize,
-          originalName: resolved.displayName,
-          contentHash: contentHash,
-          isEpochValid: () => _isRunValid(epoch, gen, job.jobId),
-          shouldAbort: () => !_isRunValid(epoch, gen, job.jobId),
-          onBeforeMetaCommit: _stageHooks?.onBeforeCommitMeta == null
-              ? null
-              : () => _stageHooks!.onBeforeCommitMeta!(job),
-        );
+      int stagingSize;
+      try {
+        stagingSize = stagingFile.existsSync()
+            ? stagingFile.lengthSync()
+            : sourceSize;
+      } catch (_) {
+        stagingSize = sourceSize;
       }
 
-      if (!_isRunValid(epoch, gen, job.jobId)) {
-        // Epoch changed AFTER commit or during commit -> record completion only if
-        // already persisted in DB, otherwise mark rejected.
+      final verifyCancelHandle = CryptoIsolateCancelHandle();
+      _activeCancelHandle = verifyCancelHandle;
+      try {
+        if (job.mediaKind == ImportMediaKind.photo) {
+          await _fileVault.commitStagedPhoto(
+            id: job.destId,
+            stagingFile: stagingFile,
+            mimeType: resolved.mimeType,
+            plaintextSize: sourceSize,
+            originalName: resolved.displayName,
+            contentHash: contentHash,
+            isEpochValid: () => _isRunValid(epoch, gen, job.jobId),
+            shouldAbort: () => !_isRunValid(epoch, gen, job.jobId),
+            onVerifyBytesProgress: (bytesProcessed) {
+              lease?.recordProgress();
+              _onJobBytesProgress(
+                jobId: job.jobId,
+                epoch: epoch,
+                gen: gen,
+                bytesProcessed: bytesProcessed,
+                totalBytes: stagingSize,
+                phase: ImportJobState.committing,
+                attempt: attempt,
+              );
+            },
+            onBeforePublish: () => lease?.recordProgress(),
+            verifyCancelHandle: verifyCancelHandle,
+            onBeforeMetaCommit: _stageHooks?.onBeforeCommitMeta == null
+                ? null
+                : () => _stageHooks!.onBeforeCommitMeta!(job),
+          );
+        } else {
+          await _videoVault.commitStagedVideo(
+            id: job.destId,
+            stagingFile: stagingFile,
+            mimeType: resolved.mimeType,
+            durationS: resolved.durationSeconds,
+            plaintextSize: sourceSize,
+            originalName: resolved.displayName,
+            contentHash: contentHash,
+            isEpochValid: () => _isRunValid(epoch, gen, job.jobId),
+            shouldAbort: () => !_isRunValid(epoch, gen, job.jobId),
+            onVerifyBytesProgress: (bytesProcessed) {
+              lease?.recordProgress();
+              _onJobBytesProgress(
+                jobId: job.jobId,
+                epoch: epoch,
+                gen: gen,
+                bytesProcessed: bytesProcessed,
+                totalBytes: stagingSize,
+                phase: ImportJobState.committing,
+                attempt: attempt,
+              );
+            },
+            onBeforePublish: () => lease?.recordProgress(),
+            verifyCancelHandle: verifyCancelHandle,
+            onBeforeMetaCommit: _stageHooks?.onBeforeCommitMeta == null
+                ? null
+                : () => _stageHooks!.onBeforeCommitMeta!(job),
+          );
+        }
+      } finally {
+        if (identical(_activeCancelHandle, verifyCancelHandle)) {
+          _activeCancelHandle = null;
+        }
+      }
+
+      if (_disposed || !_crypto.isUnlocked || _crypto.lockEpoch != epoch) {
+        // Lock epoch changed after publish/commit -> let unlock reconciliation handle cleanly.
         _rejectedStaleCompletionCount++;
         return;
       }
 
+      // Note: Once commitStagedPhoto/commitStagedVideo returns cleanly, both the
+      // encrypted vault blob and metadata row are committed on disk. Even if a
+      // cancel or worker generation change arrived right at final publish, we
+      // MUST record the committed item truthfully instead of abandoning it in
+      // `committing`.
       final committedJob = job.copyWith(
         state: ImportJobState.savedOriginalKept,
         committedVaultId: job.destId,
@@ -1377,13 +1501,20 @@ class ImportCoordinator extends ChangeNotifier {
         updatedAtMs: DateTime.now().millisecondsSinceEpoch,
         payload: job.payload.copyWith(clearErrorDetail: true),
       );
-      if (!await commitInMemoryAndJournal(committedJob)) return;
+      final committedIdx = _jobs.indexWhere(
+        (j) => j.jobId == committedJob.jobId,
+      );
+      if (committedIdx >= 0) {
+        _jobs[committedIdx] = committedJob;
+      }
+      await _journal.upsertJob(committedJob);
+      _libraryRevision++;
+      _lastCommittedKind = committedJob.mediaKind;
+      _projectSession();
+      _safeNotify();
 
       lease?.recordProgress();
       _maybeUpdateBackgroundProgress();
-      _libraryRevision++;
-      _lastCommittedKind = committedJob.mediaKind;
-      _safeNotify();
 
       await _evaluateBatchDeleteReadiness(committedJob.batchId);
     } on OperationCancelledException {
@@ -1624,14 +1755,17 @@ class ImportCoordinator extends ChangeNotifier {
     _projectSession();
     _safeNotify();
 
-    await triggerPendingDeleteConfirmationsIfForeground();
+    // Schedule OS delete confirmation asynchronously so neither _workerLoop nor
+    // _syncAfterUnlock (_opQueue) blocks on Android Activity results.
+    triggerPendingDeleteConfirmationsIfForeground().ignore();
   }
 
   Future<void> triggerPendingDeleteConfirmationsIfForeground() async {
-    if (_disposed ||
-        !_crypto.isUnlocked ||
-        !hasForegroundUi ||
-        _deletingOriginals) {
+    if (_disposed || !_crypto.isUnlocked || !hasForegroundUi) {
+      return;
+    }
+    if (_deletingOriginals) {
+      _recheckPendingDeletes = true;
       return;
     }
     await confirmPendingDeleteBatches();
@@ -1640,19 +1774,33 @@ class ImportCoordinator extends ChangeNotifier {
   Future<void> confirmPendingDeleteBatches() async {
     if (_disposed ||
         !_crypto.isUnlocked ||
-        !(_uiAccess?.isUiAuthorized ?? true) ||
-        _deletingOriginals) {
+        !(_uiAccess?.isUiAuthorized ?? true)) {
       return;
     }
-    final pendingBatchIds = _jobs
-        .where((j) => j.state == ImportJobState.awaitingDeleteConfirmation)
-        .map((j) => j.batchId)
-        .toSet()
-        .toList();
-    for (final batchId in pendingBatchIds) {
-      if (_disposed || !_crypto.isUnlocked) break;
-      await confirmAndDeleteOriginalsForBatch(batchId);
+    if (_deletingOriginals) {
+      _recheckPendingDeletes = true;
+      return;
     }
+    do {
+      _recheckPendingDeletes = false;
+      final pendingBatchIds = _jobs
+          .where((j) => j.state == ImportJobState.awaitingDeleteConfirmation)
+          .map((j) => j.batchId)
+          .toSet()
+          .toList();
+      if (pendingBatchIds.isEmpty) break;
+      for (final batchId in pendingBatchIds) {
+        if (_disposed ||
+            !_crypto.isUnlocked ||
+            !(_uiAccess?.isUiAuthorized ?? true)) {
+          break;
+        }
+        await confirmAndDeleteOriginalsForBatch(batchId);
+      }
+    } while (_recheckPendingDeletes &&
+        !_disposed &&
+        _crypto.isUnlocked &&
+        hasForegroundUi);
   }
 
   /// Requests OS deletion ONLY for verified committed items in [batchId],
@@ -1682,16 +1830,49 @@ class ImportCoordinator extends ChangeNotifier {
         .every((j) => j.isCommittedToVault);
     if (!allCommitted) return;
 
+    await _executeOriginalsDeletionForJobs(batchJobs, capturedEpoch);
+  }
+
+  /// Explicit user-triggered deletion of originals ONLY for already-saved items
+  /// (`savedOriginalKept` with `needsDeleteConfirm == true`) whose batch is no
+  /// longer actively running (e.g., partial batch with cancelled/failed siblings).
+  Future<void> confirmSavedOriginals() async {
+    if (_disposed ||
+        !_crypto.isUnlocked ||
+        !(_uiAccess?.isUiAuthorized ?? true) ||
+        _deletingOriginals ||
+        isWorking) {
+      return;
+    }
+    final capturedEpoch = _crypto.lockEpoch;
+    final targets = _jobs
+        .where(
+          (j) =>
+              j.isCommittedToVault &&
+              !j.payload.originalDeletedConfirmed &&
+              j.needsDeleteConfirm &&
+              j.payload.sourceAssetId.isNotEmpty,
+        )
+        .toList();
+    if (targets.isEmpty) return;
+
+    await _executeOriginalsDeletionForJobs(targets, capturedEpoch);
+  }
+
+  Future<void> _executeOriginalsDeletionForJobs(
+    List<DurableImportJob> targetJobs,
+    int capturedEpoch,
+  ) async {
     _deletingOriginals = true;
     final deleteLease = AutoLock().acquireProtectedOperation();
     try {
-      await _stageHooks?.onBeforeDeleteOriginals?.call(batchJobs);
+      await _stageHooks?.onBeforeDeleteOriginals?.call(targetJobs);
       if (!_crypto.isUnlocked || _crypto.lockEpoch != capturedEpoch) {
         _rejectedStaleCompletionCount++;
         return;
       }
 
-      final assetIds = batchJobs
+      final assetIds = targetJobs
           .map((j) => j.payload.sourceAssetId)
           .toList(growable: false);
       final result = await _pickerAdapter.deleteOriginals(assetIds);
@@ -1703,7 +1884,7 @@ class ImportCoordinator extends ChangeNotifier {
 
       final nowMs = DateTime.now().millisecondsSinceEpoch;
       final dirty = <DurableImportJob>[];
-      for (final j in batchJobs) {
+      for (final j in targetJobs) {
         final deleted = result.deletedIds.contains(j.payload.sourceAssetId);
         final nextState = deleted
             ? ImportJobState.saved
@@ -1733,11 +1914,13 @@ class ImportCoordinator extends ChangeNotifier {
           await _journal.upsertBatch(dirty);
         } catch (_) {}
       }
-      _projectSession();
-      _safeNotify();
     } finally {
       deleteLease.release();
       _deletingOriginals = false;
+      if (!_disposed) {
+        _projectSession();
+        _safeNotify();
+      }
     }
   }
 
@@ -1768,6 +1951,7 @@ class ImportCoordinator extends ChangeNotifier {
     _pauseReason = ImportPauseReason.none;
     _pauseMessage = null;
     _backgroundServiceWarning = null;
+    _foregroundServiceActive = false;
     await _backgroundBridge.stopImportService();
     _projectSession();
     _safeNotify();
@@ -1785,7 +1969,8 @@ class ImportCoordinator extends ChangeNotifier {
     final target = _jobs[idx];
     if (target.isCommittedToVault) return;
     if (target.state == ImportJobState.encrypting ||
-        target.state == ImportJobState.preparing) {
+        target.state == ImportJobState.preparing ||
+        target.state == ImportJobState.committing) {
       await _activeCancelHandle?.abort();
     }
     await _markExplicitCancelled(target);
@@ -1903,6 +2088,12 @@ class ImportCoordinator extends ChangeNotifier {
         : _videoVault.verifyCommittedVideoBlob(id);
   }
 
+  Future<bool> _hasCommittedVaultFile(ImportMediaKind kind, String id) {
+    return kind == ImportMediaKind.photo
+        ? _fileVault.hasCommittedPhotoBlobFile(id)
+        : _videoVault.hasCommittedVideoBlobFile(id);
+  }
+
   Future<void> _removeVaultBlob(ImportMediaKind kind, String id) {
     return kind == ImportMediaKind.photo
         ? _fileVault.removeUncommittedPhotoBlob(id)
@@ -1992,7 +2183,8 @@ class ImportCoordinator extends ChangeNotifier {
       }
       final liveProgress =
           (status == ImportFileStatus.preparing ||
-              status == ImportFileStatus.encrypting)
+              status == ImportFileStatus.encrypting ||
+              status == ImportFileStatus.committing)
           ? _activeJobProgress[j.jobId]
           : null;
       entries.add(
@@ -2016,6 +2208,16 @@ class ImportCoordinator extends ChangeNotifier {
       }
     }
 
+    final hasConfirmableSaved =
+        !isWorking &&
+        _jobs.any(
+          (j) =>
+              j.isCommittedToVault &&
+              !j.payload.originalDeletedConfirmed &&
+              j.needsDeleteConfirm &&
+              j.payload.sourceAssetId.isNotEmpty,
+        );
+
     uiSession.syncFromProjection(
       entries: entries,
       activePosition: activePos,
@@ -2023,6 +2225,7 @@ class ImportCoordinator extends ChangeNotifier {
       pauseReasonValue: _pauseReason,
       pauseDetail: _pauseMessage,
       backgroundWarning: _backgroundServiceWarning,
+      hasConfirmableSavedOriginalsFlag: hasConfirmableSaved,
     );
   }
 

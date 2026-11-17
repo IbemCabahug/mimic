@@ -264,6 +264,7 @@ class ImportJournalStore {
   final DatabaseFactory? _databaseFactoryOverride;
 
   Database? _db;
+  Future<Database>? _openingDbFuture;
   int _nextOrderFloor = 0;
 
   ImportJournalStore(
@@ -286,6 +287,22 @@ class ImportJournalStore {
     if (_db != null && _db!.isOpen) {
       return _db!;
     }
+    final existingOpen = _openingDbFuture;
+    if (existingOpen != null) {
+      return existingOpen;
+    }
+    final openFuture = _openDbInternal();
+    _openingDbFuture = openFuture;
+    try {
+      return await openFuture;
+    } finally {
+      if (identical(_openingDbFuture, openFuture)) {
+        _openingDbFuture = null;
+      }
+    }
+  }
+
+  Future<Database> _openDbInternal() async {
     final path = await resolveDbPath();
     try {
       final parent = Directory(p.dirname(path));
@@ -310,6 +327,7 @@ class ImportJournalStore {
       try {
         await db.rawQuery('PRAGMA journal_mode = WAL');
         await db.rawQuery('PRAGMA synchronous = NORMAL');
+        await db.rawQuery('PRAGMA busy_timeout = 3000');
       } catch (_) {}
       _db = db;
       return db;

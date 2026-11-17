@@ -235,6 +235,43 @@ class EngineAndServiceLifecycleTest {
     }
 
     @Test
+    fun orphanedNotificationPermissionCallbackIsFailedWhenDifferentActivityRequestsPermission() {
+        MimicEngineHost.sdkIntOverrideForTest = 33
+        MimicEngineHost.notificationPermissionOverrideForTest = false
+        MimicEngineHost.requestPermissionLauncherForTest = { _, _, _ -> }
+
+        val activity1 = mockk<FragmentActivity>(relaxed = true)
+        MimicEngineHost.attachActivity(activity1)
+        val orphanedResult = mockk<MethodChannel.Result>(relaxed = true)
+        MimicEngineHost.handleImportServiceMethod(
+            appContext,
+            MethodCall("requestNotificationPermission", null),
+            orphanedResult,
+        )
+
+        // Attach activity2 without detaching activity1 first: stale request must resolve false
+        // instead of blocking activity2's notification permission request.
+        val activity2 = mockk<FragmentActivity>(relaxed = true)
+        MimicEngineHost.attachActivity(activity2)
+        val freshResult = mockk<MethodChannel.Result>(relaxed = true)
+        MimicEngineHost.handleImportServiceMethod(
+            appContext,
+            MethodCall("requestNotificationPermission", null),
+            freshResult,
+        )
+
+        verify(exactly = 1) { orphanedResult.success(false) }
+        assertTrue(
+            MimicEngineHost.handleRequestPermissionsResult(
+                activity2,
+                MimicEngineHost.REQUEST_POST_NOTIFICATIONS,
+                intArrayOf(PackageManager.PERMISSION_GRANTED),
+            ),
+        )
+        verify(exactly = 1) { freshResult.success(true) }
+    }
+
+    @Test
     fun foregroundServiceActionTokenRejectsForgedIntents() {
         val valid = ImportForegroundService.currentProcessTokenForTest()
         assertTrue(ImportForegroundService.isValidActionToken(valid))

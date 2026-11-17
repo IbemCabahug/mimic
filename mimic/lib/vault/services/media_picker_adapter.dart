@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -62,20 +63,28 @@ class ProductionMediaPickerAdapter implements MediaPickerAdapter {
 
     final refs = <MediaSourceRef>[];
     for (final entity in selected) {
-      final title = await entity.titleAsync;
-      final mime =
-          await entity.mimeTypeAsync ??
-          (kind == ImportMediaKind.photo ? 'image/jpeg' : 'video/mp4');
       final fallbackExt = kind == ImportMediaKind.photo ? 'jpg' : 'mp4';
-      final safeName = title.trim().isNotEmpty
-          ? title.trim()
-          : '${kind.name}_${refs.length + 1}.$fallbackExt';
+      final fallbackName = '${kind.name}_${refs.length + 1}.$fallbackExt';
+      final fallbackMime =
+          kind == ImportMediaKind.photo ? 'image/jpeg' : 'video/mp4';
+
+      String title = '';
+      try {
+        title = await entity.titleAsync.timeout(const Duration(seconds: 10));
+      } catch (_) {}
+
+      String? mime;
+      try {
+        mime = await entity.mimeTypeAsync.timeout(const Duration(seconds: 10));
+      } catch (_) {}
+
+      final safeName = title.trim().isNotEmpty ? title.trim() : fallbackName;
       refs.add(
         MediaSourceRef(
           sourceAssetId: entity.id,
           kind: kind,
           displayName: safeName,
-          mimeType: mime,
+          mimeType: (mime != null && mime.isNotEmpty) ? mime : fallbackMime,
           durationSeconds: kind == ImportMediaKind.video ? entity.duration : 0,
         ),
       );
@@ -86,7 +95,9 @@ class ProductionMediaPickerAdapter implements MediaPickerAdapter {
   @override
   Future<ResolvedMediaSource> resolveSource(MediaSourceRef ref) async {
     try {
-      final perm = await requestPermission(ref.kind);
+      final perm = await requestPermission(
+        ref.kind,
+      ).timeout(const Duration(seconds: 20));
       if (!perm.hasAccess) {
         return ResolvedMediaSource.unavailable(
           status: MediaSourceResolutionStatus.permissionDenied,
@@ -97,7 +108,9 @@ class ProductionMediaPickerAdapter implements MediaPickerAdapter {
         );
       }
 
-      final entity = await AssetEntity.fromId(ref.sourceAssetId);
+      final entity = await AssetEntity.fromId(
+        ref.sourceAssetId,
+      ).timeout(const Duration(seconds: 20));
       if (entity == null) {
         return ResolvedMediaSource.unavailable(
           status: MediaSourceResolutionStatus.missing,
@@ -108,8 +121,21 @@ class ProductionMediaPickerAdapter implements MediaPickerAdapter {
         );
       }
 
-      final locallyAvailable = await entity.isLocallyAvailable(isOrigin: true);
-      final file = await entity.originFile;
+      final locallyAvailable = await entity
+          .isLocallyAvailable(isOrigin: true)
+          .timeout(const Duration(seconds: 20));
+      final File? file;
+      try {
+        file = await entity.originFile.timeout(const Duration(minutes: 3));
+      } on TimeoutException {
+        return ResolvedMediaSource.unavailable(
+          status: MediaSourceResolutionStatus.cloudUnavailable,
+          mimeType: ref.mimeType,
+          displayName: ref.displayName,
+          errorCode: 'cloud_timeout',
+          safeReason: 'Timed out waiting for original media file',
+        );
+      }
       if (!locallyAvailable && file == null) {
         return ResolvedMediaSource.unavailable(
           status: MediaSourceResolutionStatus.cloudUnavailable,
@@ -142,16 +168,36 @@ class ProductionMediaPickerAdapter implements MediaPickerAdapter {
         );
       }
 
-      final resolvedMime = await entity.mimeTypeAsync ?? ref.mimeType;
-      final resolvedTitle = (await entity.titleAsync).trim();
+      String? resolvedMime;
+      try {
+        resolvedMime = await entity.mimeTypeAsync.timeout(
+          const Duration(seconds: 10),
+        );
+      } catch (_) {}
+      String resolvedTitle = '';
+      try {
+        resolvedTitle = (await entity.titleAsync.timeout(
+          const Duration(seconds: 10),
+        )).trim();
+      } catch (_) {}
       return ResolvedMediaSource.ready(
         localFilePath: file.path,
-        mimeType: resolvedMime,
+        mimeType: (resolvedMime != null && resolvedMime.isNotEmpty)
+            ? resolvedMime
+            : ref.mimeType,
         displayName: resolvedTitle.isNotEmpty ? resolvedTitle : ref.displayName,
         durationSeconds: ref.kind == ImportMediaKind.video
             ? entity.duration
             : 0,
         sizeBytes: sizeBytes,
+      );
+    } on TimeoutException {
+      return ResolvedMediaSource.unavailable(
+        status: MediaSourceResolutionStatus.unreadable,
+        mimeType: ref.mimeType,
+        displayName: ref.displayName,
+        errorCode: 'source_timeout',
+        safeReason: 'Timed out accessing gallery item',
       );
     } on PlatformException catch (e) {
       final isPerm =
@@ -189,10 +235,18 @@ class ProductionMediaPickerAdapter implements MediaPickerAdapter {
       );
     }
     try {
-      final deleted = await PhotoManager.editor.deleteWithIds(requested);
+      final deleted = await PhotoManager.editor
+          .deleteWithIds(requested)
+          .timeout(const Duration(minutes: 2));
       final deletedSet = deleted.where((id) => requested.contains(id)).toSet();
       final keptSet = requested.where((id) => !deletedSet.contains(id)).toSet();
       return MediaDeleteResult(deletedIds: deletedSet, keptIds: keptSet);
+    } on TimeoutException {
+      return MediaDeleteResult(
+        deletedIds: const <String>{},
+        keptIds: requested.toSet(),
+        errorCode: 'delete_timeout',
+      );
     } on PlatformException catch (e) {
       final isPerm =
           e.code.toLowerCase().contains('permission') ||

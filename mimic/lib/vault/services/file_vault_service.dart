@@ -337,6 +337,13 @@ class FileVaultService {
     return _crypto.verifyFileIntegrity(file);
   }
 
+  Future<bool> hasCommittedPhotoBlobFile(String id) =>
+      VaultMediaCommitHelper.hasCommittedBlobFile(
+        _platformService,
+        id,
+        () => verifyCommittedPhotoBlob(id),
+      );
+
   Future<void> removeUncommittedPhotoBlob(String id) async {
     try {
       await _platformService.deleteFile(id);
@@ -353,6 +360,9 @@ class FileVaultService {
     bool verifyIntegrity = true,
     bool Function()? isEpochValid,
     bool Function()? shouldAbort,
+    void Function(int bytesProcessed)? onVerifyBytesProgress,
+    void Function()? onBeforePublish,
+    CryptoIsolateCancelHandle? verifyCancelHandle,
     Future<void> Function()? onBeforeMetaCommit,
   }) async {
     final destFile = await _platformService.resolveVaultFile(id);
@@ -363,6 +373,9 @@ class FileVaultService {
       verifyIntegrity: verifyIntegrity,
       isEpochValid: isEpochValid,
       shouldAbort: shouldAbort,
+      onVerifyBytesProgress: onVerifyBytesProgress,
+      onBeforePublish: onBeforePublish,
+      verifyCancelHandle: verifyCancelHandle,
     );
     bool metaCommitted = false;
     try {

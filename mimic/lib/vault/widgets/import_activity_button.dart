@@ -14,6 +14,7 @@
 // import — closing a view is not cancelling work.
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
+import '../security/auto_lock.dart';
 import '../services/import_progress.dart';
 import 'import_status_card.dart' show importFileRowIcon, importFileRowColor;
 
@@ -196,6 +197,7 @@ Future<void> showImportDetailsSheet(
   BuildContext context,
   ImportSession session,
 ) {
+  AutoLock().resetTimer();
   return showModalBottomSheet<void>(
     context: context,
     backgroundColor: VaultColors.surface,
@@ -203,11 +205,12 @@ Future<void> showImportDetailsSheet(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
     builder: (sheetContext) {
-      return AnimatedBuilder(
-        animation: session,
-        builder: (context, _) {
-          final rows = session.files;
-          return SafeArea(
+      return AutoLockWrapper(
+        child: AnimatedBuilder(
+          animation: session,
+          builder: (context, _) {
+            final rows = session.files;
+            return SafeArea(
             child: SizedBox(
               // Roughly half the screen: the queue is scannable, the grid
               // stays reachable behind the sheet (modal, so it dims anyway).
@@ -299,7 +302,8 @@ Future<void> showImportDetailsSheet(
                               row.progress != null;
                           final showImportPercent =
                               (row.status == ImportFileStatus.preparing ||
-                                  row.status == ImportFileStatus.encrypting) &&
+                                  row.status == ImportFileStatus.encrypting ||
+                                  row.status == ImportFileStatus.committing) &&
                               row.progress != null;
                           return ListTile(
                             dense: true,
@@ -421,6 +425,20 @@ Future<void> showImportDetailsSheet(
                               ),
                             ),
                           ),
+                        if (!session.isWorking &&
+                            !session.hasAwaitingDeleteConfirm &&
+                            session.hasConfirmableSavedOriginals &&
+                            session.onConfirmSavedOriginals != null)
+                          TextButton(
+                            onPressed: () => session.onConfirmSavedOriginals!(),
+                            child: const Text(
+                              'Delete saved originals',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                color: VaultColors.accent,
+                              ),
+                            ),
+                          ),
                         if (session.hasRetryableWork &&
                             session.onRetryAll != null)
                           TextButton(
@@ -476,7 +494,8 @@ Future<void> showImportDetailsSheet(
               ),
             ),
           );
-        },
+          },
+        ),
       );
     },
   );

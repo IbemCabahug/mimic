@@ -7,6 +7,7 @@ import '../crypto/vault_exceptions.dart';
 import '../security/auto_lock.dart';
 import '../services/background_import_service.dart';
 import '../services/import_coordinator.dart';
+import '../services/import_journal_store.dart';
 import '../services/media_import_policy.dart';
 import '../services/media_picker_adapter.dart';
 
@@ -186,6 +187,12 @@ Future<void> runGalleryImportFlow({
 String formatGalleryImportError(ImportMediaKind kind, Object? error) {
   final nounPlural = kind == ImportMediaKind.photo ? 'photos' : 'videos';
   final nounSingle = kind == ImportMediaKind.photo ? 'a photo' : 'a video';
+  if (error is ImportJournalException) {
+    if (error.kind == ImportJournalErrorKind.locked) {
+      return 'Could not import $nounPlural: the vault is locked.';
+    }
+    return 'Could not start import: ${error.safeMessage}.';
+  }
   final errStr = error?.toString() ?? '';
   final isLocked =
       errStr.contains('Vault is locked') || errStr.contains('locked');

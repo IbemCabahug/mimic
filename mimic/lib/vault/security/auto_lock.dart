@@ -346,8 +346,9 @@ class AutoLock with WidgetsBindingObserver {
             break;
           }
           if (!_isUiAuthorizedOrFallbackUnlocked() ||
-              elapsedBg >= _effectiveBackgroundGrace() ||
-              elapsedUiIdle >= _idleTimeout) {
+              (!protectedTrip &&
+                  (elapsedBg >= _effectiveBackgroundGrace() ||
+                      elapsedUiIdle >= _idleTimeout))) {
             _requireUiReauthentication(reason: 'background_ui_timeout');
             break;
           }

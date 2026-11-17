@@ -476,6 +476,9 @@ class FakeFileVaultService extends FileVaultService {
     bool verifyIntegrity = true,
     bool Function()? isEpochValid,
     bool Function()? shouldAbort,
+    void Function(int bytesProcessed)? onVerifyBytesProgress,
+    void Function()? onBeforePublish,
+    CryptoIsolateCancelHandle? verifyCancelHandle,
     Future<void> Function()? onBeforeMetaCommit,
   }) async {
     final encrypted = await testCrypto.encryptSystem(kTransparentImage);

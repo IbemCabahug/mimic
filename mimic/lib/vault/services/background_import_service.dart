@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -104,10 +105,12 @@ class AndroidBackgroundImportBridge implements BackgroundImportBridge {
     if (kIsWeb || !Platform.isAndroid) return true;
     _ensureBound();
     try {
-      final res = await _channel.invokeMethod<bool>(
-        'hasNotificationPermission',
-      );
+      final res = await _channel
+          .invokeMethod<bool>('hasNotificationPermission')
+          .timeout(const Duration(seconds: 5));
       return res ?? true;
+    } on TimeoutException {
+      return false;
     } on MissingPluginException {
       return false;
     } on PlatformException {
@@ -120,10 +123,12 @@ class AndroidBackgroundImportBridge implements BackgroundImportBridge {
     if (kIsWeb || !Platform.isAndroid) return true;
     _ensureBound();
     try {
-      final res = await _channel.invokeMethod<bool>(
-        'requestNotificationPermission',
-      );
+      final res = await _channel
+          .invokeMethod<bool>('requestNotificationPermission')
+          .timeout(const Duration(seconds: 20));
       return res ?? false;
+    } on TimeoutException {
+      return false;
     } on MissingPluginException {
       return false;
     } on PlatformException {
@@ -145,14 +150,13 @@ class AndroidBackgroundImportBridge implements BackgroundImportBridge {
     }
     _ensureBound();
     try {
-      final res = await _channel.invokeMapMethod<String, dynamic>(
-        'startService',
-        <String, Object?>{
-          'completed': completed,
-          'total': total,
-          'activePercent': ?activePercent,
-        },
-      );
+      final res = await _channel
+          .invokeMapMethod<String, dynamic>('startService', <String, Object?>{
+            'completed': completed,
+            'total': total,
+            'activePercent': ?activePercent,
+          })
+          .timeout(const Duration(seconds: 5));
       if (res == null) {
         return const BackgroundServiceStartResult(
           started: false,
@@ -170,6 +174,13 @@ class AndroidBackgroundImportBridge implements BackgroundImportBridge {
         notificationsGranted: notifGranted,
         errorCode: errorCode,
         safeMessage: safeMessage,
+      );
+    } on TimeoutException {
+      return const BackgroundServiceStartResult(
+        started: false,
+        notificationsGranted: false,
+        errorCode: 'timeout',
+        safeMessage: 'Background service timed out starting.',
       );
     } on MissingPluginException {
       return const BackgroundServiceStartResult(
@@ -197,11 +208,13 @@ class AndroidBackgroundImportBridge implements BackgroundImportBridge {
     if (kIsWeb || !Platform.isAndroid || _disposed) return;
     _ensureBound();
     try {
-      await _channel.invokeMethod<void>('updateProgress', <String, Object?>{
-        'completed': completed,
-        'total': total,
-        'activePercent': ?activePercent,
-      });
+      await _channel
+          .invokeMethod<void>('updateProgress', <String, Object?>{
+            'completed': completed,
+            'total': total,
+            'activePercent': ?activePercent,
+          })
+          .timeout(const Duration(seconds: 5));
     } catch (_) {}
   }
 
@@ -210,7 +223,9 @@ class AndroidBackgroundImportBridge implements BackgroundImportBridge {
     if (kIsWeb || !Platform.isAndroid || _disposed) return;
     _ensureBound();
     try {
-      await _channel.invokeMethod<void>('stopService');
+      await _channel
+          .invokeMethod<void>('stopService')
+          .timeout(const Duration(seconds: 5));
     } catch (_) {}
   }
 

@@ -226,6 +226,17 @@ class _PinScreenState extends ConsumerState<PinScreen> {
     try {
       await _crypto.initialize(pin);
 
+      if (!_crypto.isUnlocked) {
+        if (mounted) {
+          setState(() {
+            _error = 'Vault locked while setting up. Please try again.';
+            _isConfirming = false;
+            _firstEnteredPin = '';
+          });
+        }
+        return;
+      }
+
       if (mounted) {
         setState(() {
           _error = null;
@@ -387,6 +398,15 @@ class _PinScreenState extends ConsumerState<PinScreen> {
       }
 
       await _crypto.initialize(pin);
+      if (!_crypto.isUnlocked) {
+        if (mounted) {
+          setState(() {
+            _error = 'Vault locked during sign-in. Please unlock again.';
+          });
+          _pinController.clear();
+        }
+        return;
+      }
       if (!_isCreateMode) {
         await _concealService.setConcealed(false);
       }

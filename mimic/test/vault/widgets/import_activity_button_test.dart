@@ -17,6 +17,7 @@
 //    not clear or cancel the import (dismissing a view is not cancelling work).
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mimic/vault/security/auto_lock.dart';
 import 'package:mimic/vault/services/import_progress.dart';
 import 'package:mimic/vault/widgets/import_activity_button.dart';
 
@@ -237,6 +238,66 @@ void main() {
       expect(bars.length, 2);
       expect(bars[0].value, closeTo(0.25, 0.001));
       expect(bars[1].value, closeTo(0.64, 0.001));
+    },
+  );
+
+  testWidgets(
+    'details sheet shows live Saving percent during committing and Delete saved originals for settled partial batches',
+    (tester) async {
+      final session = ImportSession();
+      addTearDown(session.dispose);
+      var manualDeleteTriggered = false;
+      session.onConfirmSavedOriginals = () async {
+        manualDeleteTriggered = true;
+      };
+      session.syncFromProjection(
+        entries: [
+          ImportFileEntry(
+            name: 'big.mp4',
+            status: ImportFileStatus.committing,
+            detail: 'Verifying · 512.0 MB / 1.00 GB',
+            progress: 0.50,
+          ),
+        ],
+        activePosition: 1,
+        cancelRequestedFlag: false,
+        pauseReasonValue: ImportPauseReason.none,
+      );
+
+      await tester.pumpWidget(_wrap(session));
+      expect(find.text('Importing 1/1 — 50%'), findsOneWidget);
+      await _openSheet(tester);
+      expect(find.text('Saving 50%'), findsOneWidget);
+      expect(find.text('Verifying · 512.0 MB / 1.00 GB'), findsOneWidget);
+      expect(find.text('Delete saved originals'), findsNothing);
+
+      await tester.tap(find.text('Close'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      session.syncFromProjection(
+        entries: [
+          ImportFileEntry(
+            name: 'big.mp4',
+            status: ImportFileStatus.savedOriginalKept,
+          ),
+          ImportFileEntry(
+            name: 'other.mp4',
+            status: ImportFileStatus.cancelled,
+          ),
+        ],
+        activePosition: 2,
+        cancelRequestedFlag: false,
+        pauseReasonValue: ImportPauseReason.none,
+        hasConfirmableSavedOriginalsFlag: true,
+      );
+      await tester.pump();
+      await _openSheet(tester);
+      expect(find.text('Delete saved originals'), findsOneWidget);
+      await tester.tap(find.text('Delete saved originals'));
+      await tester.pump();
+      expect(manualDeleteTriggered, isTrue);
+      expect(find.byType(AutoLockWrapper), findsOneWidget);
     },
   );
 }

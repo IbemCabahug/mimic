@@ -1890,12 +1890,38 @@ class VaultCrypto extends ChangeNotifier {
     }
   }
 
+  /// Minimum c3 blob size (256 KB) above which [verifyFileIntegrityControlled]
+  /// offloads HMAC-SHA256 streaming to a background worker isolate.
+  static const int kIsolateVerifyThresholdBytes = 256 * 1024;
+
   /// Verifies the structural and cryptographic integrity of [file] (F10).
   ///
   /// Streams large files in chunks without loading them entirely into memory,
   /// avoiding OutOfMemory errors on multi-gigabyte videos.
-  Future<BlobIntegrityStatus> verifyFileIntegrity(File file) async {
+  Future<BlobIntegrityStatus> verifyFileIntegrity(File file) =>
+      verifyFileIntegrityControlled(file);
+
+  /// Cancellable, progress-reporting integrity check used by the app-scoped
+  /// gallery import commit pipeline.
+  ///
+  /// Offloads `MVKEYc3\0` HMAC-SHA256 verification to a background isolate for
+  /// files >= [kIsolateVerifyThresholdBytes] on native platforms so large
+  /// commits never freeze the UI isolate or trip [AutoLock]'s stall watchdog.
+  Future<BlobIntegrityStatus> verifyFileIntegrityControlled(
+    File file, {
+    void Function(int bytesProcessed)? onBytesProgress,
+    bool Function()? shouldAbort,
+    CryptoIsolateCancelHandle? cancelHandle,
+  }) async {
+    void checkCancelled() {
+      if ((shouldAbort != null && shouldAbort()) ||
+          (cancelHandle != null && cancelHandle.isCancelled)) {
+        throw const OperationCancelledException();
+      }
+    }
+
     try {
+      checkCancelled();
       if (!await file.exists()) {
         return BlobIntegrityStatus.fileNotFound;
       }
@@ -1906,6 +1932,7 @@ class VaultCrypto extends ChangeNotifier {
       }
 
       final raf = await file.open(mode: FileMode.read);
+      final MediaBlobFormat format;
       try {
         final magic = Uint8List(8);
         final magicRead = await raf.readInto(magic);
@@ -1913,48 +1940,57 @@ class VaultCrypto extends ChangeNotifier {
           return BlobIntegrityStatus.fileTooShort;
         }
 
-        final format = classifyMediaHeader(magic);
+        format = classifyMediaHeader(magic);
 
         if (format == MediaBlobFormat.ctrV3) {
           if (fileLen < kAuthHeaderLength) {
             return BlobIntegrityStatus.fileTooShort;
           }
-          final iv = Uint8List(16);
-          final ivRead = await raf.readInto(iv);
-          if (ivRead < 16) return BlobIntegrityStatus.fileTooShort;
-
-          final tag = Uint8List(kAuthTagLength);
-          final tagRead = await raf.readInto(tag);
-          if (tagRead < kAuthTagLength) return BlobIntegrityStatus.fileTooShort;
-
           if (!_isUnlocked || _derivedKey == null) {
             return BlobIntegrityStatus.vaultLocked;
           }
+          if (kIsWeb || fileLen < kIsolateVerifyThresholdBytes) {
+            final iv = Uint8List(16);
+            final ivRead = await raf.readInto(iv);
+            if (ivRead < 16) return BlobIntegrityStatus.fileTooShort;
 
-          final macKey = deriveMacKey(_derivedKey!);
-          try {
-            final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(macKey));
-            hmac.update(
-              Uint8List.fromList(kMediaMagicCtrV3),
-              0,
-              kMediaMagicCtrV3.length,
-            );
-            hmac.update(iv, 0, iv.length);
+            final tag = Uint8List(kAuthTagLength);
+            final tagRead = await raf.readInto(tag);
+            if (tagRead < kAuthTagLength) return BlobIntegrityStatus.fileTooShort;
 
-            final checkBuffer = Uint8List(64 * 1024);
-            int checkRead;
-            while ((checkRead = await raf.readInto(checkBuffer)) > 0) {
-              hmac.update(checkBuffer, 0, checkRead);
+            final macKey = deriveMacKey(_derivedKey!);
+            try {
+              final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(macKey));
+              hmac.update(
+                Uint8List.fromList(kMediaMagicCtrV3),
+                0,
+                kMediaMagicCtrV3.length,
+              );
+              hmac.update(iv, 0, iv.length);
+
+              final checkBuffer = Uint8List(64 * 1024);
+              var totalBytesVerified = kAuthHeaderLength;
+              onBytesProgress?.call(totalBytesVerified);
+              int checkRead;
+              while (true) {
+                checkCancelled();
+                checkRead = await raf.readInto(checkBuffer);
+                if (checkRead <= 0) break;
+                checkCancelled();
+                hmac.update(checkBuffer, 0, checkRead);
+                totalBytesVerified += checkRead;
+                onBytesProgress?.call(totalBytesVerified);
+              }
+              final computedTag = Uint8List(kAuthTagLength);
+              hmac.doFinal(computedTag, 0);
+
+              if (!constantTimeBytesEqual(tag, computedTag)) {
+                return BlobIntegrityStatus.tamperedOrCorrupted;
+              }
+              return BlobIntegrityStatus.healthy;
+            } finally {
+              macKey.fillRange(0, macKey.length, 0);
             }
-            final computedTag = Uint8List(kAuthTagLength);
-            hmac.doFinal(computedTag, 0);
-
-            if (!constantTimeBytesEqual(tag, computedTag)) {
-              return BlobIntegrityStatus.tamperedOrCorrupted;
-            }
-            return BlobIntegrityStatus.healthy;
-          } finally {
-            macKey.fillRange(0, macKey.length, 0);
           }
         } else if (format == MediaBlobFormat.cbcV1) {
           if (fileLen < 24) {
@@ -1969,23 +2005,49 @@ class VaultCrypto extends ChangeNotifier {
           final endBlock = Uint8List(16);
           final readEnd = await raf.readInto(endBlock);
           if (readEnd < 16) return BlobIntegrityStatus.truncatedPayload;
+          onBytesProgress?.call(fileLen);
           return BlobIntegrityStatus.healthy;
         } else if (format == MediaBlobFormat.ctrV1 ||
             format == MediaBlobFormat.ctrV2) {
           if (fileLen < 24) {
             return BlobIntegrityStatus.fileTooShort;
           }
+          onBytesProgress?.call(fileLen);
           return BlobIntegrityStatus.healthy;
         } else {
           // Legacy headerless CBC blob
           if (fileLen == 0 || fileLen % 16 != 0) {
             return BlobIntegrityStatus.truncatedPayload;
           }
+          onBytesProgress?.call(fileLen);
           return BlobIntegrityStatus.healthy;
         }
       } finally {
         await raf.close();
       }
+
+      // Close handle before spawning isolate worker on native c3 >= threshold.
+      final keySnapshot = _derivedKey;
+      if (!_isUnlocked || keySnapshot == null) {
+        return BlobIntegrityStatus.vaultLocked;
+      }
+      final statusName = await cryptoIsolateVerifyCtrV3(
+        key: keySnapshot,
+        filePath: file.path,
+        onBytesProgress: onBytesProgress,
+        shouldAbort: shouldAbort,
+        cancelHandle: cancelHandle,
+      );
+      return switch (statusName) {
+        'healthy' => BlobIntegrityStatus.healthy,
+        'tamperedOrCorrupted' => BlobIntegrityStatus.tamperedOrCorrupted,
+        'unsupportedFormat' => BlobIntegrityStatus.tamperedOrCorrupted,
+        'fileNotFound' => BlobIntegrityStatus.fileNotFound,
+        'fileTooShort' => BlobIntegrityStatus.fileTooShort,
+        _ => BlobIntegrityStatus.ioError,
+      };
+    } on OperationCancelledException {
+      rethrow;
     } catch (_) {
       return BlobIntegrityStatus.ioError;
     }
