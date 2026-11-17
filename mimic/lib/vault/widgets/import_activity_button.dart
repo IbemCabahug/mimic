@@ -14,6 +14,7 @@
 // import — closing a view is not cancelling work.
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
+import '../security/auto_lock.dart';
 import '../services/import_progress.dart';
 import 'import_status_card.dart' show importFileRowIcon, importFileRowColor;
 
@@ -37,13 +38,19 @@ class ImportActivityButton extends StatelessWidget {
       builder: (context, _) {
         if (!session.isActive) return const SizedBox.shrink();
         final working = session.isWorking;
-        final failed =
-            session.files.where((f) => f.status == ImportFileStatus.failed).length;
+        final failed = session.files
+            .where((f) => f.status == ImportFileStatus.failed)
+            .length;
+        final needsSourceCount = session.files
+            .where((f) => f.status == ImportFileStatus.needsSource)
+            .length;
+        final issuesCount = failed + needsSourceCount;
         // The active row's measurable percent, when the work is of a kind that
         // HAS one (restore decrypt). Imports have none and simply omit it —
         // the NN/g rule this follows is "percent-done for >=10 s waits", and a
         // percent that cannot be measured must not be invented.
-        final activeRow = session.position >= 1 && session.position <= session.total
+        final activeRow =
+            session.position >= 1 && session.position <= session.total
             ? session.files[session.position - 1]
             : null;
         final activePercent = activeRow?.progress;
@@ -63,14 +70,31 @@ class ImportActivityButton extends StatelessWidget {
                 ? '$base — ${(activePercent * 100).round()}%'
                 : base;
           }
+        } else if (session.isPaused) {
+          label = switch (session.pauseReason) {
+            ImportPauseReason.lowStorage => 'Import paused — storage full',
+            ImportPauseReason.databaseFailure =>
+              'Import paused — database error',
+            ImportPauseReason.permissionDenied =>
+              'Import paused — grant permission',
+            ImportPauseReason.userPaused => 'Import paused',
+            ImportPauseReason.serviceTimedOut =>
+              'Import paused — time limit reached',
+            ImportPauseReason.serviceStopped =>
+              'Import paused — background stopped',
+            ImportPauseReason.locked => 'Import paused',
+            ImportPauseReason.none => 'Import paused',
+          };
         } else if (session.cancelRequested) {
           label = session.verb == 'Restoring'
               ? 'Restore cancelled'
               : 'Import cancelled';
-        } else if (failed > 0) {
+        } else if (issuesCount > 0) {
           label = session.verb == 'Restoring'
               ? 'Restore finished — $failed not restored'
-              : 'Import finished — $failed not imported';
+              : 'Import finished — $issuesCount not imported';
+        } else if (session.hasAwaitingDeleteConfirm) {
+          label = 'Saved — confirm original deletion';
         } else {
           label = session.verb == 'Restoring'
               ? 'Restore finished (${session.total}/${session.total})'
@@ -88,8 +112,9 @@ class ImportActivityButton extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(20),
-                border:
-                    Border.all(color: VaultColors.accent.withValues(alpha: 0.45)),
+                border: Border.all(
+                  color: VaultColors.accent.withValues(alpha: 0.45),
+                ),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
@@ -99,11 +124,25 @@ class ImportActivityButton extends StatelessWidget {
                     height: 16,
                     child: working
                         ? const CircularProgressIndicator(
-                            strokeWidth: 2, color: VaultColors.accent)
-                        : Icon(
-                            failed > 0 ? Icons.error_outline : Icons.check_circle,
+                            strokeWidth: 2,
+                            color: VaultColors.accent,
+                          )
+                        : session.isPaused
+                        ? const Icon(
+                            Icons.pause_circle_outline,
                             size: 16,
-                            color: failed > 0 ? Colors.orange : Colors.green,
+                            color: Colors.orange,
+                          )
+                        : Icon(
+                            issuesCount > 0 || session.hasAwaitingDeleteConfirm
+                                ? Icons.error_outline
+                                : Icons.check_circle,
+                            size: 16,
+                            color:
+                                issuesCount > 0 ||
+                                    session.hasAwaitingDeleteConfirm
+                                ? Colors.orange
+                                : Colors.green,
                           ),
                   ),
                   const SizedBox(width: 8),
@@ -132,8 +171,11 @@ class ImportActivityButton extends StatelessWidget {
                         borderRadius: BorderRadius.circular(12),
                         child: const Padding(
                           padding: EdgeInsets.all(4),
-                          child: Icon(Icons.close,
-                              size: 16, color: VaultColors.textTertiary),
+                          child: Icon(
+                            Icons.close,
+                            size: 16,
+                            color: VaultColors.textTertiary,
+                          ),
                         ),
                       ),
                     ),
@@ -152,7 +194,10 @@ class ImportActivityButton extends StatelessWidget {
 /// statuses the old card showed. Safe to open at any point of the import; if
 /// the session clears while it is open the sheet shows a neutral done line.
 Future<void> showImportDetailsSheet(
-    BuildContext context, ImportSession session) {
+  BuildContext context,
+  ImportSession session,
+) {
+  AutoLock().resetTimer();
   return showModalBottomSheet<void>(
     context: context,
     backgroundColor: VaultColors.surface,
@@ -160,11 +205,12 @@ Future<void> showImportDetailsSheet(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
     ),
     builder: (sheetContext) {
-      return AnimatedBuilder(
-        animation: session,
-        builder: (context, _) {
-          final rows = session.files;
-          return SafeArea(
+      return AutoLockWrapper(
+        child: AnimatedBuilder(
+          animation: session,
+          builder: (context, _) {
+            final rows = session.files;
+            return SafeArea(
             child: SizedBox(
               // Roughly half the screen: the queue is scannable, the grid
               // stays reachable behind the sheet (modal, so it dims anyway).
@@ -177,9 +223,11 @@ Future<void> showImportDetailsSheet(
                     child: Text(
                       session.isWorking
                           ? '${session.verb} ${session.position}/${session.total} ...'
+                          : session.isPaused
+                          ? 'Import paused'
                           : session.verb == 'Restoring'
-                              ? 'Restore finished'
-                              : 'Import finished',
+                          ? 'Restore finished'
+                          : 'Import finished',
                       style: const TextStyle(
                         fontFamily: 'Inter',
                         fontWeight: FontWeight.w700,
@@ -188,6 +236,43 @@ Future<void> showImportDetailsSheet(
                       ),
                     ),
                   ),
+                  if (session.pauseMessage != null &&
+                      session.pauseReason != ImportPauseReason.none)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 2, 16, 6),
+                      child: Text(
+                        session.pauseMessage!,
+                        style: const TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 12,
+                          color: Colors.orange,
+                        ),
+                      ),
+                    )
+                  else if (session.isWorking)
+                    const Padding(
+                      padding: EdgeInsets.fromLTRB(16, 2, 16, 6),
+                      child: Text(
+                        'Continues when switching apps until locked, paused, or finished. Locking stops active progress and restarts unfinished files on unlock.',
+                        style: TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 12,
+                          color: VaultColors.textSecondary,
+                        ),
+                      ),
+                    ),
+                  if (session.backgroundServiceWarning != null)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
+                      child: Text(
+                        session.backgroundServiceWarning!,
+                        style: const TextStyle(
+                          fontFamily: 'Inter',
+                          fontSize: 12,
+                          color: Colors.orange,
+                        ),
+                      ),
+                    ),
                   const Divider(height: 1),
                   if (rows.isEmpty)
                     const Padding(
@@ -195,9 +280,10 @@ Future<void> showImportDetailsSheet(
                       child: Text(
                         'No active import.',
                         style: TextStyle(
-                            fontFamily: 'Inter',
-                            fontSize: 13,
-                            color: VaultColors.textSecondary),
+                          fontFamily: 'Inter',
+                          fontSize: 13,
+                          color: VaultColors.textSecondary,
+                        ),
                       ),
                     )
                   else
@@ -211,8 +297,13 @@ Future<void> showImportDetailsSheet(
                           // becomes the percent and a bar appears under the
                           // name; indeterminate restore -> plain 'Restoring'
                           // plus a moving bar with no fake percent.
-                          final showPercent = row.status ==
-                                  ImportFileStatus.restoring &&
+                          final showRestorePercent =
+                              row.status == ImportFileStatus.restoring &&
+                              row.progress != null;
+                          final showImportPercent =
+                              (row.status == ImportFileStatus.preparing ||
+                                  row.status == ImportFileStatus.encrypting ||
+                                  row.status == ImportFileStatus.committing) &&
                               row.progress != null;
                           return ListTile(
                             dense: true,
@@ -227,7 +318,8 @@ Future<void> showImportDetailsSheet(
                                 color: VaultColors.textPrimary,
                               ),
                             ),
-                            subtitle: (row.detail == null &&
+                            subtitle:
+                                (row.detail == null &&
                                     row.status != ImportFileStatus.restoring)
                                 ? null
                                 : Column(
@@ -246,9 +338,12 @@ Future<void> showImportDetailsSheet(
                                           ),
                                         ),
                                       if (row.status ==
-                                          ImportFileStatus.restoring)
+                                              ImportFileStatus.restoring ||
+                                          showImportPercent)
                                         Padding(
-                                          padding: const EdgeInsets.only(top: 4),
+                                          padding: const EdgeInsets.only(
+                                            top: 4,
+                                          ),
                                           // A null value IS the indeterminate
                                           // bar: when the OS-side gallery write
                                           // has no observable percent the bar
@@ -266,16 +361,47 @@ Future<void> showImportDetailsSheet(
                                         ),
                                     ],
                                   ),
-                            trailing: Text(
-                              showPercent
-                                  ? '${(row.progress! * 100).round()}%'
-                                  : importFileStatusLabel(row.status),
-                              style: TextStyle(
-                                fontFamily: 'Inter',
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: importFileRowColor(row.status),
-                              ),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  showRestorePercent
+                                      ? '${(row.progress! * 100).round()}%'
+                                      : showImportPercent
+                                      ? '${importFileStatusLabel(row.status)} ${(row.progress! * 100).round()}%'
+                                      : importFileStatusLabel(row.status),
+                                  style: TextStyle(
+                                    fontFamily: 'Inter',
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: importFileRowColor(row.status),
+                                  ),
+                                ),
+                                if (session.onRetryItem != null &&
+                                    (row.status == ImportFileStatus.failed ||
+                                        row.status ==
+                                            ImportFileStatus.needsSource ||
+                                        row.status ==
+                                            ImportFileStatus.pausedLocked))
+                                  IconButton(
+                                    icon: const Icon(Icons.refresh, size: 18),
+                                    color: VaultColors.accent,
+                                    tooltip: 'Retry item',
+                                    onPressed: () => session.onRetryItem!(i),
+                                  ),
+                                if (session.onCancelItem != null &&
+                                    (row.status == ImportFileStatus.queued ||
+                                        row.status ==
+                                            ImportFileStatus.pausedLocked ||
+                                        row.status ==
+                                            ImportFileStatus.needsSource))
+                                  IconButton(
+                                    icon: const Icon(Icons.close, size: 18),
+                                    color: VaultColors.textTertiary,
+                                    tooltip: 'Cancel item',
+                                    onPressed: () => session.onCancelItem!(i),
+                                  ),
+                              ],
                             ),
                           );
                         },
@@ -283,26 +409,83 @@ Future<void> showImportDetailsSheet(
                     ),
                   Align(
                     alignment: Alignment.centerRight,
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
+                    child: Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 4,
                       children: [
+                        if (session.hasAwaitingDeleteConfirm &&
+                            session.onConfirmPendingDeletes != null)
+                          TextButton(
+                            onPressed: () => session.onConfirmPendingDeletes!(),
+                            child: const Text(
+                              'Confirm Delete Originals',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                color: Colors.orange,
+                              ),
+                            ),
+                          ),
+                        if (!session.isWorking &&
+                            !session.hasAwaitingDeleteConfirm &&
+                            session.hasConfirmableSavedOriginals &&
+                            session.onConfirmSavedOriginals != null)
+                          TextButton(
+                            onPressed: () => session.onConfirmSavedOriginals!(),
+                            child: const Text(
+                              'Delete saved originals',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                color: VaultColors.accent,
+                              ),
+                            ),
+                          ),
+                        if (session.hasRetryableWork &&
+                            session.onRetryAll != null)
+                          TextButton(
+                            onPressed: session.onRetryAll,
+                            child: const Text(
+                              'Retry',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                color: VaultColors.accent,
+                              ),
+                            ),
+                          ),
+                        if (session.hasClearableItems &&
+                            session.onClearFinished != null)
+                          TextButton(
+                            onPressed: session.onClearFinished,
+                            child: const Text(
+                              'Clear finished',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                color: VaultColors.textSecondary,
+                              ),
+                            ),
+                          ),
                         // Same rule as the pill's ✕: closing a view is not
                         // cancelling work, so the sheet's Cancel is a separate
                         // explicit control and only exists while work is live.
                         if (session.isWorking)
                           TextButton(
                             onPressed: session.requestCancel,
-                            child: const Text('Cancel',
-                                style: TextStyle(
-                                    fontFamily: 'Inter',
-                                    color: VaultColors.textTertiary)),
+                            child: const Text(
+                              'Cancel',
+                              style: TextStyle(
+                                fontFamily: 'Inter',
+                                color: VaultColors.textTertiary,
+                              ),
+                            ),
                           ),
                         TextButton(
                           onPressed: () => Navigator.of(sheetContext).pop(),
-                          child: const Text('Close',
-                              style: TextStyle(
-                                  fontFamily: 'Inter',
-                                  color: VaultColors.accent)),
+                          child: const Text(
+                            'Close',
+                            style: TextStyle(
+                              fontFamily: 'Inter',
+                              color: VaultColors.accent,
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -311,7 +494,8 @@ Future<void> showImportDetailsSheet(
               ),
             ),
           );
-        },
+          },
+        ),
       );
     },
   );

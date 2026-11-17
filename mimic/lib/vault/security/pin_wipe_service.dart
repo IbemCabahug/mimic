@@ -7,17 +7,22 @@ import 'package:sqflite/sqflite.dart';
 import '../../core/services/platform_service.dart';
 import '../../core/services/biometric_unlock_store.dart';
 import '../crypto/keystore_service.dart';
+import '../services/import_journal_store.dart';
 
 class PinWipeService {
   final PlatformService _platformService;
   final BiometricUnlockStore _biometricUnlockStore;
   final KeystoreService _keystoreService;
 
-  PinWipeService(this._platformService, {BiometricUnlockStore? biometricUnlockStore, KeystoreService? keystoreService})
-      : _biometricUnlockStore = biometricUnlockStore ?? BiometricUnlockStore(),
-        _keystoreService = keystoreService ?? AndroidKeystoreService();
+  PinWipeService(
+    this._platformService, {
+    BiometricUnlockStore? biometricUnlockStore,
+    KeystoreService? keystoreService,
+  }) : _biometricUnlockStore = biometricUnlockStore ?? BiometricUnlockStore(),
+       _keystoreService = keystoreService ?? AndroidKeystoreService();
 
   Future<void> wipePin() async {
+    await ImportJournalWipeRegistry.runAll();
     if (kIsWeb) return;
     try {
       await _keystoreService.deleteKey();
@@ -35,10 +40,10 @@ class PinWipeService {
     await _platformService.secureDelete('lockout_duration_ms');
     await _platformService.secureDelete('vault_setup_completed');
     await _biometricUnlockStore.wipeAll();
-    
+
     // Deleting encrypted files and databases from filesystem
     await _deleteAppDirectoryContents();
-    
+
     await _platformService.secureWrite('vault_wiped', 'true');
   }
 

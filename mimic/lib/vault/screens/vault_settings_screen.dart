@@ -545,9 +545,11 @@ class _VaultSettingsScreenState extends ConsumerState<VaultSettingsScreen> {
 
   void _lockVault() {
     final crypto = ref.read(vaultCryptoProvider);
-    crypto.lock();
+    AutoLock().revokeAllAndLock(
+      reason: 'manual_lock_settings',
+      fallbackCrypto: crypto,
+    );
     PanicMode().dispose();
-    AutoLock().dispose();
     Navigator.of(context).pushNamedAndRemoveUntil(
       AppRouter.vaultPinRoute,
       AppRouter.isNotVaultRoute,

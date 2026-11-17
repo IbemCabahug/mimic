@@ -6,6 +6,7 @@ import '../crypto/vault_crypto.dart';
 import '../widgets/vault_scaffold.dart';
 import '../security/duress_service.dart';
 import '../security/decoy_vault_service.dart';
+import '../security/vault_ui_access.dart';
 import '../trigger/gesture_store.dart';
 import 'gesture_setup_screen.dart';
 import '../../core/providers/biometric_providers.dart';
@@ -18,7 +19,8 @@ class ResetPinScreen extends ConsumerStatefulWidget {
   ConsumerState<ResetPinScreen> createState() => _ResetPinScreenState();
 }
 
-class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTickerProviderStateMixin {
+class _ResetPinScreenState extends ConsumerState<ResetPinScreen>
+    with SingleTickerProviderStateMixin {
   late AnimationController _shakeController;
   String _firstPin = '';
   String _currentInput = '';
@@ -73,14 +75,24 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
       return;
     }
     if (!_isConfirmStep) {
-      final isDuressPin = await ref.read(duressServiceProvider).isFakePin(_currentInput);
+      final isDuressPin = await ref
+          .read(duressServiceProvider)
+          .isFakePin(_currentInput);
       if (isDuressPin) {
-        setState(() => _error = 'This PIN is unavailable. Please choose a different PIN.');
+        setState(
+          () => _error =
+              'This PIN is unavailable. Please choose a different PIN.',
+        );
         return;
       }
-      final isDecoyPin = await ref.read(decoyVaultServiceProvider).hasStoredDecoyPinMatch(_currentInput);
+      final isDecoyPin = await ref
+          .read(decoyVaultServiceProvider)
+          .hasStoredDecoyPinMatch(_currentInput);
       if (isDecoyPin) {
-        setState(() => _error = 'This PIN is unavailable. Please choose a different PIN.');
+        setState(
+          () => _error =
+              'This PIN is unavailable. Please choose a different PIN.',
+        );
         return;
       }
       // Transition to confirmation step
@@ -128,7 +140,9 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
         }
         return;
       }
-      final isDecoyPin = await ref.read(decoyVaultServiceProvider).hasStoredDecoyPinMatch(pin);
+      final isDecoyPin = await ref
+          .read(decoyVaultServiceProvider)
+          .hasStoredDecoyPinMatch(pin);
       if (isDecoyPin) {
         if (mounted) {
           setState(() {
@@ -142,10 +156,11 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
       }
 
       final crypto = ref.read(vaultCryptoProvider);
-      
+
       // Update PIN
       await crypto.changePin(pin);
-      
+      ref.read(vaultUiAccessProvider).restoreUiAccessAfterAuth();
+
       // Store recovery blob with the new PIN
       await crypto.storeRecoveryBlob();
 
@@ -157,7 +172,9 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('PIN updated and recovery phrase secured successfully'),
+            content: Text(
+              'PIN updated and recovery phrase secured successfully',
+            ),
             backgroundColor: VaultColors.success,
           ),
         );
@@ -169,14 +186,18 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
                 builder: (ctx) => GestureSetupScreen(
                   onComplete: () {
                     if (!ctx.mounted) return;
-                    Navigator.of(ctx).pushNamedAndRemoveUntil('/vault-home', (route) => false);
+                    Navigator.of(
+                      ctx,
+                    ).pushNamedAndRemoveUntil('/vault-home', (route) => false);
                   },
                 ),
               ),
               (route) => false,
             );
           } else {
-            Navigator.of(context).pushNamedAndRemoveUntil('/vault-home', (route) => false);
+            Navigator.of(
+              context,
+            ).pushNamedAndRemoveUntil('/vault-home', (route) => false);
           }
         }
       }
@@ -219,15 +240,17 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
             customBorder: const CircleBorder(),
             onTap: onTap,
             child: Center(
-              child: icon ?? Text(
-                label,
-                style: const TextStyle(
-                  fontFamily: 'Inter',
-                  fontSize: 26,
-                  fontWeight: FontWeight.w600,
-                  color: VaultColors.textPrimary,
-                ),
-              ),
+              child:
+                  icon ??
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      fontFamily: 'Inter',
+                      fontSize: 26,
+                      fontWeight: FontWeight.w600,
+                      color: VaultColors.textPrimary,
+                    ),
+                  ),
             ),
           ),
         ),
@@ -245,22 +268,30 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
             child: key == 'clear'
                 ? _buildNumpadKey(
                     '',
-                    icon: const Icon(Icons.clear_all, color: VaultColors.textSecondary, size: 28),
+                    icon: const Icon(
+                      Icons.clear_all,
+                      color: VaultColors.textSecondary,
+                      size: 28,
+                    ),
                     onTap: _clearAll,
                   )
                 : key == 'backspace'
-                    ? _buildNumpadKey(
-                        '',
-                        icon: const Icon(Icons.backspace_outlined, color: VaultColors.textSecondary, size: 24),
-                        onTap: _backspace,
-                      )
-                    : _buildNumpadKey(
-                        key,
-                        onTap: () {
-                          HapticFeedback.lightImpact();
-                          _inputDigit(key);
-                        },
-                      ),
+                ? _buildNumpadKey(
+                    '',
+                    icon: const Icon(
+                      Icons.backspace_outlined,
+                      color: VaultColors.textSecondary,
+                      size: 24,
+                    ),
+                    onTap: _backspace,
+                  )
+                : _buildNumpadKey(
+                    key,
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      _inputDigit(key);
+                    },
+                  ),
           ),
         );
       }).toList(),
@@ -269,15 +300,27 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
 
   @override
   Widget build(BuildContext context) {
-    final Animation<double> offsetAnimation = TweenSequence<double>([
-      TweenSequenceItem(tween: Tween<double>(begin: 0.0, end: 15.0), weight: 1),
-      TweenSequenceItem(tween: Tween<double>(begin: 15.0, end: -15.0), weight: 2),
-      TweenSequenceItem(tween: Tween<double>(begin: -15.0, end: 15.0), weight: 2),
-      TweenSequenceItem(tween: Tween<double>(begin: 15.0, end: 0.0), weight: 1),
-    ]).animate(CurvedAnimation(
-      parent: _shakeController,
-      curve: Curves.easeInOut,
-    ));
+    final Animation<double> offsetAnimation =
+        TweenSequence<double>([
+          TweenSequenceItem(
+            tween: Tween<double>(begin: 0.0, end: 15.0),
+            weight: 1,
+          ),
+          TweenSequenceItem(
+            tween: Tween<double>(begin: 15.0, end: -15.0),
+            weight: 2,
+          ),
+          TweenSequenceItem(
+            tween: Tween<double>(begin: -15.0, end: 15.0),
+            weight: 2,
+          ),
+          TweenSequenceItem(
+            tween: Tween<double>(begin: 15.0, end: 0.0),
+            weight: 1,
+          ),
+        ]).animate(
+          CurvedAnimation(parent: _shakeController, curve: Curves.easeInOut),
+        );
 
     return PopScope(
       canPop: false,
@@ -301,121 +344,133 @@ class _ResetPinScreenState extends ConsumerState<ResetPinScreen> with SingleTick
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                        const SizedBox(height: 16),
-                        const Icon(
-                          Icons.lock_outline,
-                          size: 56,
-                          color: VaultColors.accent,
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          'Create New PIN',
-                          style: TextStyle(
-                            fontFamily: 'Inter',
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: VaultColors.textPrimary,
+                          const SizedBox(height: 16),
+                          const Icon(
+                            Icons.lock_outline,
+                            size: 56,
+                            color: VaultColors.accent,
                           ),
-                        ),
-                        const SizedBox(height: 4),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 24),
-                          child: Text(
-                            _isConfirmStep
-                                ? 'Re-enter your new PIN to confirm'
-                                : 'Choose a new PIN, 4 to 8 digits',
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
+                          const SizedBox(height: 8),
+                          const Text(
+                            'Create New PIN',
+                            style: TextStyle(
                               fontFamily: 'Inter',
-                              fontSize: 13,
-                              color: VaultColors.textSecondary,
+                              fontSize: 22,
+                              fontWeight: FontWeight.bold,
+                              color: VaultColors.textPrimary,
                             ),
                           ),
-                        ),
-                        const SizedBox(height: 16),
-                        AnimatedBuilder(
-                          animation: offsetAnimation,
-                          builder: (context, child) {
-                            return Transform.translate(
-                              offset: Offset(offsetAnimation.value, 0.0),
-                              child: child,
-                            );
-                          },
-                          child: PinDotIndicator(
-                            filledCount: _currentInput.length,
-                            totalDots: 8,
-                          ),
-                        ),
-                        if (_error != null) ...[
-                          const SizedBox(height: 8),
+                          const SizedBox(height: 4),
                           Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 24),
                             child: Text(
-                              _error!,
+                              _isConfirmStep
+                                  ? 'Re-enter your new PIN to confirm'
+                                  : 'Choose a new PIN, 4 to 8 digits',
+                              textAlign: TextAlign.center,
                               style: const TextStyle(
                                 fontFamily: 'Inter',
                                 fontSize: 13,
-                                color: VaultColors.error,
-                                fontWeight: FontWeight.w500,
+                                color: VaultColors.textSecondary,
                               ),
-                              textAlign: TextAlign.center,
                             ),
                           ),
-                        ],
-                        const SizedBox(height: 16),
-                        if (_isLoading)
-                          const SizedBox(
-                            height: 200,
-                            child: Center(
-                              child: CircularProgressIndicator(
-                                color: VaultColors.accent,
-                              ),
+                          const SizedBox(height: 16),
+                          AnimatedBuilder(
+                            animation: offsetAnimation,
+                            builder: (context, child) {
+                              return Transform.translate(
+                                offset: Offset(offsetAnimation.value, 0.0),
+                                child: child,
+                              );
+                            },
+                            child: PinDotIndicator(
+                              filledCount: _currentInput.length,
+                              totalDots: 8,
                             ),
-                          )
-                        else
-                          Container(
-                            constraints: const BoxConstraints(maxWidth: 270),
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
-                            child: Column(
-                              children: [
-                                _buildNumpadRow(['1', '2', '3']),
-                                _buildNumpadRow(['4', '5', '6']),
-                                _buildNumpadRow(['7', '8', '9']),
-                                _buildNumpadRow(['clear', '0', 'backspace']),
-                                const SizedBox(height: 16),
-                                ElevatedButton(
-                                  onPressed: (_isLoading || _currentInput.length < 4)
-                                      ? null
-                                      : _handlePinSubmission,
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: VaultColors.accent,
-                                    foregroundColor: Colors.white,
-                                    disabledBackgroundColor: VaultColors.surface,
-                                    disabledForegroundColor: VaultColors.textSecondary,
-                                    minimumSize: const Size(double.infinity, 48),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                  ),
-                                  child: Text(
-                                    _isConfirmStep ? 'Confirm PIN' : 'Set PIN',
-                                    style: const TextStyle(
-                                      fontFamily: 'Inter',
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
+                          ),
+                          if (_error != null) ...[
+                            const SizedBox(height: 8),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 24,
+                              ),
+                              child: Text(
+                                _error!,
+                                style: const TextStyle(
+                                  fontFamily: 'Inter',
+                                  fontSize: 13,
+                                  color: VaultColors.error,
+                                  fontWeight: FontWeight.w500,
                                 ),
-                              ],
+                                textAlign: TextAlign.center,
+                              ),
                             ),
-                          ),
-                        const SizedBox(height: 16),
-                      ],
+                          ],
+                          const SizedBox(height: 16),
+                          if (_isLoading)
+                            const SizedBox(
+                              height: 200,
+                              child: Center(
+                                child: CircularProgressIndicator(
+                                  color: VaultColors.accent,
+                                ),
+                              ),
+                            )
+                          else
+                            Container(
+                              constraints: const BoxConstraints(maxWidth: 270),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 8,
+                              ),
+                              child: Column(
+                                children: [
+                                  _buildNumpadRow(['1', '2', '3']),
+                                  _buildNumpadRow(['4', '5', '6']),
+                                  _buildNumpadRow(['7', '8', '9']),
+                                  _buildNumpadRow(['clear', '0', 'backspace']),
+                                  const SizedBox(height: 16),
+                                  ElevatedButton(
+                                    onPressed:
+                                        (_isLoading || _currentInput.length < 4)
+                                        ? null
+                                        : _handlePinSubmission,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: VaultColors.accent,
+                                      foregroundColor: Colors.white,
+                                      disabledBackgroundColor:
+                                          VaultColors.surface,
+                                      disabledForegroundColor:
+                                          VaultColors.textSecondary,
+                                      minimumSize: const Size(
+                                        double.infinity,
+                                        48,
+                                      ),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(12),
+                                      ),
+                                    ),
+                                    child: Text(
+                                      _isConfirmStep
+                                          ? 'Confirm PIN'
+                                          : 'Set PIN',
+                                      style: const TextStyle(
+                                        fontFamily: 'Inter',
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          const SizedBox(height: 16),
+                        ],
+                      ),
                     ),
                   ),
                 ),
-              ),
-            );
+              );
             },
           ),
         ),

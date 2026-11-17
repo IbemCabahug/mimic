@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../security/auto_lock.dart';
+import '../security/vault_ui_access.dart';
 import '../crypto/vault_crypto.dart';
 import '../services/vault_theme_service.dart';
 import '../../core/theme/app_theme.dart';
@@ -31,8 +32,9 @@ class VaultScaffold extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final crypto = ref.watch(vaultCryptoProvider);
+    final uiAccess = ref.watch(vaultUiAccessProvider);
     final palette = ref.watch(vaultThemeProvider);
-    if (requireUnlocked && !crypto.isUnlocked) {
+    if (requireUnlocked && (!crypto.isUnlocked || !uiAccess.isUiAuthorized)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!context.mounted) return;
         final currentRoute = ModalRoute.of(context);
@@ -44,9 +46,14 @@ class VaultScaffold extends ConsumerWidget {
       });
       return Scaffold(
         backgroundColor: palette.background,
-        body: Center(
-          child: CircularProgressIndicator(color: palette.accent),
-        ),
+        body: Center(child: CircularProgressIndicator(color: palette.accent)),
+      );
+    }
+
+    if (requireUnlocked && uiAccess.isBackgroundConcealed) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: SizedBox.shrink(),
       );
     }
 
@@ -79,9 +86,12 @@ class VaultScaffold extends ConsumerWidget {
               if (showLockButton)
                 IconButton(
                   icon: const Icon(Icons.lock_outline),
+                  tooltip: 'Lock vault (pauses active imports)',
                   onPressed: () {
-                    ref.read(vaultCryptoProvider).lock();
-                    AutoLock().dispose();
+                    AutoLock().revokeAllAndLock(
+                      reason: 'manual_lock',
+                      fallbackCrypto: ref.read(vaultCryptoProvider),
+                    );
                     Navigator.of(context).pushNamedAndRemoveUntil(
                       AppRouter.vaultPinRoute,
                       AppRouter.isNotVaultRoute,
@@ -119,7 +129,8 @@ class PressableCard extends StatefulWidget {
   State<PressableCard> createState() => _PressableCardState();
 }
 
-class _PressableCardState extends State<PressableCard> with SingleTickerProviderStateMixin {
+class _PressableCardState extends State<PressableCard>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _scaleAnimation;
 
@@ -130,9 +141,10 @@ class _PressableCardState extends State<PressableCard> with SingleTickerProvider
       vsync: this,
       duration: const Duration(milliseconds: 120),
     );
-    _scaleAnimation = Tween<double>(begin: 1.0, end: 0.97).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
-    );
+    _scaleAnimation = Tween<double>(
+      begin: 1.0,
+      end: 0.97,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
   }
 
   @override
@@ -194,16 +206,14 @@ class _PressableCardState extends State<PressableCard> with SingleTickerProvider
 class AnimatedFAB extends StatefulWidget {
   final Widget child;
 
-  const AnimatedFAB({
-    super.key,
-    required this.child,
-  });
+  const AnimatedFAB({super.key, required this.child});
 
   @override
   State<AnimatedFAB> createState() => _AnimatedFABState();
 }
 
-class _AnimatedFABState extends State<AnimatedFAB> with SingleTickerProviderStateMixin {
+class _AnimatedFABState extends State<AnimatedFAB>
+    with SingleTickerProviderStateMixin {
   late AnimationController _controller;
   late Animation<double> _scaleAnimation;
   late Animation<double> _fadeAnimation;
@@ -215,12 +225,14 @@ class _AnimatedFABState extends State<AnimatedFAB> with SingleTickerProviderStat
       vsync: this,
       duration: const Duration(milliseconds: 300),
     );
-    _scaleAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.elasticOut),
-    );
-    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _controller, curve: Curves.easeIn),
-    );
+    _scaleAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.elasticOut));
+    _fadeAnimation = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeIn));
     _controller.forward();
   }
 
@@ -234,10 +246,7 @@ class _AnimatedFABState extends State<AnimatedFAB> with SingleTickerProviderStat
   Widget build(BuildContext context) {
     return FadeTransition(
       opacity: _fadeAnimation,
-      child: ScaleTransition(
-        scale: _scaleAnimation,
-        child: widget.child,
-      ),
+      child: ScaleTransition(scale: _scaleAnimation, child: widget.child),
     );
   }
 }
@@ -265,10 +274,7 @@ class PinDotIndicator extends StatelessWidget {
           child: TweenAnimationBuilder<double>(
             duration: const Duration(milliseconds: 300),
             curve: Curves.elasticOut,
-            tween: Tween<double>(
-              begin: 12.0,
-              end: isFilled ? 14.0 : 12.0,
-            ),
+            tween: Tween<double>(begin: 12.0, end: isFilled ? 14.0 : 12.0),
             builder: (context, size, child) {
               return AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
@@ -278,7 +284,9 @@ class PinDotIndicator extends StatelessWidget {
                   shape: BoxShape.circle,
                   color: isFilled ? VaultColors.accent : Colors.transparent,
                   border: Border.all(
-                    color: isFilled ? VaultColors.accent : const Color(0xFFE0E0E0),
+                    color: isFilled
+                        ? VaultColors.accent
+                        : const Color(0xFFE0E0E0),
                     width: isFilled ? 0 : 2,
                   ),
                 ),

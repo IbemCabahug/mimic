@@ -903,6 +903,56 @@ void main() {
       expect(decLocked.readAsBytesSync(), equals(plaintext),
           reason: 'c1 decryption while locked must keep working exactly as before');
     });
+
+    test('T-VERIFY-C3-ISOLATE: verifies >=256KB c3 blob off-isolate with monotonic progress, tamper detection, and non-destructive cancel', () async {
+      // > 512 KB guarantees multiple 256 KB chunks inside isolateVerifyCtrV3Worker.
+      final plaintext = generateRandomBytes(600 * 1024 + 17);
+      final src = createTempFile('verify_c3_src.bin', plaintext);
+      final c3File = File(p.join(tempDir.path, 'verify_c3_blob.bin'));
+      await vaultCrypto.encryptStreamSystemCtrV3Controlled(src, c3File);
+      final c3Len = c3File.lengthSync();
+      expect(c3Len, greaterThan(VaultCrypto.kIsolateVerifyThresholdBytes));
+
+      final ticks = <int>[];
+      final healthyStatus = await vaultCrypto.verifyFileIntegrityControlled(
+        c3File,
+        onBytesProgress: ticks.add,
+      );
+      expect(healthyStatus, BlobIntegrityStatus.healthy);
+      expect(ticks.length, greaterThanOrEqualTo(3));
+      for (var i = 1; i < ticks.length; i++) {
+        expect(ticks[i], greaterThanOrEqualTo(ticks[i - 1]));
+      }
+      expect(ticks.last, c3Len);
+
+      // Tamper one ciphertext byte -> tamperedOrCorrupted without deleting the blob.
+      final tamperedFile = createTempFile(
+        'verify_c3_tampered.bin',
+        c3File.readAsBytesSync(),
+      );
+      final raf = tamperedFile.openSync(mode: FileMode.writeOnlyAppend);
+      await raf.setPosition(c3Len - 10);
+      await raf.writeByte((await tamperedFile.readAsBytes())[c3Len - 10] ^ 0xFF);
+      await raf.close();
+      expect(
+        await vaultCrypto.verifyFileIntegrityControlled(tamperedFile),
+        BlobIntegrityStatus.tamperedOrCorrupted,
+      );
+      expect(tamperedFile.existsSync(), isTrue);
+
+      // Pre-cancelled handle throws OperationCancelledException and leaves file untouched.
+      final cancelHandle = CryptoIsolateCancelHandle();
+      await cancelHandle.abort();
+      await expectLater(
+        vaultCrypto.verifyFileIntegrityControlled(
+          c3File,
+          cancelHandle: cancelHandle,
+        ),
+        throwsA(isA<OperationCancelledException>()),
+      );
+      expect(c3File.existsSync(), isTrue);
+      expect(c3File.lengthSync(), c3Len);
+    });
   });
 }
 

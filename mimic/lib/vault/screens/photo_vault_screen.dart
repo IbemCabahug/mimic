@@ -6,13 +6,14 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../security/vault_error_ui.dart';
-import '../security/auto_lock.dart';
 import '../crypto/vault_crypto.dart';
 import '../services/file_vault_service.dart';
+import '../services/import_coordinator.dart';
+import '../services/media_import_policy.dart';
 import '../services/pro_status_service.dart';
 import '../widgets/vault_scaffold.dart';
+import '../widgets/gallery_import_flow.dart';
 import '../widgets/import_activity_button.dart';
 import '../widgets/vault_search_bar.dart';
 import '../widgets/tag_caption_editor_sheet.dart';
@@ -31,6 +32,7 @@ class PhotoVaultScreen extends ConsumerStatefulWidget {
 class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   List<PhotoMeta> _photos = [];
   bool _isLoading = true;
+  int _loadRevision = 0;
   // Folder feature (mirrors DocumentVaultScreen): null = All, '' = Unfiled,
   // otherwise the folder name. Filter-only.
   String? _selectedFolder;
@@ -40,20 +42,14 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   String? _selectedTag;
   // Multi-select: photo ids currently ticked. Empty set = selection mode off.
   final Set<String> _selection = {};
-  // Live import card (mirrors Videos): per-photo Queued -> Encrypting N/M ->
-  // delete-confirm wait -> Saved, so bulk imports never look dead — and a
-  // single big photo cannot look like a frozen screen either.
-  final ImportSession _importSession = ImportSession();
 
   /// Restore gets the SAME live pill + sheet the import flow has (one session
   /// per flow, like VideoVaultScreen): a batch restore is minutes of work, and
   /// the user must be able to see — and stop — it.
   final ImportSession _restoreSession = ImportSession();
   Timer? _restoreLingerTimer;
-  // Keeps a settled card on screen ~4s so the outcome is seen, then clears it.
-  // Cancellable: dispose() cancels it and the next import cancels it, so a
-  // stale timer can never wipe a new session's rows.
-  Timer? _lingerTimer;
+  late final ImportCoordinator _importCoordinator;
+  Object? _foregroundImportToken;
 
   final LinkedHashMap<String, Uint8List> _bytesCache = LinkedHashMap();
   int _bytesCacheSize = 0;
@@ -94,28 +90,32 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   @override
   void initState() {
     super.initState();
+    _importCoordinator = ref.read(importCoordinatorProvider);
+    _foregroundImportToken = _importCoordinator.acquireForegroundUi();
     _loadPhotos();
   }
 
   @override
   void dispose() {
-    // The linger timer outlives the import flow by design, so it MUST be
-    // cancelled here: otherwise it survives the screen and can fire against a
-    // disposed session (and flutter_test flags it as a pending timer).
-    _lingerTimer?.cancel();
+    final fgToken = _foregroundImportToken;
+    _foregroundImportToken = null;
+    if (fgToken != null) {
+      _importCoordinator.releaseForegroundUi(fgToken);
+    }
     _restoreLingerTimer?.cancel();
     _bytesCache.clear();
     _bytesCacheSize = 0;
     _restoreSession.dispose();
-    _importSession.dispose();
     _searchController.dispose();
     super.dispose();
   }
 
   Future<void> _loadPhotos() async {
+    if (!mounted) return;
+    final revision = ++_loadRevision;
     setState(() => _isLoading = true);
     final photos = await ref.read(fileVaultServiceProvider).getAllPhotos();
-    if (mounted) {
+    if (mounted && revision == _loadRevision) {
       setState(() {
         _photos = photos;
         _isLoading = false;
@@ -124,249 +124,12 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
   }
 
   Future<void> _importFromGallery() async {
-    final prefs = await SharedPreferences.getInstance();
-    final ack = prefs.getBool('import_move_warning_ack') ?? false;
-
-    if (!ack && mounted) {
-      bool dontShowAgain = false;
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) {
-          return StatefulBuilder(
-            builder: (context, setState) {
-              return AlertDialog(
-                backgroundColor: Colors.white,
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                title: const Text(
-                  'Important Warning',
-                  style: TextStyle(
-                    color: VaultColors.textPrimary,
-                    fontWeight: FontWeight.w600,
-                    fontFamily: 'Inter',
-                  ),
-                ),
-                content: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'Media originals are REMOVED from the gallery and are permanently lost if the app is uninstalled or its data is cleared before restoring — back up via Settings → Export and keep the 12-word recovery phrase.',
-                      style: TextStyle(
-                        color: VaultColors.textSecondary,
-                        fontFamily: 'Inter',
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      children: [
-                        Checkbox(
-                          value: dontShowAgain,
-                          onChanged: (val) {
-                            setState(() => dontShowAgain = val ?? false);
-                          },
-                          activeColor: VaultColors.accent,
-                          // M3's unchecked border is a low-contrast grey that
-                          // all but disappears on the white dialog — the
-                          // operator reported exactly that. 2px black reads
-                          // as a checkbox at a glance.
-                          side: const BorderSide(width: 2, color: Colors.black),
-                        ),
-                        const Expanded(
-                          child: Text(
-                            "Don't show again",
-                            style: TextStyle(
-                              color: VaultColors.textSecondary,
-                              fontFamily: 'Inter',
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.of(context).pop(false),
-                    child: const Text(
-                      'Cancel',
-                      style: TextStyle(
-                        color: VaultColors.textTertiary,
-                        fontFamily: 'Inter',
-                      ),
-                    ),
-                  ),
-                  TextButton(
-                    onPressed: () async {
-                      if (dontShowAgain) {
-                        await prefs.setBool('import_move_warning_ack', true);
-                      }
-                      if (context.mounted) Navigator.of(context).pop(true);
-                    },
-                    child: const Text(
-                      'Continue',
-                      style: TextStyle(
-                        color: VaultColors.accent,
-                        fontFamily: 'Inter',
-                      ),
-                    ),
-                  ),
-                ],
-              );
-            },
-          );
-        },
-      );
-
-      if (confirmed != true) return;
-    }
-
-    if (!mounted) return;
-    AutoLock().beginProtectedOperation();
-    var sessionActive = true;
-    try {
-      _lingerTimer?.cancel();
-      _importSession.begin(const []);
-      // Rows are addressed by the SERVICE's asset index, collected here as the
-      // callback fires — never by counting result.successfulIds. A partial
-      // failure makes those two orders differ, which would label the failed
-      // file 'Saved' and the successful one 'Failed'.
-      final savedRows = <int>[];
-      final failedRows = <int, String>{};
-      final result = await ref
-          .read(fileVaultServiceProvider)
-          .pickAndEncryptImage(
-            context,
-            // The picker just reported the batch size: list the whole queue now.
-            onPicked: (total) => _importSession.setTotal(total),
-            onFileStart: (index, pos, name) {
-              _importSession.ensureSlot(index, name);
-              _importSession.markEncrypting(index, pos);
-            },
-            onFileSaved: (index) => savedRows.add(index),
-            onFileFailed: (index, detail) => failedRows[index] = detail,
-            onWaitingDeleteConfirm: () =>
-                _importSession.markWaitingDeleteConfirm(),
-            // The pill's ✕ / the sheet's Cancel set this flag; the service checks
-            // it before each NEXT file, so the in-flight photo always finishes.
-            isCancelled: () => _importSession.cancelRequested,
-          );
-      sessionActive = false;
-      // Outcome rows: per-photo Saved / Saved-original-kept. originalsKept ==
-      // true means the source was left on the device (dialog denied, platform
-      // refusal, or the delete phase never ran).
-      for (final i in savedRows) {
-        if (result.originalsKept) {
-          _importSession.markSavedOriginalKept(i);
-        } else {
-          _importSession.markSaved(i);
-        }
-      }
-      failedRows.forEach((i, detail) => _importSession.markFailed(i, detail));
-      // Files the service never reached (the batch stopped on a failure OR a
-      // requested cancel) are still Queued or Encrypting. A row left in either
-      // state would keep isWorking true forever and the card would never
-      // clear. A cancel is not a failure: its unreached rows read 'Cancelled'.
-      final wasCancelled = _importSession.cancelRequested;
-      for (var i = 0; i < _importSession.total; i++) {
-        final status = _importSession.files[i].status;
-        if (status == ImportFileStatus.queued ||
-            status == ImportFileStatus.encrypting) {
-          if (wasCancelled) {
-            _importSession.markCancelled(i);
-          } else {
-            _importSession.markFailed(i, 'Not imported');
-          }
-        }
-      }
-      if (wasCancelled && mounted) {
-        // Unimported originals untouched + already-saved originals kept: the
-        // cancel skipped the batch-delete phase entirely, so the gallery is
-        // exactly as it was before for every file not imported.
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Import cancelled — ${result.successfulIds.length} of ${result.totalAttempted} imported. Unimported originals are still in the gallery.',
-            ),
-          ),
-        );
-      }
-      if (result.successfulIds.isNotEmpty) {
-        await _loadPhotos();
-      }
-      if (result.stoppedEarly && mounted) {
-        final msg = _formatImportError(
-          result.successfulIds.length,
-          result.totalAttempted,
-          result.failedFileName,
-          result.error,
-        );
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(msg)));
-      }
-      // Let the outcome rows linger so the user sees them, then clear. The
-      // timer is cancellable: dispose() stops it, and a new import cancels it
-      // so a stale timer can never wipe the next session's rows mid-flight.
-      if (mounted && _importSession.isActive && !_importSession.isWorking) {
-        _lingerTimer?.cancel();
-        _lingerTimer = Timer(const Duration(seconds: 4), () {
-          if (mounted && !_importSession.isWorking) _importSession.clear();
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        final msg = _formatImportError(0, 0, null, e);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(msg)));
-        _importSession.clear();
-      }
-    } finally {
-      if (sessionActive && mounted) _importSession.clear();
-      AutoLock().endProtectedOperation();
-    }
-  }
-
-  String _formatImportError(
-    int succeeded,
-    int total,
-    String? failedFileName,
-    Object? error,
-  ) {
-    final String reason;
-    final errStr = error?.toString() ?? '';
-    final isLocked =
-        errStr.contains('Vault is locked') || errStr.contains('locked');
-    final isDamaged =
-        error is CorruptedMediaFileException ||
-        errStr.contains('damaged') ||
-        errStr.contains('corrupted');
-
-    final name = (failedFileName != null && failedFileName.isNotEmpty)
-        ? '"$failedFileName"'
-        : 'a photo';
-
-    if (isLocked) {
-      reason = 'the vault locked';
-    } else if (isDamaged) {
-      reason = '$name is damaged or unsupported';
-    } else {
-      reason = 'could not import $name';
-    }
-
-    if (succeeded > 0) {
-      final remaining = total - succeeded;
-      return 'Imported $succeeded of $total photos. Stopped because $reason ($remaining remaining not imported).';
-    } else {
-      if (isLocked) {
-        return 'Could not import photos: the vault is locked.';
-      } else if (isDamaged) {
-        return 'Failed to import photos: $name is damaged or unsupported.';
-      } else {
-        return 'Failed to import photos: could not read $name.';
-      }
-    }
+    await runGalleryImportFlow(
+      context: context,
+      ref: ref,
+      kind: ImportMediaKind.photo,
+      isMounted: () => mounted,
+    );
   }
 
   Future<void> _captureFromCamera() async {
@@ -1241,6 +1004,14 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
+                subtitle: const Text(
+                  kMediaImportLimitBanner,
+                  style: TextStyle(
+                    fontFamily: 'Inter',
+                    fontSize: 12,
+                    color: VaultColors.textTertiary,
+                  ),
+                ),
                 onTap: () {
                   Navigator.of(context).pop();
                   _importFromGallery();
@@ -1281,6 +1052,15 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<int>(
+      importCoordinatorProvider.select((c) => c.libraryRevision),
+      (prev, next) {
+        if (prev != next && mounted) {
+          _loadPhotos();
+        }
+      },
+    );
+    final coordinatorSession = ref.read(importCoordinatorProvider).uiSession;
     return VaultScaffold(
       title: 'Photos',
       actions: _selection.isNotEmpty
@@ -1316,8 +1096,9 @@ class _PhotoVaultScreenState extends ConsumerState<PhotoVaultScreen> {
                 const SizedBox(height: 12),
                 ImportActivityButton(
                   key: const ValueKey('import_activity_button'),
-                  session: _importSession,
-                  onTap: () => showImportDetailsSheet(context, _importSession),
+                  session: coordinatorSession,
+                  onTap: () =>
+                      showImportDetailsSheet(context, coordinatorSession),
                 ),
                 const SizedBox(height: 12),
                 AnimatedFAB(

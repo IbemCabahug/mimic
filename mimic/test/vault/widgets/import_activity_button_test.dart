@@ -17,20 +17,21 @@
 //    not clear or cancel the import (dismissing a view is not cancelling work).
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mimic/vault/security/auto_lock.dart';
 import 'package:mimic/vault/services/import_progress.dart';
 import 'package:mimic/vault/widgets/import_activity_button.dart';
 
 Widget _wrap(ImportSession session) => MaterialApp(
-      home: Scaffold(
-        body: Builder(
-          builder: (context) => ImportActivityButton(
-            key: const ValueKey('import_activity_button'),
-            session: session,
-            onTap: () => showImportDetailsSheet(context, session),
-          ),
-        ),
+  home: Scaffold(
+    body: Builder(
+      builder: (context) => ImportActivityButton(
+        key: const ValueKey('import_activity_button'),
+        session: session,
+        onTap: () => showImportDetailsSheet(context, session),
       ),
-    );
+    ),
+  ),
+);
 
 /// Three chosen files, one saved, the second in flight, the third still queued.
 ImportSession _midBatch() {
@@ -66,28 +67,31 @@ void main() {
     expect(find.textContaining('Import'), findsNothing);
   });
 
-  testWidgets('a working batch is labelled with live counts, not just a spinner',
-      (tester) async {
-    final session = ImportSession();
-    addTearDown(session.dispose);
-    session.begin(const ['a.mp4', 'b.mp4', 'c.mp4']);
-    session.markEncrypting(1, 2);
-    await tester.pumpWidget(_wrap(session));
+  testWidgets(
+    'a working batch is labelled with live counts, not just a spinner',
+    (tester) async {
+      final session = ImportSession();
+      addTearDown(session.dispose);
+      session.begin(const ['a.mp4', 'b.mp4', 'c.mp4']);
+      session.markEncrypting(1, 2);
+      await tester.pumpWidget(_wrap(session));
 
-    // The whole batch is counted from the first frame: 2 of 3, not 1 of 1.
-    expect(find.text('Importing 2/3'), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
-  });
+      // The whole batch is counted from the first frame: 2 of 3, not 1 of 1.
+      expect(find.text('Importing 2/3'), findsOneWidget);
+      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    },
+  );
 
   testWidgets('the pill keeps a comfortable touch target', (tester) async {
     final session = _midBatch();
     addTearDown(session.dispose);
     await tester.pumpWidget(_wrap(session));
 
-    expect(tester.getSize(find.byType(ImportActivityButton)).height,
-        greaterThanOrEqualTo(44));
+    expect(
+      tester.getSize(find.byType(ImportActivityButton)).height,
+      greaterThanOrEqualTo(44),
+    );
   });
-
 
   testWidgets('a settled batch reports completion', (tester) async {
     final session = ImportSession();
@@ -102,8 +106,9 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
-  testWidgets('a settled batch with a failure says how many did not arrive',
-      (tester) async {
+  testWidgets('a settled batch with a failure says how many did not arrive', (
+    tester,
+  ) async {
     final session = ImportSession();
     addTearDown(session.dispose);
     session.begin(const ['a.mp4', 'bad.mp4']);
@@ -116,8 +121,9 @@ void main() {
     expect(find.byIcon(Icons.error_outline), findsOneWidget);
   });
 
-  testWidgets('the words never say "upload" — nothing leaves the device',
-      (tester) async {
+  testWidgets('the words never say "upload" — nothing leaves the device', (
+    tester,
+  ) async {
     final session = _midBatch();
     addTearDown(session.dispose);
     await tester.pumpWidget(_wrap(session));
@@ -127,8 +133,9 @@ void main() {
     expect(find.textContaining('pload'), findsNothing);
   });
 
-  testWidgets('the sheet lists every chosen file with its live status',
-      (tester) async {
+  testWidgets('the sheet lists every chosen file with its live status', (
+    tester,
+  ) async {
     final session = _midBatch();
     addTearDown(session.dispose);
     session.markFailed(2, 'Could not read file');
@@ -148,22 +155,25 @@ void main() {
     expect(find.text('Could not read file'), findsOneWidget);
   });
 
-  testWidgets('the delete-confirmation wait is named while the OS dialog is up',
-      (tester) async {
-    final session = ImportSession();
-    addTearDown(session.dispose);
-    session.begin(const ['a.mp4']);
-    session.markEncrypting(0, 1);
-    session.markWaitingDeleteConfirm();
-    await tester.pumpWidget(_wrap(session));
+  testWidgets(
+    'the delete-confirmation wait is named while the OS dialog is up',
+    (tester) async {
+      final session = ImportSession();
+      addTearDown(session.dispose);
+      session.begin(const ['a.mp4']);
+      session.markEncrypting(0, 1);
+      session.markWaitingDeleteConfirm();
+      await tester.pumpWidget(_wrap(session));
 
-    await _openSheet(tester);
+      await _openSheet(tester);
 
-    expect(find.text('Waiting for delete confirmation'), findsOneWidget);
-  });
+      expect(find.text('Waiting for delete confirmation'), findsOneWidget);
+    },
+  );
 
-  testWidgets('closing the sheet does not cancel or clear the import',
-      (tester) async {
+  testWidgets('closing the sheet does not cancel or clear the import', (
+    tester,
+  ) async {
     final session = _midBatch();
     addTearDown(session.dispose);
     await tester.pumpWidget(_wrap(session));
@@ -181,4 +191,113 @@ void main() {
     expect(session.isWorking, isTrue);
     expect(find.text('Importing 2/3'), findsOneWidget);
   });
+
+  testWidgets(
+    'details sheet shows live percent, byte detail, determinate bar, and lock/switch guidance during preparing and encrypting',
+    (tester) async {
+      final session = ImportSession();
+      addTearDown(session.dispose);
+      session.syncFromProjection(
+        entries: [
+          ImportFileEntry(
+            name: 'clip_one.mp4',
+            status: ImportFileStatus.preparing,
+            detail: 'Checking · 25.0 MB / 100.0 MB',
+            progress: 0.25,
+          ),
+          ImportFileEntry(
+            name: 'clip_two.mp4',
+            status: ImportFileStatus.encrypting,
+            detail: 'Encrypting · 64.0 MB / 100.0 MB',
+            progress: 0.64,
+          ),
+        ],
+        activePosition: 1,
+        cancelRequestedFlag: false,
+        pauseReasonValue: ImportPauseReason.none,
+      );
+
+      await tester.pumpWidget(_wrap(session));
+      expect(find.text('Importing 1/2 — 25%'), findsOneWidget);
+
+      await _openSheet(tester);
+      expect(find.text('Preparing 25%'), findsOneWidget);
+      expect(find.text('Encrypting 64%'), findsOneWidget);
+      expect(find.text('Checking · 25.0 MB / 100.0 MB'), findsOneWidget);
+      expect(find.text('Encrypting · 64.0 MB / 100.0 MB'), findsOneWidget);
+      expect(
+        find.textContaining('Locking stops active progress'),
+        findsOneWidget,
+      );
+
+      final bars = tester
+          .widgetList<LinearProgressIndicator>(
+            find.byType(LinearProgressIndicator),
+          )
+          .toList();
+      expect(bars.length, 2);
+      expect(bars[0].value, closeTo(0.25, 0.001));
+      expect(bars[1].value, closeTo(0.64, 0.001));
+    },
+  );
+
+  testWidgets(
+    'details sheet shows live Saving percent during committing and Delete saved originals for settled partial batches',
+    (tester) async {
+      final session = ImportSession();
+      addTearDown(session.dispose);
+      var manualDeleteTriggered = false;
+      session.onConfirmSavedOriginals = () async {
+        manualDeleteTriggered = true;
+      };
+      session.syncFromProjection(
+        entries: [
+          ImportFileEntry(
+            name: 'big.mp4',
+            status: ImportFileStatus.committing,
+            detail: 'Verifying · 512.0 MB / 1.00 GB',
+            progress: 0.50,
+          ),
+        ],
+        activePosition: 1,
+        cancelRequestedFlag: false,
+        pauseReasonValue: ImportPauseReason.none,
+      );
+
+      await tester.pumpWidget(_wrap(session));
+      expect(find.text('Importing 1/1 — 50%'), findsOneWidget);
+      await _openSheet(tester);
+      expect(find.text('Saving 50%'), findsOneWidget);
+      expect(find.text('Verifying · 512.0 MB / 1.00 GB'), findsOneWidget);
+      expect(find.text('Delete saved originals'), findsNothing);
+
+      await tester.tap(find.text('Close'));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+
+      session.syncFromProjection(
+        entries: [
+          ImportFileEntry(
+            name: 'big.mp4',
+            status: ImportFileStatus.savedOriginalKept,
+          ),
+          ImportFileEntry(
+            name: 'other.mp4',
+            status: ImportFileStatus.cancelled,
+          ),
+        ],
+        activePosition: 2,
+        cancelRequestedFlag: false,
+        pauseReasonValue: ImportPauseReason.none,
+        hasConfirmableSavedOriginalsFlag: true,
+      );
+      await tester.pump();
+      await _openSheet(tester);
+      expect(find.text('Delete saved originals'), findsOneWidget);
+      await tester.tap(find.text('Delete saved originals'));
+      await tester.pump();
+      expect(manualDeleteTriggered, isTrue);
+      expect(find.byType(AutoLockWrapper), findsOneWidget);
+    },
+  );
 }

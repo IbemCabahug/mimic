@@ -31,12 +31,18 @@ import 'document_vault_service.dart';
 import 'file_vault_service.dart';
 import 'intruder_service.dart';
 import 'media_stream_server.dart';
+import 'import_journal_store.dart';
 import 'notes_service.dart';
 import 'video_vault_service.dart';
 
 class VaultWipeService {
-  VaultWipeService(this._platformService, this._fileVault, this._videoVault,
-      this._notes, this._documents);
+  VaultWipeService(
+    this._platformService,
+    this._fileVault,
+    this._videoVault,
+    this._notes,
+    this._documents,
+  );
 
   final PlatformService _platformService;
   final FileVaultService _fileVault;
@@ -66,9 +72,12 @@ class VaultWipeService {
     'vault_videos.db',
     'vault_notes.db',
     'breakin_logs.db',
+    kImportJournalDbFileName,
   ];
 
   Future<void> wipeAllContent() async {
+    await ImportJournalWipeRegistry.runAll();
+
     // 1. Stop any running media stream first — the streaming server holds
     //    open reads on video blobs, and an open handle can keep a deleted
     //    file alive or make the delete fail.

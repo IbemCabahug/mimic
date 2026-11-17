@@ -12,8 +12,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mimic/vault/services/import_progress.dart';
 import 'package:mimic/vault/widgets/import_status_card.dart';
 
-Widget _wrap(ImportSession session) =>
-    MaterialApp(home: Scaffold(body: ImportStatusCard(session: session)));
+Widget _wrap(ImportSession session) => MaterialApp(
+  home: Scaffold(body: ImportStatusCard(session: session)),
+);
 
 void main() {
   testWidgets('an empty session draws nothing', (tester) async {
@@ -26,8 +27,9 @@ void main() {
     expect(find.textContaining('Import finished'), findsNothing);
   });
 
-  testWidgets('a working batch lists every chosen file, not just the count',
-      (tester) async {
+  testWidgets('a working batch lists every chosen file, not just the count', (
+    tester,
+  ) async {
     final session = ImportSession();
     addTearDown(session.dispose);
     session.begin(const []);
@@ -47,27 +49,30 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNWidgets(2));
   });
 
-  testWidgets('the delete-confirmation wait is named while the OS dialog is up',
-      (tester) async {
-    final session = ImportSession();
-    addTearDown(session.dispose);
-    session.begin(const ['b.mp4']);
-    session.markEncrypting(0, 1);
-    await tester.pumpWidget(_wrap(session));
+  testWidgets(
+    'the delete-confirmation wait is named while the OS dialog is up',
+    (tester) async {
+      final session = ImportSession();
+      addTearDown(session.dispose);
+      session.begin(const ['b.mp4']);
+      session.markEncrypting(0, 1);
+      await tester.pumpWidget(_wrap(session));
 
-    expect(find.text('Encrypting'), findsOneWidget);
-    expect(find.text('Waiting for delete confirmation'), findsNothing);
+      expect(find.text('Encrypting'), findsOneWidget);
+      expect(find.text('Waiting for delete confirmation'), findsNothing);
 
-    // The dialog is up: the row must say so, and the batch is still working.
-    session.markWaitingDeleteConfirm();
-    await tester.pump();
-    expect(find.text('Waiting for delete confirmation'), findsOneWidget);
-    expect(find.text('Importing 1/1 ...'), findsOneWidget);
-    expect(session.isWorking, isTrue);
-  });
+      // The dialog is up: the row must say so, and the batch is still working.
+      session.markWaitingDeleteConfirm();
+      await tester.pump();
+      expect(find.text('Waiting for delete confirmation'), findsOneWidget);
+      expect(find.text('Importing 1/1 ...'), findsOneWidget);
+      expect(session.isWorking, isTrue);
+    },
+  );
 
-  testWidgets('a settled batch reports per-row outcomes and any failures',
-      (tester) async {
+  testWidgets('a settled batch reports per-row outcomes and any failures', (
+    tester,
+  ) async {
     final session = ImportSession();
     addTearDown(session.dispose);
     session.begin(const ['a.mp4', 'b.mp4', 'c.mp4']);
@@ -88,23 +93,56 @@ void main() {
     expect(session.isWorking, isFalse);
   });
 
-  testWidgets('a big batch scrolls inside the card instead of eating the grid',
-      (tester) async {
+  testWidgets(
+    'a big batch scrolls inside the card instead of eating the grid',
+    (tester) async {
+      final session = ImportSession();
+      addTearDown(session.dispose);
+      session.begin(const []);
+      session.setTotal(12);
+      for (var i = 0; i < 12; i++) {
+        session.ensureSlot(i, 'clip_$i.mp4');
+        session.markSaved(i);
+      }
+      await tester.pumpWidget(_wrap(session));
+
+      expect(find.text('clip_11.mp4'), findsOneWidget);
+      expect(find.text('Import finished (12/12)'), findsOneWidget);
+      // Rows are clipped to a scroll viewport, so a 12-file batch cannot push
+      // the vault grid off the screen.
+      expect(find.byType(SingleChildScrollView), findsOneWidget);
+      expect(
+        tester.getSize(find.byType(ImportStatusCard)).height,
+        lessThan(200),
+      );
+    },
+  );
+
+  testWidgets('card displays live percent for preparing and encrypting rows', (
+    tester,
+  ) async {
     final session = ImportSession();
     addTearDown(session.dispose);
-    session.begin(const []);
-    session.setTotal(12);
-    for (var i = 0; i < 12; i++) {
-      session.ensureSlot(i, 'clip_$i.mp4');
-      session.markSaved(i);
-    }
-    await tester.pumpWidget(_wrap(session));
+    session.syncFromProjection(
+      entries: [
+        ImportFileEntry(
+          name: 'hashing.mp4',
+          status: ImportFileStatus.preparing,
+          progress: 0.25,
+        ),
+        ImportFileEntry(
+          name: 'encrypting.mp4',
+          status: ImportFileStatus.encrypting,
+          progress: 0.64,
+        ),
+      ],
+      activePosition: 1,
+      cancelRequestedFlag: false,
+      pauseReasonValue: ImportPauseReason.none,
+    );
 
-    expect(find.text('clip_11.mp4'), findsOneWidget);
-    expect(find.text('Import finished (12/12)'), findsOneWidget);
-    // Rows are clipped to a scroll viewport, so a 12-file batch cannot push
-    // the vault grid off the screen.
-    expect(find.byType(SingleChildScrollView), findsOneWidget);
-    expect(tester.getSize(find.byType(ImportStatusCard)).height, lessThan(200));
+    await tester.pumpWidget(_wrap(session));
+    expect(find.text('Preparing 25%'), findsOneWidget);
+    expect(find.text('Encrypting 64%'), findsOneWidget);
   });
 }

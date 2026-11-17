@@ -7,7 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mimic/core/providers/provider_registration.dart';
-
+import 'package:mimic/vault/security/vault_ui_access.dart';
 
 // Game screens
 import 'package:mimic/game/screens/home_screen.dart';
@@ -118,12 +118,15 @@ class AppRouter {
   static const String multiplayerWordRevealRoute = '/multiplayer/word-reveal';
   static const String multiplayerVotingRoute = '/multiplayer/voting';
   static const String multiplayerRejoinRoute = '/multiplayer/rejoin';
+
   /// Predicate for [Navigator.pushNamedAndRemoveUntil] when locking the vault.
   /// Removes all vault screens while preserving any underlying game screens
   /// (e.g. '/', '/voting', '/results', '/multiplayer/*').
   static bool isNotVaultRoute(Route<dynamic> route) {
     final name = route.settings.name;
-    return name != null && !name.startsWith('/vault-') && !name.startsWith('/decoy-');
+    return name != null &&
+        !name.startsWith('/vault-') &&
+        !name.startsWith('/decoy-');
   }
 
   /// Generates the routes dynamically to handle guards and parameter passing.
@@ -209,9 +212,8 @@ class AppRouter {
         );
       case multiplayerRoute:
         return MaterialPageRoute(
-          builder: (_) => const MultiplayerProviderScope(
-            child: MultiplayerMenuScreen(),
-          ),
+          builder: (_) =>
+              const MultiplayerProviderScope(child: MultiplayerMenuScreen()),
           settings: settings,
         );
       case tutorialRoute:
@@ -452,7 +454,9 @@ class AppRouter {
         );
 
       case multiplayerLobbyRoute:
-        final isHost = args is bool ? args : (args is Map ? (args['isHost'] ?? false) : false);
+        final isHost = args is bool
+            ? args
+            : (args is Map ? (args['isHost'] ?? false) : false);
         return MaterialPageRoute(
           builder: (_) => RouteGuard(
             guard: (netService) => netService.isConnected,
@@ -532,6 +536,7 @@ class VaultRouteGuard extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final net = ref.watch(networkServiceProvider);
     final crypto = ref.watch(vaultCryptoProvider);
+    final uiAccess = ref.watch(vaultUiAccessProvider);
 
     if (kIsWeb || isMultiplayerSessionActive(net)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -546,7 +551,7 @@ class VaultRouteGuard extends ConsumerWidget {
       );
     }
 
-    if (requireUnlocked && !crypto.isUnlocked) {
+    if (requireUnlocked && (!crypto.isUnlocked || !uiAccess.isUiAuthorized)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!context.mounted) return;
         final currentRoute = ModalRoute.of(context);
@@ -556,6 +561,13 @@ class VaultRouteGuard extends ConsumerWidget {
           AppRouter.isNotVaultRoute,
         );
       });
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: SizedBox.shrink(),
+      );
+    }
+
+    if (requireUnlocked && uiAccess.isBackgroundConcealed) {
       return const Scaffold(
         backgroundColor: Colors.black,
         body: SizedBox.shrink(),
@@ -588,10 +600,9 @@ class RouteGuard extends ConsumerWidget {
     if (!guard(netService)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         // Pop or remove routes until we reach the main route, and push redirectRoute.
-        Navigator.of(context).pushNamedAndRemoveUntil(
-          redirectRoute,
-          (route) => route.isFirst,
-        );
+        Navigator.of(
+          context,
+        ).pushNamedAndRemoveUntil(redirectRoute, (route) => route.isFirst);
       });
 
       // Show a solid background during the redirect frame to prevent visual flash
@@ -640,13 +651,17 @@ class NetworkNavigatorObserver extends NavigatorObserver {
           netService.disconnect();
         }
       } catch (e) {
-        debugPrint('[NetworkNavigatorObserver] Failed to automatically disconnect: $e');
+        debugPrint(
+          '[NetworkNavigatorObserver] Failed to automatically disconnect: $e',
+        );
       }
     }
   }
 }
 
 /// Provider for the [NetworkNavigatorObserver].
-final networkNavigatorObserverProvider = Provider<NetworkNavigatorObserver>((ref) {
+final networkNavigatorObserverProvider = Provider<NetworkNavigatorObserver>((
+  ref,
+) {
   return NetworkNavigatorObserver(ref);
 });
