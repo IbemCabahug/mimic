@@ -150,6 +150,7 @@ APK was built. Updates must use the same signing key as the installed app.
 
 ## Version History
 
+- v1.4.5 (build 3014) — reliable large-file vault imports, background continuation across navigation and idle locks, faster unlock queue sync, and explicit saved-original cleanup; see Releases for the APK, checksum, and validation details
 - v1.4.4 (build 3013) — signed Android build with a simpler interface; see Releases for the APK, checksum, and validation limitations
 - v1.4.3 — faster first playback for newly imported videos
 - v1.1.0 — LAN Multiplayer over hotspot, QR code room joining, rejoin flow

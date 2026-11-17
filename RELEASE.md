@@ -67,26 +67,34 @@ retry in a new three-player local game, checking the vote order and timing. If a
 vault already exists, use its saved sequence. **Never uninstall or clear app data
 to restart setup**; doing so can permanently remove your local data and keys.
 
-## v1.4.4 — Build 3013
+## v1.4.5 — Build 3014
 
-This Android build is **1.4.4 (3013)**. It focuses on a simpler interface and
-preserves existing user data when installed as a correctly signed update.
+This Android build is **1.4.5 (3014)**. It improves reliability for large and
+bulk gallery imports, keeps the foreground import worker responsive across route
+transitions and idle locks, skips redundant full-file re-hashing after unlock
+for already-committed files, and preserves existing user data when installed as
+a correctly signed update.
 
-Release tag: **v1.4.4-build.3013**. This distinguishes the build from older releases
-with the same display version without replacing existing tags.
+Release tag: **v1.4.5-build.3014**. This distinguishes the build from older
+releases without replacing existing tags.
 
-- APK size: **98,995,241 bytes**
+- APK size: **99,569,621 bytes** (`arm64-v8a`, `armeabi-v7a`, `x86_64`)
 - Package: `com.ibem.mimic`
-- SHA-256: `bf5b7f7b1a0bdd467063cb235bfd7db0f695dcc4c32eb236448e44c34283358d`
+- SHA-256: `d543a849cb15d7170f4634304f86f9281b14a61d0cb87b3462d28002365a241d`
 - Signing certificate SHA-256: `8e8ffd75133a303fc3bf4edcb3707922dbf34b71d58798fcd24a6ef2d02a579c`
 
-Package/version, APK signature and Android alignment checks passed. On-device
-installation/gameplay testing has not been performed for this build, and full
-static analysis has not completed. No analyzer pass is claimed. Do not install
-over a higher version code or uninstall to bypass an update rejection.
+Package/version (`com.ibem.mimic`, `1.4.5`, build `3014`), APK v2 signature,
+and Android zipalign alignment checks passed. Flutter static analysis
+(`flutter analyze --no-pub`, 0 errors), Android JVM lifecycle unit tests
+(`9/9`), and targeted Flutter import/crypto/vault/security regression suites
+passed (note: 2 pre-existing `ResetPinScreen` tests tied to unmocked
+`GestureStore` secure-storage calls failed in the test harness). On-device
+installation/gameplay testing has not yet been performed for this build; do not
+install over a higher version code or uninstall to bypass an update rejection.
 
 ## Earlier Changes
 
+- **v1.4.4 (build 3013)** — simpler interface (`bf5b7f7b1a0bdd467063cb235bfd7db0f695dcc4c32eb236448e44c34283358d`).
 - **v1.4.3** — faster first playback for newly imported videos.
 - **v1.4.2** — improved return navigation and local-data stability.
 
